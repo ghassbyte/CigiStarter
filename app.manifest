@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    The requestedExecutionLevel (requireAdministrator) is supplied by the
+    linker via /MANIFESTUAC (UACExecutionLevel=RequireAdministrator), so it is
+    intentionally absent here to avoid a conflicting level in merged snippets.
+    This file only adds the OS compatibility declarations.
+  -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 / 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>
