@@ -64,7 +64,18 @@ Example:
 CigiStarter.exe --fps 100 --respond-hathot
 ```
 
-Press `Ctrl+C` to stop cleanly.
+## Runtime keyboard controls
+
+The program starts with SOF transmission **paused**. Control it from the
+console (case-insensitive):
+
+| Key | Action          |
+|-----|-----------------|
+| `S` | start sending SOF |
+| `X` | stop sending SOF  |
+| `Q` | quit             |
+
+`Ctrl+C` also quits.
 
 ## Network layout
 

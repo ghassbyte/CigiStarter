@@ -22,7 +22,10 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#include <conio.h>  // _kbhit / _getch (console keyboard)
+
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdarg>
 #include <cstdint>
@@ -71,6 +74,7 @@ struct HatHotQueue {
 };
 
 static std::atomic<bool> g_running{true};
+static std::atomic<bool> g_sending{false};  // SOF stream on/off ('s' start, 'x' stop)
 
 //-----------------------------------------------------------------------------
 // Ctrl+C / console-close handler
@@ -220,7 +224,8 @@ int main(int argc, char** argv) {
         "  IG (bind RX)    : 0.0.0.0:%u  (IG address %s)\n"
         "  SOF             : %d Hz, IG mode byte 0x%02X\n"
         "  HAT/HOT         : %s\n"
-        "Press Ctrl+C to stop.\n\n",
+        "\n"
+        "  [S]tart   [X]stop   [Q]uit   (Ctrl+C also quits)\n\n",
         kHostIp, kHostPort,
         kIgPort, kIgIp,
         cfg.fps, igModeByte,
@@ -301,59 +306,84 @@ int main(int argc, char** argv) {
         auto next = std::chrono::steady_clock::now();
 
         while (g_running.load()) {
-            const auto now = std::chrono::steady_clock::now();
-            const uint32_t ts = static_cast<uint32_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(now - started).count());
+            if (g_sending.load()) {
+                const auto now = std::chrono::steady_clock::now();
+                const uint32_t ts = static_cast<uint32_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(now - started).count());
 
-            cigi::packStartOfFrame(sof, frame, ts, stats.lastHostFrame.load(),
-                                   igModeByte);
+                cigi::packStartOfFrame(sof, frame, ts, stats.lastHostFrame.load(),
+                                       igModeByte);
 
-            // Flush any pending HAT/HOT responses by appending them to the SOF
-            // datagram, mirroring the reference capture's upstream framing.
-            if (cfg.respondHatHot) {
-                std::vector<uint16_t> ids;
-                {
-                    std::lock_guard<std::mutex> lk(hatHot.mtx);
-                    ids.swap(hatHot.ids);
-                }
-                if (!ids.empty()) {
-                    uint8_t pkt[24 + 40 * 64];
-                    std::memcpy(pkt, sof, 24);
-                    size_t used = 24;
-                    for (uint16_t hid : ids) {
-                        cigi::packHatHotExtResponse(pkt + used, hid, 1, 0.0, 0.0);
-                        used += cigi::kHatHotExtRespSize;
+                // Flush any pending HAT/HOT responses by appending them to the
+                // SOF datagram, mirroring the reference capture's upstream framing.
+                if (cfg.respondHatHot) {
+                    std::vector<uint16_t> ids;
+                    {
+                        std::lock_guard<std::mutex> lk(hatHot.mtx);
+                        ids.swap(hatHot.ids);
                     }
-                    sendto(tx, reinterpret_cast<const char*>(pkt),
-                           static_cast<int>(used), 0,
-                           reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
+                    if (!ids.empty()) {
+                        uint8_t pkt[24 + 40 * 64];
+                        std::memcpy(pkt, sof, 24);
+                        size_t used = 24;
+                        for (uint16_t hid : ids) {
+                            cigi::packHatHotExtResponse(pkt + used, hid, 1, 0.0, 0.0);
+                            used += cigi::kHatHotExtRespSize;
+                        }
+                        sendto(tx, reinterpret_cast<const char*>(pkt),
+                               static_cast<int>(used), 0,
+                               reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
+                    } else {
+                        sendto(tx, reinterpret_cast<const char*>(sof), 24, 0,
+                               reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
+                    }
                 } else {
                     sendto(tx, reinterpret_cast<const char*>(sof), 24, 0,
                            reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
                 }
-            } else {
-                sendto(tx, reinterpret_cast<const char*>(sof), 24, 0,
-                       reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
+
+                ++frame;
             }
 
-            ++frame;
             next += period;
             std::this_thread::sleep_until(next);
         }
     });
 
-    // ---- Status line loop (main thread). ---------------------------------
+    // ---- Status line loop (main thread): keyboard + periodic status. -----
     uint64_t lastDatagrams = 0;
+    auto lastStatus = std::chrono::steady_clock::now();
     while (g_running.load()) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        const uint64_t d = stats.datagrams.load();
-        const uint64_t e = stats.entityControl.load();
-        std::printf("[%u datagrams/s | total %llu | entities %llu | host frame %u]\n",
-                    static_cast<unsigned>(d - lastDatagrams),
-                    static_cast<unsigned long long>(d),
-                    static_cast<unsigned long long>(e),
-                    stats.lastHostFrame.load());
-        lastDatagrams = d;
+        // Handle keyboard commands (case-insensitive).
+        while (_kbhit()) {
+            const int ch = std::tolower(_getch());
+            if (ch == 's') {
+                g_sending.store(true);
+                std::printf("SOF: started\n");
+            } else if (ch == 'x') {
+                g_sending.store(false);
+                std::printf("SOF: stopped\n");
+            } else if (ch == 'q') {
+                g_running.store(false);
+            }
+        }
+
+        // Print status once per second.
+        const auto now = std::chrono::steady_clock::now();
+        if (now - lastStatus >= std::chrono::seconds(1)) {
+            const uint64_t d = stats.datagrams.load();
+            const uint64_t e = stats.entityControl.load();
+            std::printf("[%s | %u datagrams/s | total %llu | entities %llu | host frame %u]\n",
+                        g_sending.load() ? "TX" : "IDLE",
+                        static_cast<unsigned>(d - lastDatagrams),
+                        static_cast<unsigned long long>(d),
+                        static_cast<unsigned long long>(e),
+                        stats.lastHostFrame.load());
+            lastDatagrams = d;
+            lastStatus = now;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
     std::printf("\nShutting down...\n");
