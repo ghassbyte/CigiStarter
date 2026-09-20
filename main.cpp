@@ -350,36 +350,47 @@ int main(int argc, char** argv) {
         }
     });
 
-    // ---- Status line loop (main thread): keyboard + periodic status. -----
+    // ---- Status line loop (main thread): keyboard + in-place status. -----
+    // The header (title + command list) stays fixed; only the status line
+    // below is rewritten in place with a carriage return so it never scrolls.
     uint64_t lastDatagrams = 0;
     auto lastStatus = std::chrono::steady_clock::now();
+
+    auto printStatus = [&]() {
+        const uint64_t d = stats.datagrams.load();
+        const uint64_t e = stats.entityControl.load();
+        std::printf("\r[%-3s | %5llu dg/s | total %llu | entities %llu | host frame %u]  ",
+                    g_sending.load() ? "TX" : "IDLE",
+                    static_cast<unsigned long long>(d - lastDatagrams),
+                    static_cast<unsigned long long>(d),
+                    static_cast<unsigned long long>(e),
+                    stats.lastHostFrame.load());
+        std::fflush(stdout);
+    };
+    printStatus();  // show the initial status immediately
+
     while (g_running.load()) {
         // Handle keyboard commands (case-insensitive).
+        bool changed = false;
         while (_kbhit()) {
             const int ch = std::tolower(_getch());
             if (ch == 's') {
                 g_sending.store(true);
-                std::printf("SOF: started\n");
+                changed = true;
             } else if (ch == 'x') {
                 g_sending.store(false);
-                std::printf("SOF: stopped\n");
+                changed = true;
             } else if (ch == 'q') {
                 g_running.store(false);
             }
         }
+        if (changed) printStatus();  // reflect TX/IDLE immediately
 
-        // Print status once per second.
+        // Refresh the status line once per second.
         const auto now = std::chrono::steady_clock::now();
         if (now - lastStatus >= std::chrono::seconds(1)) {
-            const uint64_t d = stats.datagrams.load();
-            const uint64_t e = stats.entityControl.load();
-            std::printf("[%s | %u datagrams/s | total %llu | entities %llu | host frame %u]\n",
-                        g_sending.load() ? "TX" : "IDLE",
-                        static_cast<unsigned>(d - lastDatagrams),
-                        static_cast<unsigned long long>(d),
-                        static_cast<unsigned long long>(e),
-                        stats.lastHostFrame.load());
-            lastDatagrams = d;
+            printStatus();
+            lastDatagrams = stats.datagrams.load();
             lastStatus = now;
         }
 
