@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -37,7 +38,7 @@
 //-----------------------------------------------------------------------------
 constexpr char     kHostIp[] = "192.168.70.2";   // HOST address (upstream SOF)
 constexpr uint16_t kHostPort = 8001;             // HOST port (IG -> HOST)
-constexpr char     kIgIp[]   = "192.168.70.70";  // this IG's address (RX bind)
+constexpr char     kIgIp[]   = "192.168.70.70";  // this IG's address (identity)
 constexpr uint16_t kIgPort   = 8000;             // IG port (HOST -> IG)
 
 //-----------------------------------------------------------------------------
@@ -133,17 +134,29 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
 }
 
 //-----------------------------------------------------------------------------
+// Print a fatal error and wait for Enter so the message stays visible when
+// the program is launched by double-clicking (otherwise the console closes
+// before the text can be read). Always returns 1.
+//-----------------------------------------------------------------------------
+static int fail(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fprintf(stderr, "\nPress Enter to exit...\n");
+    std::fflush(stderr);
+    (void)std::getchar();
+    return 1;
+}
+
+//-----------------------------------------------------------------------------
 // Resolve an IPv4 address string into a sockaddr_in (returns false on error)
 //-----------------------------------------------------------------------------
 static bool resolveV4(const char* ip, uint16_t port, sockaddr_in& out) {
     std::memset(&out, 0, sizeof(out));
     out.sin_family = AF_INET;
     out.sin_port = htons(port);
-    if (inet_pton(AF_INET, ip, &out.sin_addr) == 1) {
-        return true;
-    }
-    std::fprintf(stderr, "error: invalid IPv4 address '%s'\n", ip);
-    return false;
+    return inet_pton(AF_INET, ip, &out.sin_addr) == 1;
 }
 
 int main(int argc, char** argv) {
@@ -158,27 +171,28 @@ int main(int argc, char** argv) {
     // Initialise Winsock.
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        std::fprintf(stderr, "error: WSAStartup failed (%d)\n", WSAGetLastError());
-        return 1;
+        return fail("error: WSAStartup failed (%d)\n", WSAGetLastError());
     }
 
     // ---- Receive socket: bound to the port the HOST streams to. ----------
+    // Bind to INADDR_ANY (0.0.0.0) rather than 192.168.70.70 so the program
+    // starts even if that address is not yet assigned to a local NIC; it still
+    // receives datagrams addressed to 192.168.70.70:8000 once configured.
     SOCKET rx = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (rx == INVALID_SOCKET) {
-        std::fprintf(stderr, "error: socket() failed (%d)\n", WSAGetLastError());
         WSACleanup();
-        return 1;
+        return fail("error: socket() failed (%d)\n", WSAGetLastError());
     }
-    sockaddr_in bindAddr;
-    if (!resolveV4(kIgIp, kIgPort, bindAddr)) {
-        closesocket(rx); WSACleanup();
-        return 1;
-    }
+    sockaddr_in bindAddr{};
+    bindAddr.sin_family      = AF_INET;
+    bindAddr.sin_port        = htons(kIgPort);
+    bindAddr.sin_addr.s_addr = INADDR_ANY;
     if (bind(rx, reinterpret_cast<sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
-        std::fprintf(stderr, "error: bind(%s:%u) failed (%d)\n",
-                     kIgIp, kIgPort, WSAGetLastError());
+        const int err = WSAGetLastError();
         closesocket(rx); WSACleanup();
-        return 1;
+        return fail("error: bind(0.0.0.0:%u) failed (%d)\n"
+                    "  (is another program already using UDP port %u?)\n",
+                    kIgPort, err, kIgPort);
     }
     // Short receive timeout so the loop can observe g_running on shutdown.
     DWORD rxTimeout = 500;
@@ -188,14 +202,13 @@ int main(int argc, char** argv) {
     // ---- Send socket: transmits SOF to the HOST. -------------------------
     SOCKET tx = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (tx == INVALID_SOCKET) {
-        std::fprintf(stderr, "error: socket() failed (%d)\n", WSAGetLastError());
         closesocket(rx); WSACleanup();
-        return 1;
+        return fail("error: socket() failed (%d)\n", WSAGetLastError());
     }
     sockaddr_in hostAddr;
     if (!resolveV4(kHostIp, kHostPort, hostAddr)) {
         closesocket(rx); closesocket(tx); WSACleanup();
-        return 1;
+        return fail("error: invalid host address '%s'\n", kHostIp);
     }
 
     const uint8_t igModeByte = cfg.igMode ? cigi::kSofIgModeOperate
@@ -203,13 +216,13 @@ int main(int argc, char** argv) {
 
     std::printf(
         "CigiStarter\n"
-        "  HOST   : %s:%u  (upstream SOF destination)\n"
-        "  RX     : %s:%u  (downstream flight data)\n"
-        "  SOF    : %d Hz, IG mode byte 0x%02X\n"
-        "  HAT/HOT: %s\n"
+        "  HOST (send SOF) : %s:%u\n"
+        "  IG (bind RX)    : 0.0.0.0:%u  (IG address %s)\n"
+        "  SOF             : %d Hz, IG mode byte 0x%02X\n"
+        "  HAT/HOT         : %s\n"
         "Press Ctrl+C to stop.\n\n",
         kHostIp, kHostPort,
-        kIgIp, kIgPort,
+        kIgPort, kIgIp,
         cfg.fps, igModeByte,
         cfg.respondHatHot ? "responding" : "ignored");
 
