@@ -46,6 +46,8 @@ its SOF stream.
 A drop-in replacement for the Master IG. It replicates the upstream behaviour
 that the HOST requires to start streaming:
 
+- Binds `192.168.70.70:8000` and sends SOF to `192.168.70.2:8001` (both
+  addresses and ports are hardcoded in `main.cpp`).
 - Sends SOF at a configurable rate (`--fps`, default 100 Hz).
 - Optionally answers HAT/HOT requests (`--respond-hathot`).
 - Parses inbound CIGI (IG Control, Entity Control, …) for status reporting.
@@ -69,6 +71,8 @@ that the HOST requires to start streaming:
 | Property          | Value                        |
 |-------------------|------------------------------|
 | Protocol          | CIGI 3.3, UDP, little-endian |
+| HOST address      | 192.168.70.2 (hardcoded)     |
+| IG address        | 192.168.70.70 (hardcoded)    |
 | Downstream port   | 8000 (HOST → IG)             |
 | Upstream port     | 8001 (IG → HOST)             |
 | SOF message id    | 101 (`0x65`)                 |
