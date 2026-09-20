@@ -42,13 +42,16 @@ The output is `x64\Release\CigiStarter.exe`.
 
 ## Usage
 
+The link addresses and ports are **fixed by the deployment** and hardcoded:
+
+| Role | Address          | Port |
+|------|------------------|------|
+| HOST | `192.168.70.2`   | 8001 (upstream SOF destination) |
+| IG   | `192.168.70.70`  | 8000 (downstream RX bind)       |
+
 ```
 CigiStarter.exe [options]
 
-  --host-ip <ip>      HOST address to send SOF to       (default 192.168.70.2)
-  --host-port <port>  HOST upstream port (IG -> HOST)   (default 8001)
-  --bind-ip <ip>      local address to bind for RX      (default 0.0.0.0)
-  --bind-port <port>  local port to bind for RX         (default 8000)
   --fps <rate>        SOF transmit rate in Hz           (default 100)
   --ig-mode <0|1>     SOF IG mode 0=Standby 1=Operate   (default 0)
   --respond-hathot    answer HAT/HOT requests           (default off)
@@ -58,7 +61,7 @@ CigiStarter.exe [options]
 Example:
 
 ```
-CigiStarter.exe --host-ip 192.168.70.2 --fps 100 --respond-hathot
+CigiStarter.exe --fps 100 --respond-hathot
 ```
 
 Press `Ctrl+C` to stop cleanly.
@@ -67,8 +70,8 @@ Press `Ctrl+C` to stop cleanly.
 
 | Direction   | From                  | To                    | Port | Payload                         |
 |-------------|-----------------------|-----------------------|------|---------------------------------|
-| Downstream  | HOST `192.168.70.2`   | IG (`CigiStarter`)    | 8000 | IGCtrl, EntityCtrl, HAT/HOT req |
-| Upstream    | IG (`CigiStarter`)    | HOST `192.168.70.2`   | 8001 | SOF (+ HAT/HOT responses)       |
+| Downstream  | HOST `192.168.70.2`   | IG `192.168.70.70`    | 8000 | IGCtrl, EntityCtrl, HAT/HOT req |
+| Upstream    | IG `192.168.70.70`    | HOST `192.168.70.2`   | 8001 | SOF (+ HAT/HOT responses)       |
 
 ## Protocol notes
 

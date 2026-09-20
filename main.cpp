@@ -7,17 +7,15 @@
 //    (SOF) messages, so this program continuously sends SOF at a configurable
 //    rate and (optionally) answers HAT/HOT requests.
 //
-//  Transport (from the reference pcapng capture)
-//    HOST 192.168.70.2  -> IG port 8000   (downstream control/flight data)
-//    IG   -> HOST 192.168.70.2 : 8001     (upstream SOF / responses)
+//  Transport (fixed by the deployment; hardcoded below)
+//    HOST 192.168.70.2  -> IG 192.168.70.70 : 8000   (downstream data)
+//    IG   192.168.70.70 -> HOST 192.168.70.2 : 8001  (upstream SOF / responses)
 //
 //  Dependencies
 //    Windows sockets only (Ws2_32.lib). No third-party libraries.
 //
 //  Usage
-//    CigiStarter.exe [--host-ip 192.168.70.2] [--host-port 8001]
-//                    [--bind-ip 0.0.0.0] [--bind-port 8000]
-//                    [--fps 100] [--ig-mode 0] [--respond-hathot] [--help]
+//    CigiStarter.exe [--fps 100] [--ig-mode 0] [--respond-hathot] [--help]
 //=============================================================================
 #include "cigi.h"
 
@@ -35,16 +33,20 @@
 #include <vector>
 
 //-----------------------------------------------------------------------------
-// Run configuration
+// Fixed link configuration (deployment-specific, hardcoded)
+//-----------------------------------------------------------------------------
+constexpr char     kHostIp[] = "192.168.70.2";   // HOST address (upstream SOF)
+constexpr uint16_t kHostPort = 8001;             // HOST port (IG -> HOST)
+constexpr char     kIgIp[]   = "192.168.70.70";  // this IG's address (RX bind)
+constexpr uint16_t kIgPort   = 8000;             // IG port (HOST -> IG)
+
+//-----------------------------------------------------------------------------
+// Runtime configuration (command-line adjustable)
 //-----------------------------------------------------------------------------
 struct Config {
-    std::string hostIp   = "192.168.70.2";
-    uint16_t    hostPort = 8001;   // port the HOST listens on (IG -> HOST)
-    std::string bindIp   = "0.0.0.0";
-    uint16_t    bindPort = 8000;   // port the HOST sends to (HOST -> IG)
-    int         fps      = 100;    // SOF transmission rate
-    uint8_t     igMode   = 0;      // 0 = Standby (0x30), 1 = Operate (0x31)
-    bool        respondHatHot = false;
+    int     fps           = 100;  // SOF transmission rate
+    uint8_t igMode        = 0;    // 0 = Standby (0x30), 1 = Operate (0x31)
+    bool    respondHatHot = false;
 };
 
 //-----------------------------------------------------------------------------
@@ -83,17 +85,14 @@ static BOOL WINAPI consoleHandler(DWORD) {
 static void printUsage(const char* argv0) {
     std::printf(
         "CigiStarter - minimal CIGI 3.3 Image Generator\n\n"
+        "Link (fixed): HOST %s:%u  <->  IG %s:%u\n\n"
         "Usage: %s [options]\n\n"
         "Options:\n"
-        "  --host-ip <ip>      HOST address to send SOF to       (default 192.168.70.2)\n"
-        "  --host-port <port>  HOST upstream port (IG -> HOST)   (default 8001)\n"
-        "  --bind-ip <ip>      local address to bind for RX      (default 0.0.0.0)\n"
-        "  --bind-port <port>  local port to bind for RX         (default 8000)\n"
         "  --fps <rate>        SOF transmit rate in Hz           (default 100)\n"
         "  --ig-mode <0|1>     SOF IG mode 0=Standby 1=Operate   (default 0)\n"
         "  --respond-hathot    answer HAT/HOT requests           (default off)\n"
         "  --help              show this help\n",
-        argv0);
+        kHostIp, kHostPort, kIgIp, kIgPort, argv0);
 }
 
 //-----------------------------------------------------------------------------
@@ -112,18 +111,6 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
         if (a == "--help" || a == "-h") {
             printUsage(argv[0]);
             return false;
-        } else if (a == "--host-ip") {
-            const char* v = next("--host-ip"); if (!v) return false;
-            cfg.hostIp = v;
-        } else if (a == "--host-port") {
-            const char* v = next("--host-port"); if (!v) return false;
-            cfg.hostPort = static_cast<uint16_t>(std::atoi(v));
-        } else if (a == "--bind-ip") {
-            const char* v = next("--bind-ip"); if (!v) return false;
-            cfg.bindIp = v;
-        } else if (a == "--bind-port") {
-            const char* v = next("--bind-port"); if (!v) return false;
-            cfg.bindPort = static_cast<uint16_t>(std::atoi(v));
         } else if (a == "--fps") {
             const char* v = next("--fps"); if (!v) return false;
             cfg.fps = std::atoi(v);
@@ -148,18 +135,14 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
 //-----------------------------------------------------------------------------
 // Resolve an IPv4 address string into a sockaddr_in (returns false on error)
 //-----------------------------------------------------------------------------
-static bool resolveV4(const std::string& ip, uint16_t port, sockaddr_in& out) {
+static bool resolveV4(const char* ip, uint16_t port, sockaddr_in& out) {
     std::memset(&out, 0, sizeof(out));
     out.sin_family = AF_INET;
     out.sin_port = htons(port);
-    if (ip.empty() || ip == "0.0.0.0") {
-        out.sin_addr.s_addr = INADDR_ANY;
+    if (inet_pton(AF_INET, ip, &out.sin_addr) == 1) {
         return true;
     }
-    if (inet_pton(AF_INET, ip.c_str(), &out.sin_addr) == 1) {
-        return true;
-    }
-    std::fprintf(stderr, "error: invalid IPv4 address '%s'\n", ip.c_str());
+    std::fprintf(stderr, "error: invalid IPv4 address '%s'\n", ip);
     return false;
 }
 
@@ -187,13 +170,13 @@ int main(int argc, char** argv) {
         return 1;
     }
     sockaddr_in bindAddr;
-    if (!resolveV4(cfg.bindIp, cfg.bindPort, bindAddr)) {
+    if (!resolveV4(kIgIp, kIgPort, bindAddr)) {
         closesocket(rx); WSACleanup();
         return 1;
     }
     if (bind(rx, reinterpret_cast<sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
         std::fprintf(stderr, "error: bind(%s:%u) failed (%d)\n",
-                     cfg.bindIp.c_str(), cfg.bindPort, WSAGetLastError());
+                     kIgIp, kIgPort, WSAGetLastError());
         closesocket(rx); WSACleanup();
         return 1;
     }
@@ -210,7 +193,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     sockaddr_in hostAddr;
-    if (!resolveV4(cfg.hostIp, cfg.hostPort, hostAddr)) {
+    if (!resolveV4(kHostIp, kHostPort, hostAddr)) {
         closesocket(rx); closesocket(tx); WSACleanup();
         return 1;
     }
@@ -225,8 +208,8 @@ int main(int argc, char** argv) {
         "  SOF    : %d Hz, IG mode byte 0x%02X\n"
         "  HAT/HOT: %s\n"
         "Press Ctrl+C to stop.\n\n",
-        cfg.hostIp.c_str(), cfg.hostPort,
-        cfg.bindIp.c_str(), cfg.bindPort,
+        kHostIp, kHostPort,
+        kIgIp, kIgPort,
         cfg.fps, igModeByte,
         cfg.respondHatHot ? "responding" : "ignored");
 
