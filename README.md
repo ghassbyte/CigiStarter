@@ -19,6 +19,8 @@ stream, and (optionally) answers HAT/HOT requests.
    HOST frame counter.
 4. Optionally (`--respond-hathot`) appends HAT/HOT Extended Responses to the
    SOF stream, mirroring the reference capture.
+5. Runs interactively with a live in-place status line: starts paused, then
+   `S`/`X`/`Q` start, stop, and quit the SOF stream.
 
 ## Requirements
 
@@ -26,8 +28,8 @@ stream, and (optionally) answers HAT/HOT requests.
 - **No third-party libraries** — only Windows sockets (`Ws2_32.lib`).
 - Built with the static CRT (`/MT`, `/MTd`), so the executable runs on a fresh
   IG PC **without installing the Visual C++ redistributable**.
-- The embedded manifest requests **administrator** privileges (required to
-  bind low ports and traverse the firewall).
+- The embedded manifest requests **administrator** privileges (the app launches
+  elevated for network/firewall access in the simulator environment).
 
 ## Building
 
@@ -103,5 +105,8 @@ console (case-insensitive):
 | `app.manifest`     | UAC `requireAdministrator` manifest            |
 | `agents.md`        | description of the HOST / IG / CigiStarter agents |
 | `CigiStarter.sln`  | Visual Studio solution (x64 only)              |
+| `CigiStarter.vcxproj` | VS project (x64 only, static CRT, ws2_32)   |
+| `CigiStarter.vcxproj.filters` | project file organization            |
+| `.gitignore`       | ignores build output and VS artifacts          |
 
 See `agents.md` for a description of each agent and the message flow.

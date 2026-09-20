@@ -46,11 +46,14 @@ its SOF stream.
 A drop-in replacement for the Master IG. It replicates the upstream behaviour
 that the HOST requires to start streaming:
 
-- Binds `192.168.70.70:8000` and sends SOF to `192.168.70.2:8001` (both
-  addresses and ports are hardcoded in `main.cpp`).
+- Binds `0.0.0.0:8000` (all interfaces) and sends SOF to `192.168.70.2:8001`;
+  the HOST addresses the IG as `192.168.70.70` (addresses/ports are hardcoded
+  in `main.cpp`).
 - Sends SOF at a configurable rate (`--fps`, default 100 Hz).
 - Optionally answers HAT/HOT requests (`--respond-hathot`).
 - Parses inbound CIGI (IG Control, Entity Control, …) for status reporting.
+- Controlled from the console (case-insensitive): `S` start, `X` stop, `Q` quit
+  — the SOF stream starts paused.
 
 ## Message flow
 

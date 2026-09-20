@@ -16,6 +16,9 @@ Release/
 *.ilk
 *.log
 *.idb
+*.iobj
+*.ipdb
+*.recipe
 
 # Editor / OS
 *.swp
