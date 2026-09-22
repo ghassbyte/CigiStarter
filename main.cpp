@@ -76,6 +76,10 @@ struct Stats {
     std::atomic<uint64_t> entityControl{0};
     std::atomic<uint64_t> hatHotReq{0};
     std::atomic<uint32_t> lastHostFrame{0};
+    // IG mode the HOST last commanded in an IG Control packet. The IG does not
+    // get to pick its own mode -- the SOF reports this value back (see
+    // cigi::sofIgModeByte), which is how a real IG behaves.
+    std::atomic<uint8_t>  hostIgMode{0};
 };
 
 // Hat/Hot responses are queued by the receive thread and flushed by the SOF
@@ -114,7 +118,9 @@ static void printUsage(const char* argv0) {
         "Usage: %s [options]\n\n"
         "Options:\n"
         "  --fps <rate>        SOF transmit rate in Hz           (default 100)\n"
-        "  --ig-mode <0|1>     SOF IG mode 0=Standby 1=Operate   (default 0)\n"
+        "  --ig-mode <0..3>    IG mode reported in the SOF until the HOST sends\n"
+        "                      its first IG Control (0=Standby 1=Operate)\n"
+        "                                                         (default 0)\n"
         "  --respond-hathot    answer HAT/HOT requests, reporting the terrain\n"
         "                      height read from the local Prepar3D via FSUIPC\n"
         "                      (default off)\n"
@@ -154,6 +160,10 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
     }
     if (cfg.fps <= 0 || cfg.fps > 100000) {
         std::fprintf(stderr, "error: --fps must be in [1, 100000]\n");
+        return false;
+    }
+    if (cfg.igMode > 3) {
+        std::fprintf(stderr, "error: --ig-mode must be in [0, 3]\n");
         return false;
     }
     return true;
@@ -307,20 +317,23 @@ int main(int argc, char** argv) {
         return fail("error: invalid host address '%s'\n", kHostIp);
     }
 
-    const uint8_t igModeByte = cfg.igMode ? cigi::kSofIgModeOperate
-                                          : cigi::kSofIgModeStandby;
+    Stats stats;
+    // The IG does not choose its own mode: it reports back whatever the HOST
+    // last commanded. --ig-mode therefore only seeds the value used until the
+    // first IG Control arrives, after which the receive thread takes over.
+    stats.hostIgMode.store(static_cast<uint8_t>(cfg.igMode & 0x03u));
 
     std::printf(
         "CigiStarter\n"
         "  HOST (send SOF) : %s:%u\n"
         "  IG (bind RX)    : 0.0.0.0:%u  (IG address %s)\n"
-        "  SOF             : %d Hz, IG mode byte 0x%02X\n"
+        "  SOF             : %d Hz, IG mode 0x%02X (follows the HOST)\n"
         "  HAT/HOT         : %s\n"
         "\n"
         "  [S]tart   [X]stop   [Q]uit   (Ctrl+C also quits)\n\n",
         kHostIp, kHostPort,
         kIgPort, kIgIp,
-        cfg.fps, igModeByte,
+        cfg.fps, static_cast<unsigned>(cigi::sofIgModeByte(stats.hostIgMode.load())),
         cfg.respondHatHot ? "responding (terrain read from local Prepar3D via FSUIPC)"
                           : "ignored");
 
@@ -330,7 +343,6 @@ int main(int argc, char** argv) {
         terrain::start();
     }
 
-    Stats stats;
     HatHotRequestQueue hatHot;
 
     // ---- Receive thread: parse inbound CIGI and update statistics. -------
@@ -360,13 +372,21 @@ int main(int argc, char** argv) {
                                  [&](uint8_t id, const uint8_t* msg, size_t msgSize) {
                 stats.messages.fetch_add(1);
                 switch (id) {
-                    case cigi::MsgIGControl:
+                    case cigi::MsgIGControl: {
                         stats.igControl.fetch_add(1);
                         // IGCtrl layout (16 bytes): [id][size][ver][db][mode]
                         // [pad][byte-swap u16][frame-ctr u32][timestamp u32].
+                        //
+                        // Bits 0-1 of byte 4 are the mode the HOST is putting
+                        // the IG into. The IG mirrors it back in the SOF rather
+                        // than choosing for itself, so record it here.
+                        if (msgSize >= 5) {
+                            stats.hostIgMode.store(
+                                static_cast<uint8_t>(msg[4] & 0x03u));
+                        }
                         // The host frame counter is a uint32 LE at full-message
                         // offset 8; echo it back in the SOF's last-host-frame.
-                        if (msg[0] == cigi::MsgIGControl && msg[1] >= 12) {
+                        if (msgSize >= 12) {
                             const uint32_t fc = static_cast<uint32_t>(msg[8]) |
                                                 (static_cast<uint32_t>(msg[9]) << 8) |
                                                 (static_cast<uint32_t>(msg[10]) << 16) |
@@ -374,6 +394,7 @@ int main(int argc, char** argv) {
                             stats.lastHostFrame.store(fc);
                         }
                         break;
+                    }
                     case cigi::MsgEntityControl:
                         stats.entityControl.fetch_add(1);
                         break;
@@ -417,7 +438,7 @@ int main(int argc, char** argv) {
                     std::chrono::duration_cast<std::chrono::microseconds>(now - started).count());
 
                 cigi::packStartOfFrame(sof, frame, ts, stats.lastHostFrame.load(),
-                                       igModeByte);
+                                       cigi::sofIgModeByte(stats.hostIgMode.load()));
 
                 // Build the upstream datagram: the SOF followed by every HAT/HOT
                 // response that is due this frame, mirroring the reference
@@ -536,11 +557,12 @@ int main(int argc, char** argv) {
                               " | terrain: no FSUIPC link");
             }
         }
-        std::printf("\r[%-3s | %5llu dg/s | total %llu | entities %llu | host frame %u%s]  ",
+        std::printf("\r[%-3s | %5llu dg/s | total %llu | entities %llu | ig mode %u | host frame %u%s]  ",
                     g_sending.load() ? "TX" : "IDLE",
                     static_cast<unsigned long long>(d - lastDatagrams),
                     static_cast<unsigned long long>(d),
                     static_cast<unsigned long long>(e),
+                    static_cast<unsigned>(stats.hostIgMode.load()),
                     stats.lastHostFrame.load(),
                     terrainText);
         std::fflush(stdout);

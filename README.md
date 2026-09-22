@@ -72,7 +72,8 @@ The link addresses and ports are **fixed by the deployment** and hardcoded:
 CigiStarter.exe [options]
 
   --fps <rate>        SOF transmit rate in Hz           (default 100)
-  --ig-mode <0|1>     SOF IG mode 0=Standby 1=Operate   (default 0)
+  --ig-mode <0..3>    IG mode reported until the HOST sends its first
+                      IG Control (0=Standby 1=Operate)  (default 0)
   --respond-hathot    answer HAT/HOT requests using the terrain height read
                       from the local Prepar3D via FSUIPC       (default off)
   --help              show help
@@ -138,9 +139,14 @@ console (case-insensitive):
 - **CIGI version 3.3**, little-endian on the wire.
 - A message is framed as `[message-id(1)][message-size(1)][payload...]` where
   `size` is the total byte length including the two header bytes.
-- The SOF sent by this program matches the reference capture:
-  `65 18 03 00 00 30 00 80` + frame number + timestamp + last-host-frame + pad.
-  Byte `0x30` is IG mode 0 (Standby); pass `--ig-mode 1` for `0x31` (Operate).
+- The SOF is `65 18 03 00 00 <b5> 00 80` + frame number + timestamp +
+  last-host-frame + pad, where byte 5 packs the CIGI minor version (bits 4-7;
+  3.3 => `0x30`) together with the **IG mode** (bits 0-1).
+- The IG never picks its own mode: the HOST commands it with IG Control and the
+  SOF reports it back. CigiStarter follows that, so byte 5 becomes `0x31`
+  (Operate) as soon as the HOST asks for Operate — which the reference HOST in
+  `hlm.bin` does in every one of its 1160 datagrams. `--ig-mode` only sets the
+  mode reported *before* the first IG Control arrives.
 - SOF pacing uses the 1 ms system timer resolution (`timeBeginPeriod(1)`).
   Windows' default granularity is 15.6 ms (~64 Hz), which makes any rate above
   ~60 Hz fire in back-to-back bursts that overwhelm the HOST.

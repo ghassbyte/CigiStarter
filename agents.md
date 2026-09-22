@@ -50,6 +50,10 @@ that the HOST requires to start streaming:
   the HOST addresses the IG as `192.168.70.70` (addresses/ports are hardcoded
   in `main.cpp`).
 - Sends SOF at a configurable rate (`--fps`, default 100 Hz).
+- Reports the IG mode the HOST commands. Every HOST datagram carries an IG
+  Control asking for Operate, and the SOF's mode byte (bits 0-1 of byte 5)
+  follows it to `0x31` instead of staying at the `--ig-mode` default. The flag
+  only seeds the mode used before the first IG Control arrives.
 - Optionally answers HAT/HOT requests (`--respond-hathot`). The Master IG used
   to answer these from its own terrain database; CigiStarter has no database,
   so it reports the terrain under the aircraft as seen by the local Prepar3D,
@@ -89,6 +93,7 @@ the local Prepar3D over FSUIPC. The poller owning that link is described in
 | Downstream port   | 8000 (HOST → IG)             |
 | Upstream port     | 8001 (IG → HOST)             |
 | SOF message id    | 101 (`0x65`)                 |
+| IG mode           | commanded by the HOST via IG Control; the SOF echoes it back (Operate throughout the reference capture) |
 | HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
 | Terrain source    | FSUIPC `0x0020` of the local Prepar3D (ground altitude under the player aircraft) |
 | Reference SOF rate| ~112 Hz (~9 ms)              |

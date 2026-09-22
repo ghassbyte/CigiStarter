@@ -48,8 +48,17 @@ constexpr uint8_t kSofMessageId   = 0x65;  // 101
 constexpr uint8_t kSofVersion     = 0x03;  // CIGI 3
 // Byte 5 packs: IG mode (bits 0-1), timestamp-valid (bit 2), earth-reference
 // model (bit 3) and the CIGI minor version (bits 4-7). 3.3 => 0x30.
+// The two named values are simply the common cases of sofIgModeByte() below.
 constexpr uint8_t kSofIgModeStandby = 0x30;  // IG mode = 0 (Reset/Standby)
 constexpr uint8_t kSofIgModeOperate = 0x31;  // IG mode = 1 (Operate)
+
+// Build SOF byte 5 for an arbitrary CIGI IG mode (0..3), keeping the CIGI 3.3
+// minor-version bits. An IG does not choose its own mode: it mirrors back the
+// mode the HOST last commanded in an IG Control packet, so callers feed the
+// decoded Host mode in here.
+inline uint8_t sofIgModeByte(uint8_t igMode) {
+    return static_cast<uint8_t>(kSofIgModeStandby | (igMode & 0x03u));
+}
 
 //-----------------------------------------------------------------------------
 // Struct views (documentation / field layout). Packing is done explicitly in
