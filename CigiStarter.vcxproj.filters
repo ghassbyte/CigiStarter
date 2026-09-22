@@ -24,9 +24,15 @@
     <ClCompile Include="cigi.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="TerrainSource.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cigi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TerrainSource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

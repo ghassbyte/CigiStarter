@@ -50,7 +50,12 @@ that the HOST requires to start streaming:
   the HOST addresses the IG as `192.168.70.70` (addresses/ports are hardcoded
   in `main.cpp`).
 - Sends SOF at a configurable rate (`--fps`, default 100 Hz).
-- Optionally answers HAT/HOT requests (`--respond-hathot`).
+- Optionally answers HAT/HOT requests (`--respond-hathot`). The Master IG used
+  to answer these from its own terrain database; CigiStarter has no database,
+  so it reports the terrain under the aircraft as seen by the local Prepar3D,
+  read over FSUIPC (`TerrainSource.cpp`, offset `0x0020`). This is what keeps
+  the HOST's altitude loop honest — the HOST commands the aircraft to the aHOT
+  it is given, so a missing/wrong HOT flies the aircraft into the ground.
 - Parses inbound CIGI (IG Control, Entity Control, …) for status reporting.
 - Controlled from the console (case-insensitive): `S` start, `X` stop, `Q` quit
   — the SOF stream starts paused.
@@ -69,6 +74,11 @@ that the HOST requires to start streaming:
         │                ...                  │
 ```
 
+`--respond-hathot` adds one more edge to that picture: before answering a
+HAT/HOT request, CigiStarter reads the terrain height under the aircraft from
+the local Prepar3D over FSUIPC. The poller owning that link is described in
+`TerrainSource.cpp`.
+
 ## Key facts
 
 | Property          | Value                        |
@@ -79,5 +89,6 @@ that the HOST requires to start streaming:
 | Downstream port   | 8000 (HOST → IG)             |
 | Upstream port     | 8001 (IG → HOST)             |
 | SOF message id    | 101 (`0x65`)                 |
-| HAT/HOT resp id   | 103 (`0x67`)                 |
+| HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
+| Terrain source    | FSUIPC `0x0020` of the local Prepar3D (ground altitude under the player aircraft) |
 | Reference SOF rate| ~112 Hz (~9 ms)              |

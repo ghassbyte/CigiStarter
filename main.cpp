@@ -5,28 +5,35 @@
 //    Plays the "Master IG" side of a CIGI link so the HOST begins streaming
 //    flight data. The HOST stays silent until the IG transmits Start-of-Frame
 //    (SOF) messages, so this program continuously sends SOF at a configurable
-//    rate and (optionally) answers HAT/HOT requests.
+//    rate and (optionally) answers HAT/HOT requests with the terrain height
+//    read from the local Prepar3D.
 //
 //  Transport (fixed by the deployment; hardcoded below)
 //    HOST 192.168.70.2  -> IG 192.168.70.70 : 8000   (downstream data)
 //    IG   192.168.70.70 -> HOST 192.168.70.2 : 8001  (upstream SOF / responses)
 //
 //  Dependencies
-//    Windows sockets only (Ws2_32.lib). No third-party libraries.
+//    Windows sockets and the 1 ms timer (Ws2_32.lib, Winmm.lib). With
+//    --respond-hathot the FSUIPC SDK is linked as well, to read the terrain
+//    height out of the local Prepar3D (isolated in TerrainSource.cpp).
 //
 //  Usage
 //    CigiStarter.exe [--fps 100] [--ig-mode 0] [--respond-hathot] [--help]
 //=============================================================================
 #include "cigi.h"
+#include "TerrainSource.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mmsystem.h>  // timeBeginPeriod / timeEndPeriod (high-resolution timer)
 
 #include <conio.h>  // _kbhit / _getch (console keyboard)
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -53,6 +60,11 @@ struct Config {
     bool    respondHatHot = false;
 };
 
+// Most HOSTs send one HAT/HOT request per frame, so one response per SOF. The
+// cap only matters if a HOST floods us; it keeps the upstream datagram inside
+// a 576-byte payload so it can never be fragmented.
+constexpr int kMaxResponsesPerFrame = 8;
+
 //-----------------------------------------------------------------------------
 // Shared runtime statistics (written by the receive thread, read elsewhere)
 //-----------------------------------------------------------------------------
@@ -68,9 +80,17 @@ struct Stats {
 
 // Hat/Hot responses are queued by the receive thread and flushed by the SOF
 // thread so they ride along on the upstream stream (as in the capture).
-struct HatHotQueue {
-    std::mutex   mtx;
-    std::vector<uint16_t> ids;
+struct HatHotRequestQueue {
+    std::mutex                       mtx;
+    std::vector<cigi::HatHotRequest> items;
+};
+
+// A request the SOF thread currently owes an answer for. One-shot requests
+// leave the list once answered; requests carrying an update period stay and
+// are re-answered every `updatePeriod` frames.
+struct ActiveHatHotRequest {
+    cigi::HatHotRequest req;
+    uint32_t            framesSince = 0;
 };
 
 static std::atomic<bool> g_running{true};
@@ -95,7 +115,9 @@ static void printUsage(const char* argv0) {
         "Options:\n"
         "  --fps <rate>        SOF transmit rate in Hz           (default 100)\n"
         "  --ig-mode <0|1>     SOF IG mode 0=Standby 1=Operate   (default 0)\n"
-        "  --respond-hathot    answer HAT/HOT requests           (default off)\n"
+        "  --respond-hathot    answer HAT/HOT requests, reporting the terrain\n"
+        "                      height read from the local Prepar3D via FSUIPC\n"
+        "                      (default off)\n"
         "  --help              show this help\n",
         kHostIp, kHostPort, kIgIp, kIgPort, argv0);
 }
@@ -163,6 +185,68 @@ static bool resolveV4(const char* ip, uint16_t port, sockaddr_in& out) {
     return inet_pton(AF_INET, ip, &out.sin_addr) == 1;
 }
 
+//-----------------------------------------------------------------------------
+// HAT/HOT answering
+//-----------------------------------------------------------------------------
+// FSUIPC exposes the terrain height under the *player* aircraft and nothing
+// else, so that is the only test point we can answer for. An entity-relative
+// request must therefore be for entity 0 -- the aircraft CigiP3dBridge drives
+// into Prepar3D -- and a geodetic request must be close enough to the aircraft
+// that the ground underneath is the same terrain.
+constexpr double kGeodeticToleranceMeters = 500.0;
+constexpr double kPi                      = 3.14159265358979323846;
+constexpr double kEarthRadiusMeters       = 6371000.0;
+
+static bool nearAircraft(double latDeg, double lonDeg, const terrain::Sample& sim) {
+    const double dLat    = (latDeg - sim.latDeg) * kPi / 180.0;
+    const double meanLat = (latDeg + sim.latDeg) * 0.5 * kPi / 180.0;
+    const double dLon    = (lonDeg - sim.lonDeg) * kPi / 180.0 * std::cos(meanLat);
+    const double north   = kEarthRadiusMeters * dLat;
+    const double east    = kEarthRadiusMeters * dLon;
+    return (north * north + east * east) <=
+           (kGeodeticToleranceMeters * kGeodeticToleranceMeters);
+}
+
+// The answer to one HAT/HOT request. `valid` follows the ICD: it is cleared
+// whenever the IG cannot return the requested datum, which here means "we have
+// no terrain to report" (no FSUIPC link, a request for another entity, or a
+// geodetic point too far from the aircraft). Answering Valid = 0 makes the HOST
+// ignore the packet -- far better than a fabricated HOT of 0, which the HOST
+// would follow straight into the ground.
+struct HatHotAnswer {
+    bool   valid = false;
+    double hat   = 0.0;  // metres above the terrain surface
+    double hot   = 0.0;  // metres MSL
+};
+
+static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
+                                 const terrain::Sample& sim) {
+    HatHotAnswer ans;
+    if (!sim.connected) {
+        return ans;
+    }
+
+    double testAlt;
+    if (req.coordSystem == cigi::kHatHotEntity) {
+        if (req.entityId != 0) {
+            return ans;  // not the aircraft FSUIPC knows about
+        }
+        // Entity axes are local NED: +Z points out of the bottom, so a
+        // positive Z offset sits *below* the reference point.
+        testAlt = sim.aircraftAltMeters - req.z;
+    } else {
+        if (!nearAircraft(req.x, req.y, sim)) {
+            return ans;
+        }
+        testAlt = req.z;  // geodetic requests carry the altitude directly
+    }
+
+    ans.hot   = sim.groundAltMeters;
+    ans.hat   = testAlt - ans.hot;
+    ans.valid = true;
+    return ans;
+}
+
 int main(int argc, char** argv) {
     Config cfg;
     if (!parseArgs(argc, argv, cfg)) {
@@ -177,6 +261,14 @@ int main(int argc, char** argv) {
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
         return fail("error: WSAStartup failed (%d)\n", WSAGetLastError());
     }
+
+    // Raise the system timer resolution to 1 ms for the lifetime of the
+    // process. Windows' default scheduler granularity is 15.6 ms (~64 Hz), so
+    // at any SOF rate above ~60 Hz sleep_until() overshoots its deadline and
+    // the transmit loop emits bursts of back-to-back SOF datagrams. The HOST
+    // cannot absorb those bursts and drops out. timeBeginPeriod(1) keeps the
+    // 100/112 Hz pacing even, matching the reference Master IG.
+    timeBeginPeriod(1);
 
     // ---- Receive socket: bound to the port the HOST streams to. ----------
     // Bind to INADDR_ANY (0.0.0.0) rather than 192.168.70.70 so the program
@@ -229,10 +321,17 @@ int main(int argc, char** argv) {
         kHostIp, kHostPort,
         kIgPort, kIgIp,
         cfg.fps, igModeByte,
-        cfg.respondHatHot ? "responding" : "ignored");
+        cfg.respondHatHot ? "responding (terrain read from local Prepar3D via FSUIPC)"
+                          : "ignored");
+
+    // The terrain poller owns every FSUIPC call in this process, so it is only
+    // started when HAT/HOT answering is enabled.
+    if (cfg.respondHatHot) {
+        terrain::start();
+    }
 
     Stats stats;
-    HatHotQueue hatHot;
+    HatHotRequestQueue hatHot;
 
     // ---- Receive thread: parse inbound CIGI and update statistics. -------
     std::thread rxThread([&] {
@@ -258,7 +357,7 @@ int main(int argc, char** argv) {
             stats.bytes.fetch_add(static_cast<uint64_t>(n));
 
             cigi::forEachMessage(buf.data(), static_cast<size_t>(n),
-                                 [&](uint8_t id, const uint8_t* msg, size_t) {
+                                 [&](uint8_t id, const uint8_t* msg, size_t msgSize) {
                 stats.messages.fetch_add(1);
                 switch (id) {
                     case cigi::MsgIGControl:
@@ -278,18 +377,20 @@ int main(int argc, char** argv) {
                     case cigi::MsgEntityControl:
                         stats.entityControl.fetch_add(1);
                         break;
-                    case cigi::MsgHATHOTRequest:
+                    case cigi::MsgHATHOTRequest: {
                         stats.hatHotReq.fetch_add(1);
-                        if (cfg.respondHatHot) {
-                            // hat_hot_id is a uint16 LE at full-message offset 2.
-                            uint16_t hid = static_cast<uint16_t>(
-                                msg[2] | (msg[3] << 8));
+                        // Decode the whole request here; the SOF thread turns it
+                        // into an answer against the latest terrain sample.
+                        cigi::HatHotRequest req;
+                        if (cfg.respondHatHot &&
+                            cigi::parseHatHotRequest(msg, msgSize, req)) {
                             std::lock_guard<std::mutex> lk(hatHot.mtx);
-                            if (hatHot.ids.size() < 64) {
-                                hatHot.ids.push_back(hid);
+                            if (hatHot.items.size() < 64) {
+                                hatHot.items.push_back(req);
                             }
                         }
                         break;
+                    }
                     default:
                         break;
                 }
@@ -305,6 +406,10 @@ int main(int argc, char** argv) {
         const auto period = std::chrono::microseconds(1000000 / cfg.fps);
         auto next = std::chrono::steady_clock::now();
 
+        // HAT/HOT requests this thread still owes an answer for. Kept across
+        // frames so requests with an update period can be answered repeatedly.
+        std::vector<ActiveHatHotRequest> hatHotActive;
+
         while (g_running.load()) {
             if (g_sending.load()) {
                 const auto now = std::chrono::steady_clock::now();
@@ -314,38 +419,98 @@ int main(int argc, char** argv) {
                 cigi::packStartOfFrame(sof, frame, ts, stats.lastHostFrame.load(),
                                        igModeByte);
 
-                // Flush any pending HAT/HOT responses by appending them to the
-                // SOF datagram, mirroring the reference capture's upstream framing.
+                // Build the upstream datagram: the SOF followed by every HAT/HOT
+                // response that is due this frame, mirroring the reference
+                // capture's upstream framing.
+                uint8_t pkt[24 + kMaxResponsesPerFrame * cigi::kHatHotExtRespSize];
+                std::memcpy(pkt, sof, 24);
+                size_t used = 24;
+
                 if (cfg.respondHatHot) {
-                    std::vector<uint16_t> ids;
+                    // Adopt the requests the receive thread decoded.
                     {
                         std::lock_guard<std::mutex> lk(hatHot.mtx);
-                        ids.swap(hatHot.ids);
-                    }
-                    if (!ids.empty()) {
-                        uint8_t pkt[24 + 40 * 64];
-                        std::memcpy(pkt, sof, 24);
-                        size_t used = 24;
-                        for (uint16_t hid : ids) {
-                            cigi::packHatHotExtResponse(pkt + used, hid, 1, 0.0, 0.0);
-                            used += cigi::kHatHotExtRespSize;
+                        for (const cigi::HatHotRequest& r : hatHot.items) {
+                            auto it = std::find_if(
+                                hatHotActive.begin(), hatHotActive.end(),
+                                [&](const ActiveHatHotRequest& a) {
+                                    return a.req.hatHotId == r.hatHotId;
+                                });
+                            if (it != hatHotActive.end()) {
+                                it->req        = r;  // Host recycled the id
+                                it->framesSince = 0;
+                            } else {
+                                ActiveHatHotRequest a;
+                                a.req = r;
+                                hatHotActive.push_back(a);
+                            }
                         }
-                        sendto(tx, reinterpret_cast<const char*>(pkt),
-                               static_cast<int>(used), 0,
-                               reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
-                    } else {
-                        sendto(tx, reinterpret_cast<const char*>(sof), 24, 0,
-                               reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
+                        hatHot.items.clear();
                     }
-                } else {
-                    sendto(tx, reinterpret_cast<const char*>(sof), 24, 0,
-                           reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
+
+                    const terrain::Sample sim = terrain::latest();
+                    const uint8_t lsn = static_cast<uint8_t>(
+                        stats.lastHostFrame.load() & 0x0Fu);
+                    int answered = 0;
+
+                    for (size_t i = 0;
+                         i < hatHotActive.size() && answered < kMaxResponsesPerFrame; ) {
+                        ActiveHatHotRequest& a = hatHotActive[i];
+                        const bool due = a.req.updatePeriod == 0 ||
+                                         a.framesSince % a.req.updatePeriod == 0;
+                        if (!due) {
+                            ++i;
+                            continue;
+                        }
+
+                        const HatHotAnswer ans = answerHatHot(a.req, sim);
+                        const uint8_t valid = ans.valid ? 1 : 0;
+
+                        if (a.req.requestType == cigi::kHatHotRequestExtended) {
+                            cigi::packHatHotExtResponse(pkt + used, a.req.hatHotId,
+                                                        valid, lsn, ans.hat, ans.hot);
+                            used += cigi::kHatHotExtRespSize;
+                        } else {
+                            // HAT (0) / HOT (1): the 16-byte response carries
+                            // only the datum the Host asked for.
+                            const bool wantHot =
+                                a.req.requestType == cigi::kHatHotRequestHot;
+                            cigi::packHatHotResponse(pkt + used, a.req.hatHotId,
+                                                     valid, a.req.requestType, lsn,
+                                                     wantHot ? ans.hot : ans.hat);
+                            used += cigi::kHatHotRespSize;
+                        }
+                        ++answered;
+
+                        if (a.req.updatePeriod == 0) {
+                            // One-shot: answered, so it is done.
+                            hatHotActive.erase(hatHotActive.begin() +
+                                               static_cast<ptrdiff_t>(i));
+                        } else {
+                            ++a.framesSince;
+                            ++i;
+                        }
+                    }
                 }
+
+                sendto(tx, reinterpret_cast<const char*>(pkt),
+                       static_cast<int>(used), 0,
+                       reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
 
                 ++frame;
             }
 
             next += period;
+
+            // If a scheduling stall put us more than one frame behind, resync
+            // the schedule to now instead of firing a burst of catch-up SOFs.
+            // (sleep_until() would otherwise return immediately for every
+            // missed tick, flooding the HOST with back-to-back frames.)
+            const auto after = std::chrono::steady_clock::now();
+            if (after - next > period) {
+                next = after;
+            }
+
             std::this_thread::sleep_until(next);
         }
     });
@@ -359,12 +524,25 @@ int main(int argc, char** argv) {
     auto printStatus = [&]() {
         const uint64_t d = stats.datagrams.load();
         const uint64_t e = stats.entityControl.load();
-        std::printf("\r[%-3s | %5llu dg/s | total %llu | entities %llu | host frame %u]  ",
+        char terrainText[64] = "";
+        if (cfg.respondHatHot) {
+            const terrain::Sample sim = terrain::latest();
+            if (sim.connected) {
+                std::snprintf(terrainText, sizeof(terrainText),
+                              " | terrain %.1f m | alt %.1f m",
+                              sim.groundAltMeters, sim.aircraftAltMeters);
+            } else {
+                std::snprintf(terrainText, sizeof(terrainText),
+                              " | terrain: no FSUIPC link");
+            }
+        }
+        std::printf("\r[%-3s | %5llu dg/s | total %llu | entities %llu | host frame %u%s]  ",
                     g_sending.load() ? "TX" : "IDLE",
                     static_cast<unsigned long long>(d - lastDatagrams),
                     static_cast<unsigned long long>(d),
                     static_cast<unsigned long long>(e),
-                    stats.lastHostFrame.load());
+                    stats.lastHostFrame.load(),
+                    terrainText);
         std::fflush(stdout);
     };
     printStatus();  // show the initial status immediately
@@ -398,10 +576,12 @@ int main(int argc, char** argv) {
     }
 
     std::printf("\nShutting down...\n");
+    terrain::stop();  // joins the poller before FSUIPC/the CRT goes away
     closesocket(rx);
     closesocket(tx);
     if (rxThread.joinable()) rxThread.join();
     if (txThread.joinable()) txThread.join();
+    timeEndPeriod(1);
     WSACleanup();
     std::printf("Stopped.\n");
     return 0;
