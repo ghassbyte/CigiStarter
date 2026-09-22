@@ -5,8 +5,9 @@ A minimal **CIGI 3.3 Image Generator (IG)** for a new IG PC.
 The HOST in a CIGI flight-simulator link stays silent until the IG transmits
 **Start-of-Frame (SOF)** messages. `CigiStarter` plays that IG role: it sends
 SOF at a configurable rate to wake up the HOST and begin the flight-data
-stream, and (optionally) answers HAT/HOT requests with the real terrain height
-under the aircraft, read from the local Prepar3D via FSUIPC.
+stream, and answers HAT/HOT requests with the real terrain height under the
+aircraft, read from the local Prepar3D via FSUIPC — see
+[HAT/HOT answering](#hathot-answering).
 
 ## What it does
 
@@ -18,10 +19,10 @@ under the aircraft, read from the local Prepar3D via FSUIPC.
 3. Parses inbound CIGI messages (framed by `[id][size]`) and shows a live status
    block: datagrams/s, total datagrams, entity updates, the SOF rate (requested
    and achieved), SOF frames sent, the HOST frame counter and the terrain sample.
-4. Optionally answers HAT/HOT requests, riding the responses along on the SOF
-   stream as the reference IG did. It is switched on with `--respond-hathot` or
-   the window's check box, and the terrain height is read from the local
-   Prepar3D via FSUIPC — see [HAT/HOT answering](#hathot-answering).
+4. Answers HAT/HOT requests, riding the responses along on the SOF stream as the
+   reference IG did. This is on by default (the window's check box switches it
+   off, as does `--no-respond-hathot`), and the terrain height is read from the
+   local Prepar3D via FSUIPC — see [HAT/HOT answering](#hathot-answering).
 5. Runs as a small window with **START** / **STOP** / **EXIT**: it starts paused
    and stays silent until START is clicked — see
    [Operator window](#operator-window).
@@ -79,9 +80,10 @@ CigiStarter.exe [options]
   --fps <rate>        initial SOF transmit rate in Hz   (default 100)
   --ig-mode <0..3>    IG mode reported until the HOST sends its first
                       IG Control (0=Standby 1=Operate)  (default 0)
-  --respond-hathot    answer HAT/HOT requests from the start, using the
-                      terrain height read from the local Prepar3D via
-                      FSUIPC                                  (default off)
+  --respond-hathot    answer HAT/HOT requests using the terrain height read
+                      from the local Prepar3D via FSUIPC       (default on)
+  --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC
+                      untouched
   --help              show this help (in a message box)
 ```
 
@@ -92,14 +94,15 @@ can both be changed from the window while the program runs — see
 Example:
 
 ```
-CigiStarter.exe --fps 100 --respond-hathot
+CigiStarter.exe --fps 112
 ```
 
 ## HAT/HOT answering
 
 The HOST drives its aircraft altitude to the **Height Of Terrain (HOT)** that
 the IG reports, so an IG that answers `HOT = 0` flies the aircraft into the
-ground. `--respond-hathot` makes CigiStarter report the *real* terrain:
+ground. CigiStarter therefore reports the *real* terrain **by default** — turn
+it off in the window, or start with `--no-respond-hathot`, if you must:
 
 | Request                | Response                                      |
 |------------------------|-----------------------------------------------|
@@ -161,8 +164,8 @@ from a console. The window is a fixed-size plain Win32 dialog:
   button that would be a no-op is disabled.
 - **Answer HAT/HOT** switches HAT/HOT answering on and off, and with it the
   FSUIPC poller — switching it off means this program makes no FSUIPC calls at
-  all, switching it back on reconnects. It starts in the state `--respond-hathot`
-  asked for.
+  all, switching it back on reconnects. It starts **on**, unless
+  `--no-respond-hathot` was given.
 - **SOF rate** is a whole number of Hz, from 1 to 100000. It is applied to the
   transmit loop on the next frame, so the stream can be retuned *while it runs*
   — no stop/start needed. Commit it with **Apply** or by pressing **Enter**. A

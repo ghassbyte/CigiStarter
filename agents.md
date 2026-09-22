@@ -55,8 +55,8 @@ that the HOST requires to start streaming:
   Control asking for Operate, and the SOF's mode byte (bits 0-1 of byte 5)
   follows it to `0x31` instead of staying at the `--ig-mode` default. The flag
   only seeds the mode used before the first IG Control arrives.
-- Optionally answers HAT/HOT requests (the `--respond-hathot` seed, toggled at
-  runtime by the window's check box, which starts and stops the FSUIPC poller
+- Answers HAT/HOT requests by default (the window's check box, or
+  `--no-respond-hathot`, switches it off — which also stops the FSUIPC poller
   with it). The Master IG used to answer these from its own terrain database;
   CigiStarter has no database, so it reports the terrain under the aircraft as
   seen by the local Prepar3D, read over FSUIPC (`TerrainSource.cpp`, offset
@@ -84,10 +84,11 @@ that the HOST requires to start streaming:
         │                ...                  │
 ```
 
-With HAT/HOT answering switched on, there is one more edge to that picture:
-before answering a HAT/HOT request, CigiStarter reads the terrain height under
-the aircraft from the local Prepar3D over FSUIPC. The poller owning that link is
-described in `TerrainSource.cpp`; it exists only while answering is on.
+With HAT/HOT answering on (the default), there is one more edge to that
+picture: before answering a HAT/HOT request, CigiStarter reads the terrain
+height under the aircraft from the local Prepar3D over FSUIPC. The poller owning
+that link is described in `TerrainSource.cpp`; it exists only while answering is
+on.
 
 ## Key facts
 
@@ -104,6 +105,6 @@ described in `TerrainSource.cpp`; it exists only while answering is on.
 | Terrain source    | FSUIPC `0x0020` of the local Prepar3D (ground altitude under the player aircraft) |
 | Reference SOF rate| ~112 Hz (~9 ms)              |
 | Operator UI       | plain Win32 window (`Gui.cpp`): START / STOP / EXIT, a HAT/HOT check box and a SOF rate box |
-| Runtime settings  | SOF rate (1..100000 Hz, applied on the next frame) and HAT/HOT answering (drives the FSUIPC poller); `--fps` / `--respond-hathot` only seed them |
+| Runtime settings  | SOF rate (1..100000 Hz, applied on the next frame) and HAT/HOT answering (drives the FSUIPC poller); `--fps` / `--no-respond-hathot` only seed them |
 | Exit path         | EXIT button only — the title-bar X / Alt+F4 / `WM_CLOSE` are swallowed |
 | Process type      | GUI subsystem: no console; `--help` and startup errors use a message box |

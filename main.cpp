@@ -5,8 +5,9 @@
 //    Plays the "Master IG" side of a CIGI link so the HOST begins streaming
 //    flight data. The HOST stays silent until the IG transmits Start-of-Frame
 //    (SOF) messages, so this program continuously sends SOF at a configurable
-//    rate and (optionally) answers HAT/HOT requests with the terrain height
-//    read from the local Prepar3D.
+//    rate and answers HAT/HOT requests with the terrain height read from the
+//    local Prepar3D (switched on by default; an unreachable sim just means the
+//    answers stay invalid until it appears).
 //
 //  Transport (fixed by the deployment; hardcoded below)
 //    HOST 192.168.70.2  -> IG 192.168.70.70 : 8000   (downstream data)
@@ -14,19 +15,20 @@
 //
 //  Operator interface
 //    A small fixed-size Win32 window (Gui.cpp) showing the link, the live
-//    stream statistics and the terrain sample, with START / STOP / EXIT.
+//    stream statistics and the terrain sample, with START / STOP / EXIT plus
+//    a HAT/HOT check box and a SOF rate box.
 //    EXIT is the only way out -- the title-bar X and Alt+F4 are swallowed, so
 //    the IG cannot be taken off the link by a stray click. This file owns the
 //    worker threads and the statistics that window displays.
 //
 //  Dependencies
 //    Windows sockets, the 1 ms timer and user32 (Ws2_32.lib, Winmm.lib,
-//    User32.lib). With --respond-hathot the FSUIPC SDK is linked as well, to
-//    read the terrain height out of the local Prepar3D (isolated in
-//    TerrainSource.cpp).
+//    User32.lib). While HAT/HOT answering is switched on (the default) the
+//    FSUIPC SDK is linked as well, to read the terrain height out of the local
+//    Prepar3D (isolated in TerrainSource.cpp).
 //
 //  Usage
-//    CigiStarter.exe [--fps 100] [--ig-mode 0] [--respond-hathot] [--help]
+//    CigiStarter.exe [--fps 100] [--ig-mode 0] [--no-respond-hathot] [--help]
 //    Being a windowed program there is no console, so --help and any startup
 //    error are reported in a message box.
 //=============================================================================
@@ -69,7 +71,7 @@ constexpr uint16_t kIgPort   = 8000;             // IG port (HOST -> IG)
 struct Config {
     int     fps           = 100;  // SOF transmission rate
     uint8_t igMode        = 0;    // 0 = Standby (0x30), 1 = Operate (0x31)
-    bool    respondHatHot = false;
+    bool    respondHatHot = true;
 };
 
 // Most HOSTs send one HAT/HOT request per frame, so one response per SOF. The
@@ -120,7 +122,7 @@ static Stats             g_stats;           // filled in by the receive thread
 // the SOF transmit rate. Both are seeded from the command line and from then on
 // owned by the window's controls -- the window thread cannot see main()'s
 // Config, so the live values live here.
-static std::atomic<bool> g_respondHatHot{false};
+static std::atomic<bool> g_respondHatHot{true};
 static std::atomic<int>  g_targetFps{100};
 
 //-----------------------------------------------------------------------------
@@ -154,7 +156,9 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                                                         (default 0)\n"
         "  --respond-hathot    answer HAT/HOT requests, reporting the terrain\n"
         "                      height read from the local Prepar3D via FSUIPC\n"
-        "                      (default off)\n"
+        "                      (this is the default)\n"
+        "  --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC\n"
+        "                      untouched\n"
         "  --help              show this help\n",
         kHostIp, kHostPort, kIgIp, kIgPort, argv0);
 }
@@ -188,7 +192,9 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             const char* v = next("--ig-mode"); if (!v) return false;
             cfg.igMode = static_cast<uint8_t>(std::atoi(v));
         } else if (a == "--respond-hathot") {
-            cfg.respondHatHot = true;
+            cfg.respondHatHot = true;   // the default; kept so old command lines work
+        } else if (a == "--no-respond-hathot") {
+            cfg.respondHatHot = false;
         } else {
             fail("error: unknown option '%s'\n\nRun with --help for the option list.",
                  a.c_str());
@@ -397,9 +403,10 @@ int main(int argc, char** argv) {
     // first IG Control arrives, after which the receive thread takes over.
     g_stats.hostIgMode.store(static_cast<uint8_t>(cfg.igMode & 0x03u));
 
-    // The terrain poller owns every FSUIPC call in this process, so it is only
-    // started when HAT/HOT answering is enabled -- and the window's check box
-    // turns it on and off at runtime.
+    // The terrain poller owns every FSUIPC call in this process, so it runs
+    // only while HAT/HOT answering is enabled -- which it is by default, since
+    // a wrong or missing HOT flies the aircraft into the ground. The window's
+    // check box turns it on and off at runtime.
     if (g_respondHatHot.load()) {
         terrain::start();
     }
