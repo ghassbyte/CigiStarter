@@ -29,6 +29,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace gui {
 
@@ -52,6 +53,17 @@ struct Status {
     bool     terrainConnected  = false;  // FSUIPC link up?
     double   groundAltMeters   = 0.0;    // terrain under the aircraft
     double   aircraftAltMeters = 0.0;    // aircraft altitude
+    // The fan-out to the extra IG PCs (Relay.h). The relay is read once, at
+    // startup, so everything here is a fixed description of what it is doing
+    // apart from the two counters and the `ready` count.
+    bool        relayFileFound = false;  // client.txt was there to be read
+    int         relayClients   = 0;      // usable entries in it
+    int         relayReady     = 0;      // entries that answer (fed right now)
+    int         relaySkipped   = 0;      // client.txt lines that were unusable
+    uint64_t    relayForwarded = 0;      // datagrams copied to a client
+    uint64_t    relayDropped   = 0;      // datagrams no client could receive
+    std::string relayDevice;             // adapter the copies leave by
+    std::string relayError;              // why the relay is off ("" = running)
 };
 
 // Fixed deployment information, shown above the live status.

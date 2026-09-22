@@ -27,6 +27,9 @@
     <ClCompile Include="cigi.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Relay.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="TerrainSource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -36,6 +39,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Gui.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Relay.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TerrainSource.h">

@@ -5,7 +5,8 @@
 //
 //     +--------------------------------------------------------------------+
 //     |  HOST 192.168.70.2:8001   ->  SOF destination                       |
-//     |   ... live status block (read-only edit) ...                        |
+//     |   ... live status block (read-only edit): the link, the stream, the |
+//     |       client.txt fan-out and the terrain sample ...                 |
 //     |                                                                     |
 //     |  [x] Answer HAT/HOT (terrain from FSUIPC)   SOF rate: [ 100 ] Hz [Apply] |
 //     |                                                                     |
@@ -36,7 +37,10 @@ namespace {
 constexpr int kMargin    = 12;
 constexpr int kClientW   = 660;
 constexpr int kStatusW   = kClientW - 2 * kMargin;
-constexpr int kStatusH   = 232;
+// Tall enough for the whole status block plus a couple of wrapped lines: the
+// relay line grows with the counters, and a line that wraps must not push the
+// terrain reading out of sight.
+constexpr int kStatusH   = 288;
 constexpr int kSettingsY = kMargin + kStatusH + kMargin;
 constexpr int kRowH      = 24;
 constexpr int kButtonY   = kSettingsY + kRowH + kMargin;
@@ -198,6 +202,46 @@ void Refresh() {
                       L"  HAT/HOT   : switched on, but no FSUIPC link to Prepar3D");
     }
 
+    // The relay block, likewise: off is a normal state, and each way of being
+    // off says which one it is, because the operator's next move differs.
+    wchar_t relay[384];
+    if (!s.relayError.empty()) {
+        std::swprintf(relay, ARRAYSIZE(relay), L"  Relay     : off (%hs)",
+                      s.relayError.c_str());
+    } else if (!s.relayFileFound) {
+        std::swprintf(relay, ARRAYSIZE(relay),
+                      L"  Relay     : off (no client.txt next to the program)");
+    } else if (s.relayClients == 0) {
+        std::swprintf(relay, ARRAYSIZE(relay),
+                      L"  Relay     : off (client.txt lists no usable address)");
+    } else {
+        int used = std::swprintf(
+            relay, ARRAYSIZE(relay),
+            L"  Relay     : %d client%s, %d reachable, %llu datagrams forwarded",
+            s.relayClients, s.relayClients == 1 ? L"" : L"s", s.relayReady,
+            static_cast<unsigned long long>(s.relayForwarded));
+        const int room = static_cast<int>(ARRAYSIZE(relay)) - used;
+        if (used > 0 && room > 0 && s.relayDropped > 0) {
+            used += std::swprintf(relay + used, static_cast<size_t>(room),
+                                  L", %llu dropped",
+                                  static_cast<unsigned long long>(s.relayDropped));
+        }
+        const int left = static_cast<int>(ARRAYSIZE(relay)) - used;
+        if (used > 0 && left > 0 && s.relaySkipped > 0) {
+            std::swprintf(relay + used, static_cast<size_t>(left),
+                          L", %d client.txt line%s ignored", s.relaySkipped,
+                          s.relaySkipped == 1 ? L"" : L"s");
+        }
+    }
+
+    wchar_t relayNic[256];
+    if (s.relayDevice.empty()) {
+        std::swprintf(relayNic, ARRAYSIZE(relayNic), L"  Relay NIC : none");
+    } else {
+        std::swprintf(relayNic, ARRAYSIZE(relayNic), L"  Relay NIC : %hs",
+                      s.relayDevice.c_str());
+    }
+
     wchar_t text[2048];
     std::swprintf(text, ARRAYSIZE(text),
         L"  HOST %hs:%u   ->  SOF destination\r\n"
@@ -209,6 +253,9 @@ void Refresh() {
         L"  Received  : %llu datagrams (%llu/s), %llu entity updates\r\n"
         L"  IG mode   : %u (%s)  <- commanded by the HOST\r\n"
         L"  HOST frame: %u\r\n"
+        L"\r\n"
+        L"%s\r\n"
+        L"%s\r\n"
         L"\r\n"
         L"%s\r\n",
         g_link->hostIp, static_cast<unsigned>(g_link->hostPort),
@@ -222,7 +269,7 @@ void Refresh() {
         static_cast<unsigned long long>(s.entityUpdates),
         static_cast<unsigned>(s.hostIgMode), IgModeName(s.hostIgMode),
         static_cast<unsigned>(s.lastHostFrame),
-        terrain);
+        relay, relayNic, terrain);
 
     SetWindowTextW(g_status, text);
 

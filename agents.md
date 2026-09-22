@@ -14,7 +14,18 @@ reverse-engineered from `Host-Master.pcapng`.
    │ 192.168.70.2 │                                               │  192.168.70.70     │
    │              │ ◄───────────────────────────────────────────  │                    │
    └──────────────┘   Upstream (SOF + HAT/HOT responses) port 8001└────────────────────┘
+                                                                          │
+   ┌──────────────────────────────────────────────────────────────────────┘
+   │  the same downstream datagrams, copied by the IG for the extra IG PCs
+   ▼  listed in client.txt (they are passive: nothing ever comes back)
+ ┌─────────────────────────────────┐
+ │ 192.168.70.102 ... .106  :8000  │
+ └─────────────────────────────────┘
 ```
+
+The copies keep the HOST's address and port as their source, so each extra IG PC
+runs the ordinary bridge with no reconfiguration and sees exactly the stream the
+HOST sent.
 
 ## Agents
 
@@ -65,6 +76,14 @@ that the HOST requires to start streaming:
   the aircraft into the ground.
 - Parses inbound CIGI (IG Control, Entity Control, …) for the live status block
   in its operator window.
+- **Fans the downstream stream out** to the extra IG PCs listed in `client.txt`
+  (`Relay.cpp`): every datagram the HOST sends is copied, byte for byte, into one
+  injected Ethernet frame per client, labelled with the HOST's address and port
+  so that those clients need no reconfiguration. They are passive — they never
+  send anything back to CigiStarter, and nothing is sent up the link on their
+  behalf. The copy needs Npcap on the IG PC; it is loaded at run time, so the
+  program still runs as a plain IG without it. No clients listed (or no
+  `client.txt`) simply means the fan-out is off.
 - Says nothing to the HOST until **START** is clicked. The window (`Gui.cpp`) has
   START / STOP / EXIT plus the HAT/HOT check box and the SOF rate box; the SOF
   stream starts paused. EXIT is the only way out — the title-bar X and Alt+F4
@@ -90,6 +109,10 @@ height under the aircraft from the local Prepar3D over FSUIPC. The poller owning
 that link is described in `TerrainSource.cpp`; it exists only while answering is
 on.
 
+With the fan-out on, every downstream datagram in that picture also leaves the
+IG again — unaltered — towards each client in `client.txt`. From the clients'
+point of view that edge looks exactly like the HOST's own, which is the point.
+
 ## Key facts
 
 | Property          | Value                        |
@@ -103,6 +126,9 @@ on.
 | IG mode           | commanded by the HOST via IG Control; the SOF echoes it back (Operate throughout the reference capture) |
 | HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
 | Terrain source    | FSUIPC `0x0020` of the local Prepar3D (ground altitude under the player aircraft) |
+| Extra IG PCs      | listed in `client.txt` next to the executable (`address[:port]`, `#` comments, optional, read once at startup) |
+| Fan-out           | one copy of each downstream datagram per listed client, injected with Npcap, source address/port spoofed as the HOST's |
+| Fan-out adapter   | found automatically: the adapter owning this IG's address, else the one the route to the HOST leaves by |
 | Reference SOF rate| ~112 Hz (~9 ms)              |
 | Operator UI       | plain Win32 window (`Gui.cpp`): START / STOP / EXIT, a HAT/HOT check box and a SOF rate box |
 | Runtime settings  | SOF rate (1..100000 Hz, applied on the next frame) and HAT/HOT answering (drives the FSUIPC poller); `--fps` / `--no-respond-hathot` only seed them |

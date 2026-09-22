@@ -26,6 +26,9 @@ aircraft, read from the local Prepar3D via FSUIPC — see
 5. Runs as a small window with **START** / **STOP** / **EXIT**: it starts paused
    and stays silent until START is clicked — see
    [Operator window](#operator-window).
+6. **Fans the HOST's downstream stream out to the other IG PCs** listed in
+   `client.txt`, byte for byte, so several visual channels run off the one link
+   the HOST already feeds — see [Fan-out](#fan-out-to-the-other-ig-pcs).
 
 ## Requirements
 
@@ -35,9 +38,16 @@ aircraft, read from the local Prepar3D via FSUIPC — see
   The project links with `SubSystem=Windows` plus `EntryPointSymbol=mainCRTStartup`,
   which produces a GUI binary while still allowing a plain `int main(argc, argv)`.
 - Windows system libraries only, plus the **FSUIPC SDK** while HAT/HOT answering
-  is switched on (`Ws2_32.lib` for sockets and `Winmm.lib` for timing;
-  `User32.lib` for the window; `FSUIPCuser64.lib` for the terrain read). With
-  answering switched off the program never touches FSUIPC.
+  is switched on (`Ws2_32.lib` for sockets, `Winmm.lib` for timing,
+  `User32.lib` for the window, `Iphlpapi.lib` for the client MAC lookups, and
+  `FSUIPCuser64.lib` for the terrain read). With answering switched off the
+  program never touches FSUIPC.
+- **Npcap** is needed only for the [fan-out](#fan-out-to-the-other-ig-pcs). It is
+  loaded at run time rather than linked, so the program still builds and runs
+  without it. The Npcap *SDK* (headers) is needed to build; it is shared with
+  `CigiP3dBridge`:
+  `..\CigiP3dBridge\external\npcap-sdk-1.16\`. Point the build elsewhere with
+  `/p:NpcapSdkDir=<directory>`.
 - The FSUIPC header/library are the ones already in this repository, shared with
   `CigiP3dBridge`:
   `..\CigiP3dBridge\external\UIPC64_SDK_C_version2\`. If your checkout lays the
@@ -90,6 +100,10 @@ CigiStarter.exe [options]
 The options only set the *starting* state. The SOF rate and HAT/HOT answering
 can both be changed from the window while the program runs — see
 [Operator window](#operator-window).
+
+One input file matters too: **`client.txt`**, next to the executable, lists the
+other IG PCs to copy the downstream stream to. It is optional and is read once at
+startup — see [Fan-out](#fan-out-to-the-other-ig-pcs).
 
 Example:
 
@@ -147,6 +161,9 @@ from a console. The window is a fixed-size plain Win32 dialog:
 |  IG mode   : 0 (Standby)  <- commanded by the HOST                       |
 |  HOST frame: 0                                                           |
 |                                                                          |
+|  Relay     : 4 clients, 4 reachable, 1567 datagrams forwarded            |
+|  Relay NIC : Killer E2600 Gigabit Ethernet Controller                    |
+|                                                                          |
 |  HAT/HOT   : answering from FSUIPC                                       |
 |  Terrain   : 27.0 m under the aircraft, 30.1 m aircraft                  |
 |                                                                          |
@@ -177,11 +194,92 @@ from a console. The window is a fixed-size plain Win32 dialog:
   deliberately swallowed — `SC_CLOSE` is deleted from the window's system menu
   (Windows then draws the X greyed out and non-clickable) and `WM_CLOSE` is
   ignored — so the IG cannot be taken off the link by a stray click. This
-  matches the `CigiP3dBridge` GUI, which follows the same rule.
+  matches the `CigiP3dBridge` GUI, which follows the same rule. The window
+  disappears at once; the process itself is gone a moment later at the latest,
+  since shutting down waits only for the [fan-out](#fan-out-to-the-other-ig-pcs)
+  thread to finish the client-address lookup it is already in the middle of.
 - Since the process has no console, `Ctrl+C` cannot reach it either.
 - Terrain lines appear while answering is on: `answering from FSUIPC` with the
   ground/aircraft heights, or a warning that there is no FSUIPC link to
   Prepar3D. With answering off they read `not answered (switched off)`.
+- `Relay` and `Relay NIC` report the [fan-out](#fan-out-to-the-other-ig-pcs):
+  how many clients are listed, how many of them answer, how many datagrams have
+  been copied, and which adapter the copies leave by. There is no button for it
+  — it is on whenever `client.txt` says so.
+
+## Fan-out to the other IG PCs
+
+CigiStarter can copy the HOST's downstream stream to extra IG PCs, so several
+visual channels can be driven from the one link the HOST already feeds. The list
+of extra PCs is a plain text file, **`client.txt`, next to the executable**. It
+is read once at startup — restart the program to pick up an edit:
+
+```
+# one address per line, with an optional port (default: the IG port, 8000)
+192.168.70.102:8000
+192.168.70.103
+192.168.70.104:8000   # left visual
+```
+
+- Case by case: blank lines, `#` comments (whole-line or trailing) and a Notepad
+  byte-order mark are all tolerated; IPv4 addresses only.
+- Unusable lines — junk, a port of 0 or above 65535, a duplicate, this PC's own
+  addresses — are skipped and **counted**, and the window says how many were
+  ignored. The list is capped at 32 clients.
+- The file is optional. Without it (or with nothing usable in it) nothing is
+  relayed, the window says which of those it is, and the capture driver is never
+  opened.
+
+Every datagram the HOST sends is copied **exactly as it arrived**, on the same
+UDP port, to each listed client — one Ethernet frame per client per datagram.
+The copies carry the **HOST's address and port as their source**
+(`192.168.70.2:8001`), so a client's bridge needs no reconfiguration at all: it
+sees the same stream it would have seen if it were the IG on the link. Nothing
+is ever sent back up the link, and clients never talk to CigiStarter.
+
+Producing those copies needs **Npcap** (`wpcap.dll`), which is loaded at run
+time — deliberately *not* linked — so CigiStarter still builds and runs as a
+plain IG on a PC without it; the window then reports the relay as off, and why.
+Npcap has to be installed on the IG PC for the fan-out to work.
+
+How it works, and why:
+
+- **The adapter is found automatically**: the one that owns this IG's address
+  (`192.168.70.70`) — or, on a machine that does not have it, such as a test
+  bench, whichever adapter the route to the HOST leaves by. No flag; the window
+  names the adapter it picked.
+- **Each copy is a hand-built Ethernet + IPv4 + UDP frame**, injected with
+  `pcap_sendpacket`. Ethernet destination = the client's MAC; Ethernet source =
+  this adapter's *own* MAC (spoofing that as well would teach every switch on
+  the way that the HOST lives on this port); IP source = the HOST; IP
+  destination = the client; UDP source = the HOST's port; UDP destination = the
+  client's. Both the IP and the UDP checksum are computed, over the IP
+  pseudo-header as the UDP one must be, so a copy is a complete, valid datagram
+  rather than something only a capture driver would show.
+- **Unicast, one frame per client** — not broadcast — so only the PCs named in
+  `client.txt` see the copies.
+- **Client MACs are resolved with `SendARP` on a background thread**, re-resolved
+  every few seconds, so a client that is switched on or replaced later is picked
+  up on its own. One that stops answering is taken out of the fan-out until it
+  answers again; the window counts how many are reachable.
+- **Datagrams that would have to be fragmented are dropped and counted**
+  (anything over 1472 bytes of payload). A client's capture filter matches one
+  datagram, not a fragment chain, so sending the first fragment of a truncated
+  CIGI stream would be worse than not sending it.
+- **The receive path is untouched**: only datagrams whose source address is the
+  HOST's are copied at all, and the copy is taken before anything is parsed, so
+  clients get precisely what the HOST sent.
+
+The `Relay` line in the window is the whole state, and it never needs a button:
+
+```
+  Relay     : 5 clients, 4 reachable, 1250431 datagrams forwarded, 2 dropped, 1 client.txt line ignored
+  Relay NIC : Killer E2600 Gigabit Ethernet Controller
+```
+
+`forwarded` counts datagrams that reached at least one client; `dropped` counts
+datagrams that reached none (all of them too big, or every send failing while a
+client was reachable). Clients that have not answered yet are neither.
 
 ## Network layout
 
@@ -189,6 +287,12 @@ from a console. The window is a fixed-size plain Win32 dialog:
 |-------------|-----------------------|-----------------------|------|---------------------------------|
 | Downstream  | HOST `192.168.70.2`   | IG `192.168.70.70`    | 8000 | IGCtrl, EntityCtrl, HAT/HOT req |
 | Upstream    | IG `192.168.70.70`    | HOST `192.168.70.2`   | 8001 | SOF (+ HAT/HOT responses)       |
+| Fan-out     | HOST `192.168.70.2`   | each `client.txt` PC  | 8000 | one copy of each downstream datagram |
+
+The fan-out row is the only traffic this program puts on the link labelled with
+somebody else's address: the copies claim to come from the HOST on purpose, so
+the clients need no reconfiguration. See
+[Fan-out](#fan-out-to-the-other-ig-pcs).
 
 ## Protocol notes
 
@@ -225,6 +329,9 @@ from a console. The window is a fixed-size plain Win32 dialog:
 | `cigi.cpp`         | explicit little-endian message packing         |
 | `TerrainSource.h`  | FSUIPC-backed terrain/aircraft snapshot API    |
 | `TerrainSource.cpp`| the FSUIPC poller thread (owns all FSUIPC use) |
+| `Relay.h`          | fan-out API: start/stop, per-datagram copy, status snapshot |
+| `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
+| `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
 | `app.manifest`     | UAC `requireAdministrator` manifest            |
 | `agents.md`        | description of the HOST / IG / CigiStarter agents |
 | `CigiStarter.sln`  | Visual Studio solution (x64 only)              |

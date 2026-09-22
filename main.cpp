@@ -21,11 +21,21 @@
 //    the IG cannot be taken off the link by a stray click. This file owns the
 //    worker threads and the statistics that window displays.
 //
+//  Fan-out to the extra IG PCs
+//    A deployment with more than one IG PC needs the others fed too, and they
+//    are passive: they want the flight data and nothing else. `client.txt`
+//    next to this program lists them, and every datagram the HOST sends here
+//    is copied to each of them, byte for byte, appearing to come from the HOST
+//    itself (so the client PCs need no configuration). Relay.h explains how,
+//    and why that means Npcap.
+//
 //  Dependencies
 //    Windows sockets, the 1 ms timer and user32 (Ws2_32.lib, Winmm.lib,
 //    User32.lib). While HAT/HOT answering is switched on (the default) the
 //    FSUIPC SDK is linked as well, to read the terrain height out of the local
-//    Prepar3D (isolated in TerrainSource.cpp).
+//    Prepar3D (isolated in TerrainSource.cpp). Npcap is used for the fan-out
+//    but is loaded at run time, never linked, so a PC without it is still a
+//    perfectly good IG (Relay.cpp).
 //
 //  Usage
 //    CigiStarter.exe [--fps 100] [--ig-mode 0] [--no-respond-hathot] [--help]
@@ -34,6 +44,7 @@
 //=============================================================================
 #include "cigi.h"
 #include "Gui.h"
+#include "Relay.h"
 #include "TerrainSource.h"
 
 #include <winsock2.h>
@@ -159,7 +170,10 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      (this is the default)\n"
         "  --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC\n"
         "                      untouched\n"
-        "  --help              show this help\n",
+        "  --help              show this help\n"
+        "\n"
+        "Extra (passive) IG PCs to copy the HOST's stream to are listed in\n"
+        "client.txt next to this program -- see README.md.\n",
         kHostIp, kHostPort, kIgIp, kIgPort, argv0);
 }
 
@@ -306,6 +320,18 @@ static gui::Status uiStatus() {
     s.terrainConnected  = sim.connected;
     s.groundAltMeters   = sim.groundAltMeters;
     s.aircraftAltMeters = sim.aircraftAltMeters;
+
+    // The fan-out to the extra IG PCs. It is optional and never fatal, so its
+    // state is reported here rather than gating anything.
+    const relay::Status fan = relay::status();
+    s.relayFileFound = fan.fileFound;
+    s.relayClients   = fan.clients;
+    s.relayReady     = fan.ready;
+    s.relaySkipped   = fan.skipped;
+    s.relayForwarded = fan.forwarded;
+    s.relayDropped   = fan.dropped;
+    s.relayDevice    = fan.device;
+    s.relayError     = fan.error;
     return s;
 }
 
@@ -411,6 +437,11 @@ int main(int argc, char** argv) {
         terrain::start();
     }
 
+    // ---- Fan the HOST's stream out to the extra IG PCs (client.txt) ------
+    // Optional and never fatal: the client list lives next to the executable,
+    // and with no client.txt this does nothing at all. See Relay.h.
+    relay::start(kHostIp, kHostPort, kIgIp, kIgPort);
+
     HatHotRequestQueue hatHot;
 
     // ---- Receive thread: parse inbound CIGI and update statistics. -------
@@ -431,6 +462,14 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "recvfrom error (%d)\n", err);
                 continue;
             }
+            // Copy the datagram to the extra IG PCs before doing anything else
+            // with it -- before even the malformed-frame check -- so that they
+            // receive exactly what the HOST sent. Only the HOST is copied: the
+            // client IG PCs are passive and have nothing to say back.
+            if (from.sin_addr.s_addr == hostAddr.sin_addr.s_addr) {
+                relay::forward(buf.data(), static_cast<size_t>(n));
+            }
+
             if (n < 2) continue;
 
             g_stats.datagrams.fetch_add(1);
@@ -650,6 +689,7 @@ int main(int argc, char** argv) {
     closesocket(tx);
     if (rxThread.joinable()) rxThread.join();
     if (txThread.joinable()) txThread.join();
+    relay::stop();           // only now: no receive thread is injecting frames
     timeEndPeriod(1);
     WSACleanup();
     return exitCode;
