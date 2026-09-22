@@ -1,15 +1,21 @@
 //=============================================================================
 //  Gui.cpp — plain Win32 implementation of the CigiStarter window
 //
-//  See Gui.h for the rationale. Layout is a fixed-size window (no resize) with
-//  a read-only multi-line edit for the status block and three buttons:
+//  See Gui.h for the rationale. The layout is a fixed-size window (no resize):
 //
-//     +--------------------------------------------------------------+
-//     |  HOST 192.168.70.2:8001  ->  SOF destination                 |
-//     |  ... live status ...                                         |
-//     |                                                              |
-//     |  [ START ]  [ STOP ]                                 [ EXIT ] |
-//     +--------------------------------------------------------------+
+//     +--------------------------------------------------------------------+
+//     |  HOST 192.168.70.2:8001   ->  SOF destination                       |
+//     |   ... live status block (read-only edit) ...                        |
+//     |                                                                     |
+//     |  [x] Answer HAT/HOT (terrain from FSUIPC)   SOF rate: [ 100 ] Hz [Apply] |
+//     |                                                                     |
+//     |  [ START ]  [ STOP ]                                        [ EXIT ] |
+//     +--------------------------------------------------------------------+
+//
+//  The settings row is live: the check box switches HAT/HOT answering (and with
+//  it the FSUIPC poller) and the rate box retunes the SOF stream, both without
+//  stopping anything first. The rate box applies on Enter, on Apply, and when it
+//  loses focus, so a typed value can never be silently ignored.
 //
 //  There is no X button: SC_CLOSE is deleted from the system menu at creation
 //  and WM_CLOSE is ignored, so DestroyWindow() is only ever reached from the
@@ -21,25 +27,33 @@
 
 #include <cstdio>
 #include <cwchar>
+#include <initializer_list>
 
 namespace gui {
 namespace {
 
 // ---- Layout (client-area pixels) -----------------------------------------
-constexpr int kMargin  = 12;
-constexpr int kClientW = 620;
-constexpr int kClientH = 320;
-constexpr int kButtonW = 110;
-constexpr int kButtonH = 32;
-constexpr int kButtonY = kClientH - kMargin - kButtonH;
-constexpr int kStatusW = kClientW - 2 * kMargin;
-constexpr int kStatusH = kButtonY - 2 * kMargin;
+constexpr int kMargin    = 12;
+constexpr int kClientW   = 660;
+constexpr int kStatusW   = kClientW - 2 * kMargin;
+constexpr int kStatusH   = 232;
+constexpr int kSettingsY = kMargin + kStatusH + kMargin;
+constexpr int kRowH      = 24;
+constexpr int kButtonY   = kSettingsY + kRowH + kMargin;
+constexpr int kButtonW   = 110;
+constexpr int kButtonH   = 32;
+constexpr int kClientH   = kButtonY + kButtonH + kMargin;
 
 // ---- Control identifiers -------------------------------------------------
-constexpr int kStatusId = 1000;
-constexpr int kStartId  = 1001;
-constexpr int kStopId   = 1002;
-constexpr int kExitId   = 1003;
+constexpr int kStatusId    = 1000;
+constexpr int kStartId     = 1001;
+constexpr int kStopId      = 1002;
+constexpr int kExitId      = 1003;
+constexpr int kRespondId   = 1004;
+constexpr int kFpsEditId   = 1005;
+constexpr int kFpsApplyId  = 1006;
+constexpr int kFpsLabelId  = 1007;
+constexpr int kFpsUnitId   = 1008;
 
 // How often the status block is rewritten (ms).
 constexpr UINT_PTR kRefreshTimer = 1;
@@ -51,16 +65,22 @@ constexpr wchar_t kClassName[] = L"CigiStarterWindow";
 const Hooks* g_hooks = nullptr;
 const Link*  g_link  = nullptr;
 
-HWND  g_status = nullptr;
-HWND  g_start  = nullptr;
-HWND  g_stop   = nullptr;
-HFONT g_mono   = nullptr;
+HWND  g_hwnd    = nullptr;
+HWND  g_status  = nullptr;
+HWND  g_start   = nullptr;
+HWND  g_stop    = nullptr;
+HWND  g_respond = nullptr;
+HWND  g_fpsEdit = nullptr;
+HFONT g_mono    = nullptr;
 
-// Datagram-rate sampling: the counters are cumulative, so the window keeps its
-// own previous sample and the time it was taken.
+// Rate sampling: the counters are cumulative, so the window keeps its own
+// previous sample and the time it was taken. The SOF counter is 32-bit and may
+// wrap, so its delta is taken in 32-bit arithmetic.
 uint64_t g_lastDatagrams  = 0;
+uint32_t g_lastSofFrames  = 0;
 uint64_t g_lastSampleTick = 0;
-uint64_t g_ratePerSecond  = 0;
+uint64_t g_dataRate       = 0;
+uint64_t g_sofRate        = 0;
 
 const wchar_t* IgModeName(unsigned mode) {
     switch (mode) {
@@ -76,7 +96,72 @@ inline HMENU ControlId(int id) {
     return reinterpret_cast<HMENU>(static_cast<INT_PTR>(id));
 }
 
-// Rebuild the status block and sync the button enable state.
+void SetFpsText(int fps) {
+    if (!g_fpsEdit) {
+        return;
+    }
+    wchar_t buf[16];
+    std::swprintf(buf, ARRAYSIZE(buf), L"%d", fps);
+    SetWindowTextW(g_fpsEdit, buf);
+}
+
+// Read the rate box and apply it. Invalid input is never adopted: the box is
+// left alone when it merely loses focus (the operator is clicking elsewhere --
+// a modal box popping up on an unrelated click would be hostile) and is snapped
+// back with a warning when Apply or Enter asks for it, so the rate can never be
+// silently wrong. `quiet` selects between those two behaviours.
+void ApplyFps(bool quiet) {
+    if (!g_fpsEdit || !g_hooks || !g_hooks->setFps || !g_hooks->status) {
+        return;
+    }
+
+    wchar_t buf[32] = L"";
+    GetWindowTextW(g_fpsEdit, buf, ARRAYSIZE(buf));
+
+    // Digits only: atoi() would happily turn "1x" into 1, which is not what was
+    // typed. The accumulator is capped before each multiply so that a long run
+    // of digits cannot overflow it.
+    bool ok    = buf[0] != L'\0';
+    long value = 0;
+    for (const wchar_t* p = buf; ok && *p; ++p) {
+        if (*p < L'0' || *p > L'9') {
+            ok = false;
+            break;
+        }
+        if (value > 1000000) {
+            ok = false;
+            break;
+        }
+        value = value * 10 + (*p - L'0');
+    }
+    // Both ends of the range, so "0" is rejected rather than quietly doing
+    // nothing (main() refuses it, which would look like the box was ignored).
+    if (ok && (value < kMinFps || value > kMaxFps)) {
+        ok = false;
+    }
+
+    if (!ok) {
+        if (quiet) {
+            return;  // leave the text for the operator to fix
+        }
+        wchar_t msg[192];
+        std::swprintf(msg, ARRAYSIZE(msg),
+                      L"Enter the SOF rate as a whole number of Hz,\n"
+                      L"between %d and %d.",
+                      kMinFps, kMaxFps);
+        MessageBoxW(g_hwnd, msg, L"CigiStarter", MB_OK | MB_ICONWARNING);
+        SetFpsText(g_hooks->status().targetFps);  // put the live value back
+        SetFocus(g_fpsEdit);
+        return;
+    }
+
+    g_hooks->setFps(static_cast<int>(value));
+    SetFpsText(g_hooks->status().targetFps);  // show what was actually adopted
+}
+
+// Rebuild the status block from the caller's snapshot and sync the controls.
+// The rate box is deliberately not rewritten here -- that would fight whoever
+// is typing in it.
 void Refresh() {
     if (!g_hooks || !g_hooks->status || !g_status) {
         return;
@@ -87,34 +172,39 @@ void Refresh() {
     if (g_lastSampleTick == 0) {
         g_lastSampleTick = now;
         g_lastDatagrams  = s.datagrams;
+        g_lastSofFrames  = s.sofFrames;
     } else if (now - g_lastSampleTick >= 1000) {
         const uint64_t dt = now - g_lastSampleTick;
-        g_ratePerSecond = (s.datagrams - g_lastDatagrams) * 1000u / dt;
+        g_dataRate = (s.datagrams - g_lastDatagrams) * 1000u / dt;
+        g_sofRate  = static_cast<uint32_t>(s.sofFrames - g_lastSofFrames) *
+                     1000u / dt;
         g_lastDatagrams  = s.datagrams;
+        g_lastSofFrames  = s.sofFrames;
         g_lastSampleTick = now;
     }
 
     // The terrain lines have their own branches because they can be missing.
-    wchar_t terrain[160];
+    wchar_t terrain[192];
     if (!s.respondingHatHot) {
-        std::swprintf(terrain, 160,
-                      L"  HAT/HOT   : not answered (--respond-hathot off)");
+        std::swprintf(terrain, ARRAYSIZE(terrain),
+                      L"  HAT/HOT   : not answered (switched off)");
     } else if (s.terrainConnected) {
-        std::swprintf(terrain, 160,
-                      L"  HAT/HOT   : responding from FSUIPC\r\n"
-                      L"  Terrain   : %.1f m under aircraft, %.1f m aircraft",
+        std::swprintf(terrain, ARRAYSIZE(terrain),
+                      L"  HAT/HOT   : answering from FSUIPC\r\n"
+                      L"  Terrain   : %.1f m under the aircraft, %.1f m aircraft",
                       s.groundAltMeters, s.aircraftAltMeters);
     } else {
-        std::swprintf(terrain, 160,
-                      L"  HAT/HOT   : responding, but no FSUIPC link to Prepar3D");
+        std::swprintf(terrain, ARRAYSIZE(terrain),
+                      L"  HAT/HOT   : switched on, but no FSUIPC link to Prepar3D");
     }
 
     wchar_t text[2048];
-    std::swprintf(text, 2048,
+    std::swprintf(text, ARRAYSIZE(text),
         L"  HOST %hs:%u   ->  SOF destination\r\n"
         L"  IG   :%u   (this IG is %hs)\r\n"
         L"\r\n"
         L"  Stream    : %s\r\n"
+        L"  SOF rate  : %d Hz requested, %llu/s measured\r\n"
         L"  SOF frames: %u\r\n"
         L"  Received  : %llu datagrams (%llu/s), %llu entity updates\r\n"
         L"  IG mode   : %u (%s)  <- commanded by the HOST\r\n"
@@ -124,9 +214,11 @@ void Refresh() {
         g_link->hostIp, static_cast<unsigned>(g_link->hostPort),
         static_cast<unsigned>(g_link->igPort), g_link->igIp,
         s.sending ? L"RUNNING" : L"STOPPED",
+        s.targetFps,
+        static_cast<unsigned long long>(g_sofRate),
         static_cast<unsigned>(s.sofFrames),
         static_cast<unsigned long long>(s.datagrams),
-        static_cast<unsigned long long>(g_ratePerSecond),
+        static_cast<unsigned long long>(g_dataRate),
         static_cast<unsigned long long>(s.entityUpdates),
         static_cast<unsigned>(s.hostIgMode), IgModeName(s.hostIgMode),
         static_cast<unsigned>(s.lastHostFrame),
@@ -143,6 +235,7 @@ void Refresh() {
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
+        g_hwnd = hwnd;
         HFONT uiFont = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
         g_mono = CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
@@ -153,34 +246,66 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                    WS_CHILD | WS_VISIBLE | WS_VSCROLL |
                                        ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
                                    kMargin, kMargin, kStatusW, kStatusH,
-                                   hwnd, ControlId(kStatusId),
-                                   nullptr, nullptr);
+                                   hwnd, ControlId(kStatusId), nullptr, nullptr);
         g_start = CreateWindowExW(0, L"BUTTON", L"START",
                                   WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON |
                                       WS_TABSTOP,
                                   kMargin, kButtonY, kButtonW, kButtonH,
-                                  hwnd, ControlId(kStartId),
-                                  nullptr, nullptr);
+                                  hwnd, ControlId(kStartId), nullptr, nullptr);
         g_stop = CreateWindowExW(0, L"BUTTON", L"STOP",
                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
                                  kMargin + kButtonW + 10, kButtonY, kButtonW, kButtonH,
-                                 hwnd, ControlId(kStopId),
-                                 nullptr, nullptr);
+                                 hwnd, ControlId(kStopId), nullptr, nullptr);
         HWND exitBtn = CreateWindowExW(0, L"BUTTON", L"EXIT",
                                        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
                                        kClientW - kMargin - kButtonW, kButtonY,
                                        kButtonW, kButtonH,
-                                       hwnd, ControlId(kExitId),
-                                       nullptr, nullptr);
+                                       hwnd, ControlId(kExitId), nullptr, nullptr);
 
-        if (!g_status || !g_start || !g_stop || !exitBtn) {
+        // ---- Settings row ------------------------------------------------
+        g_respond = CreateWindowExW(0, L"BUTTON",
+                                    L"Answer HAT/HOT (terrain from FSUIPC)",
+                                    WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                                    kMargin, kSettingsY, 320, kRowH,
+                                    hwnd, ControlId(kRespondId), nullptr, nullptr);
+        HWND fpsLabel = CreateWindowExW(0, L"STATIC", L"SOF rate:",
+                                        WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                                        420, kSettingsY + 3, 74, 18,
+                                        hwnd, ControlId(kFpsLabelId), nullptr, nullptr);
+        g_fpsEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                                    WS_CHILD | WS_VISIBLE | ES_NUMBER |
+                                        ES_CENTER | WS_TABSTOP,
+                                    500, kSettingsY, 56, kRowH,
+                                    hwnd, ControlId(kFpsEditId), nullptr, nullptr);
+        HWND fpsUnit = CreateWindowExW(0, L"STATIC", L"Hz",
+                                       WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                       562, kSettingsY + 3, 18, 18,
+                                       hwnd, ControlId(kFpsUnitId), nullptr, nullptr);
+        HWND fpsApply = CreateWindowExW(0, L"BUTTON", L"Apply",
+                                        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+                                        kClientW - kMargin - 64, kSettingsY, 64, kRowH,
+                                        hwnd, ControlId(kFpsApplyId), nullptr, nullptr);
+
+        if (!g_status || !g_start || !g_stop || !exitBtn || !g_respond ||
+            !fpsLabel || !g_fpsEdit || !fpsUnit || !fpsApply) {
             return -1;  // abort window creation
         }
-        // Monospace for the status block, the standard dialog font for buttons.
+
+        // Monospace for the status block, the standard dialog font elsewhere.
         SendMessageW(g_status, WM_SETFONT, reinterpret_cast<WPARAM>(g_mono), TRUE);
-        SendMessageW(g_start,  WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
-        SendMessageW(g_stop,   WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
-        SendMessageW(exitBtn,  WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
+        for (HWND c : { g_start, g_stop, exitBtn, g_respond, g_fpsEdit,
+                        fpsLabel, fpsUnit, fpsApply }) {
+            SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
+        }
+
+        // Seed the controls from the command line: they are the live state from
+        // here on, so what the window shows is what the program is doing.
+        if (g_hooks && g_hooks->status) {
+            const Status s = g_hooks->status();
+            SendMessageW(g_respond, BM_SETCHECK,
+                         s.respondingHatHot ? BST_CHECKED : BST_UNCHECKED, 0);
+            SetFpsText(s.targetFps);
+        }
 
         // Take the Close item out of the system menu: that is what removes the
         // title-bar X (and the Alt+Space > Close entry).
@@ -216,6 +341,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (g_hooks && g_hooks->requestQuit) g_hooks->requestQuit();
             DestroyWindow(hwnd);
             return 0;
+        case kRespondId:
+            if (HIWORD(wp) == BN_CLICKED) {
+                const bool on =
+                    SendMessageW(g_respond, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                if (g_hooks && g_hooks->setRespondHatHot) {
+                    g_hooks->setRespondHatHot(on);
+                }
+                Refresh();
+            }
+            return 0;
+        case kFpsApplyId:
+            if (HIWORD(wp) == BN_CLICKED) {
+                ApplyFps(false);
+                Refresh();
+            }
+            return 0;
+        case kFpsEditId:
+            // Enter in the rate box, and "clicked somewhere else" both commit.
+            if (HIWORD(wp) == EN_KILLFOCUS) {
+                ApplyFps(true);
+                Refresh();
+            }
+            return 0;
+        case IDOK:
+            // IsDialogMessageW() turns Enter into an IDOK command when no
+            // button is the default -- and nothing here is one -- so this is
+            // how Enter reaches the window. Enter has no other meaning in this
+            // window, so it always commits the rate box.
+            ApplyFps(false);
+            Refresh();
+            return 0;
         default:
             break;
         }
@@ -239,7 +395,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             DeleteObject(g_mono);
             g_mono = nullptr;
         }
-        g_status = g_start = g_stop = nullptr;
+        g_hwnd = g_status = g_start = g_stop = g_respond = g_fpsEdit = nullptr;
         PostQuitMessage(0);
         return 0;
 
@@ -267,8 +423,12 @@ int run(const Hooks& hooks, const Link& link) {
     }
 
     // Fixed-size window: WS_CAPTION + system menu, but no thick frame and no
-    // maximize box. AdjustWindowRectEx() below must match these flags.
-    const DWORD style   = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    // maximize box. WS_CLIPCHILDREN keeps the parent's background erase out of
+    // the children's rectangles -- without it a control can be repainted on top
+    // of a stale copy of itself, which shows up as smeared text.
+    // AdjustWindowRectEx() below must match these flags.
+    const DWORD style   = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU |
+                          WS_MINIMIZEBOX | WS_CLIPCHILDREN;
     const DWORD exStyle = WS_EX_CONTROLPARENT;
 
     RECT r{ 0, 0, kClientW, kClientH };
@@ -289,7 +449,7 @@ int run(const Hooks& hooks, const Link& link) {
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-        // Lets Tab / space drive the buttons.
+        // Lets Tab / space drive the controls.
         if (IsDialogMessageW(hwnd, &msg)) {
             continue;
         }

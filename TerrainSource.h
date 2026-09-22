@@ -49,7 +49,10 @@ struct Sample {
 // poller keeps retrying until it is. Returns false only if called twice.
 bool start(int pollIntervalMs = 50);
 
-// Stop the poller and close FSUIPC. Safe to call when never started.
+// Stop the poller and close FSUIPC. Safe to call when never started, and it may
+// be followed by another start(): CigiStarter's HAT/HOT check box switches the
+// poller on and off while the program runs. The cached sample is marked
+// disconnected so callers stop reporting a link that is no longer there.
 void stop();
 
 // Copy of the most recent snapshot (thread-safe).

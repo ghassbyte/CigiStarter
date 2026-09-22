@@ -116,10 +116,12 @@ struct ActiveHatHotRequest {
 static std::atomic<bool> g_running{true};
 static std::atomic<bool> g_sending{false};  // SOF stream on/off (START / STOP)
 static Stats             g_stats;           // filled in by the receive thread
-// Set once from the command line: whether HAT/HOT requests are answered (and
-// therefore whether the terrain poller runs). Read by the window thread, which
-// cannot see main()'s Config.
-static bool g_respondHatHot = false;
+// Answering HAT/HOT (which also decides whether the terrain poller runs) and
+// the SOF transmit rate. Both are seeded from the command line and from then on
+// owned by the window's controls -- the window thread cannot see main()'s
+// Config, so the live values live here.
+static std::atomic<bool> g_respondHatHot{false};
+static std::atomic<int>  g_targetFps{100};
 
 //-----------------------------------------------------------------------------
 // Error / help reporting
@@ -144,7 +146,8 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "CigiStarter - minimal CIGI 3.3 Image Generator\n\n"
         "Link (fixed): HOST %s:%u  <->  IG %s:%u\n\n"
         "Usage: %s [options]\n\n"
-        "Options:\n"
+        "Options (these only set the starting state -- the SOF rate and HAT/HOT\n"
+        "answering can also be changed from the window while it runs):\n\n"
         "  --fps <rate>        SOF transmit rate in Hz           (default 100)\n"
         "  --ig-mode <0..3>    IG mode reported in the SOF until the HOST sends\n"
         "                      its first IG Control (0=Standby 1=Operate)\n"
@@ -192,8 +195,8 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             return false;
         }
     }
-    if (cfg.fps <= 0 || cfg.fps > 100000) {
-        fail("error: --fps must be in [1, 100000]");
+    if (cfg.fps < gui::kMinFps || cfg.fps > gui::kMaxFps) {
+        fail("error: --fps must be in [%d, %d]", gui::kMinFps, gui::kMaxFps);
         return false;
     }
     if (cfg.igMode > 3) {
@@ -285,10 +288,11 @@ static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
 static gui::Status uiStatus() {
     gui::Status s;
     s.sending           = g_sending.load();
-    s.respondingHatHot  = g_respondHatHot;
+    s.respondingHatHot  = g_respondHatHot.load();
     s.datagrams         = g_stats.datagrams.load();
     s.entityUpdates     = g_stats.entityControl.load();
     s.sofFrames         = g_stats.sofFrames.load();
+    s.targetFps         = g_targetFps.load();
     s.hostIgMode        = g_stats.hostIgMode.load();
     s.lastHostFrame     = g_stats.lastHostFrame.load();
 
@@ -301,6 +305,31 @@ static gui::Status uiStatus() {
 
 static void uiSetSending(bool on) { g_sending.store(on); }
 static void uiRequestQuit()       { g_running.store(false); }
+
+// Switching HAT/HOT answering on and off starts and stops the terrain poller
+// with it: the poller is the only thing in this process that touches FSUIPC and
+// there is no point reading the sim while the answer goes unused. It reconnects
+// on its own, so toggling is safe in any order (including before Prepar3D is
+// running, where it just retries).
+static void uiSetRespondHatHot(bool on) {
+    if (g_respondHatHot.exchange(on) == on) {
+        return;  // no change
+    }
+    if (on) {
+        terrain::start();
+    } else {
+        terrain::stop();
+    }
+}
+
+// The window range-checks the rate box first; this is belt and braces, because
+// a bad rate would either stall the transmit loop or make it spin.
+static void uiSetFps(int fps) {
+    if (fps < gui::kMinFps || fps > gui::kMaxFps) {
+        return;
+    }
+    g_targetFps.store(fps);
+}
 
 int main(int argc, char** argv) {
     Config cfg;
@@ -359,7 +388,9 @@ int main(int argc, char** argv) {
         return fail("error: invalid host address '%s'\n", kHostIp);
     }
 
-    g_respondHatHot = cfg.respondHatHot;
+    // Seed the window's controls; from here on they are the live state.
+    g_respondHatHot.store(cfg.respondHatHot);
+    g_targetFps.store(cfg.fps);
 
     // The IG does not choose its own mode: it reports back whatever the HOST
     // last commanded. --ig-mode therefore only seeds the value used until the
@@ -367,8 +398,9 @@ int main(int argc, char** argv) {
     g_stats.hostIgMode.store(static_cast<uint8_t>(cfg.igMode & 0x03u));
 
     // The terrain poller owns every FSUIPC call in this process, so it is only
-    // started when HAT/HOT answering is enabled.
-    if (g_respondHatHot) {
+    // started when HAT/HOT answering is enabled -- and the window's check box
+    // turns it on and off at runtime.
+    if (g_respondHatHot.load()) {
         terrain::start();
     }
 
@@ -432,7 +464,7 @@ int main(int argc, char** argv) {
                         // Decode the whole request here; the SOF thread turns it
                         // into an answer against the latest terrain sample.
                         cigi::HatHotRequest req;
-                        if (g_respondHatHot &&
+                        if (g_respondHatHot.load() &&
                             cigi::parseHatHotRequest(msg, msgSize, req)) {
                             std::lock_guard<std::mutex> lk(hatHot.mtx);
                             if (hatHot.items.size() < 64) {
@@ -453,14 +485,27 @@ int main(int argc, char** argv) {
         uint8_t sof[24];
         uint32_t frame = 0;
         const auto started = std::chrono::steady_clock::now();
-        const auto period = std::chrono::microseconds(1000000 / cfg.fps);
-        auto next = std::chrono::steady_clock::now();
+        // The rate is re-read every frame, so the window can retune the stream
+        // without stopping it.
+        int  fps    = g_targetFps.load();
+        auto period = std::chrono::microseconds(1000000 / fps);
+        auto next   = std::chrono::steady_clock::now();
 
         // HAT/HOT requests this thread still owes an answer for. Kept across
         // frames so requests with an update period can be answered repeatedly.
         std::vector<ActiveHatHotRequest> hatHotActive;
 
         while (g_running.load()) {
+            // Follow a rate change made in the window. The schedule is resynced
+            // rather than kept, so a retune cannot fire a burst of catch-up
+            // frames the way a rate *increase* would.
+            const int wantedFps = g_targetFps.load();
+            if (wantedFps != fps) {
+                fps    = wantedFps;
+                period = std::chrono::microseconds(1000000 / fps);
+                next   = std::chrono::steady_clock::now();
+            }
+
             if (g_sending.load()) {
                 const auto now = std::chrono::steady_clock::now();
                 const uint32_t ts = static_cast<uint32_t>(
@@ -476,7 +521,7 @@ int main(int argc, char** argv) {
                 std::memcpy(pkt, sof, 24);
                 size_t used = 24;
 
-                if (g_respondHatHot) {
+                if (g_respondHatHot.load()) {
                     // Adopt the requests the receive thread decoded.
                     {
                         std::lock_guard<std::mutex> lk(hatHot.mtx);
@@ -541,6 +586,13 @@ int main(int argc, char** argv) {
                             ++i;
                         }
                     }
+                } else {
+                    // Answering was switched off in the window: drop whatever is
+                    // queued so switching it back on starts from a clean slate
+                    // instead of replaying terrain against stale requests.
+                    std::lock_guard<std::mutex> lk(hatHot.mtx);
+                    hatHot.items.clear();
+                    hatHotActive.clear();
                 }
 
                 sendto(tx, reinterpret_cast<const char*>(pkt),
@@ -570,9 +622,11 @@ int main(int argc, char** argv) {
     // The worker threads keep running underneath. The window only polls their
     // statistics and pokes g_sending / g_running -- it never touches a socket.
     gui::Hooks hooks;
-    hooks.status      = uiStatus;
-    hooks.setSending  = uiSetSending;
-    hooks.requestQuit = uiRequestQuit;
+    hooks.status           = uiStatus;
+    hooks.setSending       = uiSetSending;
+    hooks.setRespondHatHot = uiSetRespondHatHot;
+    hooks.setFps           = uiSetFps;
+    hooks.requestQuit      = uiRequestQuit;
 
     gui::Link link;
     link.hostIp   = kHostIp;

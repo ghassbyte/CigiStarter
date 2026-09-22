@@ -16,12 +16,12 @@ under the aircraft, read from the local Prepar3D via FSUIPC.
    (`8001`) at the configured frame rate — this is the "request" that starts
    the data flow.
 3. Parses inbound CIGI messages (framed by `[id][size]`) and shows a live status
-   block: datagrams/s, total datagrams, entity updates, SOF frames sent, the HOST
-   frame counter and the terrain sample.
-4. Optionally (`--respond-hathot`) answers HAT/HOT requests, riding the
-   responses along on the SOF stream as the reference IG did. The terrain
-   height is read from the local Prepar3D via FSUIPC — see
-   [HAT/HOT answering](#hathot-answering).
+   block: datagrams/s, total datagrams, entity updates, the SOF rate (requested
+   and achieved), SOF frames sent, the HOST frame counter and the terrain sample.
+4. Optionally answers HAT/HOT requests, riding the responses along on the SOF
+   stream as the reference IG did. It is switched on with `--respond-hathot` or
+   the window's check box, and the terrain height is read from the local
+   Prepar3D via FSUIPC — see [HAT/HOT answering](#hathot-answering).
 5. Runs as a small window with **START** / **STOP** / **EXIT**: it starts paused
    and stays silent until START is clicked — see
    [Operator window](#operator-window).
@@ -33,10 +33,10 @@ under the aircraft, read from the local Prepar3D via FSUIPC.
   startup error or `--help` is reported in a message box instead of on stdout.
   The project links with `SubSystem=Windows` plus `EntryPointSymbol=mainCRTStartup`,
   which produces a GUI binary while still allowing a plain `int main(argc, argv)`.
-- Windows system libraries only, plus the **FSUIPC SDK** when `--respond-hathot`
-  is used (`Ws2_32.lib` for sockets and `Winmm.lib` for timing; `User32.lib` for
-  the window; `FSUIPCuser64.lib` for the terrain read). Without
-  `--respond-hathot` the program never touches FSUIPC.
+- Windows system libraries only, plus the **FSUIPC SDK** while HAT/HOT answering
+  is switched on (`Ws2_32.lib` for sockets and `Winmm.lib` for timing;
+  `User32.lib` for the window; `FSUIPCuser64.lib` for the terrain read). With
+  answering switched off the program never touches FSUIPC.
 - The FSUIPC header/library are the ones already in this repository, shared with
   `CigiP3dBridge`:
   `..\CigiP3dBridge\external\UIPC64_SDK_C_version2\`. If your checkout lays the
@@ -76,13 +76,18 @@ The link addresses and ports are **fixed by the deployment** and hardcoded:
 ```
 CigiStarter.exe [options]
 
-  --fps <rate>        SOF transmit rate in Hz           (default 100)
+  --fps <rate>        initial SOF transmit rate in Hz   (default 100)
   --ig-mode <0..3>    IG mode reported until the HOST sends its first
                       IG Control (0=Standby 1=Operate)  (default 0)
-  --respond-hathot    answer HAT/HOT requests using the terrain height read
-                      from the local Prepar3D via FSUIPC       (default off)
+  --respond-hathot    answer HAT/HOT requests from the start, using the
+                      terrain height read from the local Prepar3D via
+                      FSUIPC                                  (default off)
   --help              show this help (in a message box)
 ```
+
+The options only set the *starting* state. The SOF rate and HAT/HOT answering
+can both be changed from the window while the program runs — see
+[Operator window](#operator-window).
 
 Example:
 
@@ -115,10 +120,12 @@ ground. `--respond-hathot` makes CigiStarter report the *real* terrain:
   honoured by re-answering every *n*-th frame.
 
 The FSUIPC link is polled by a background thread that owns every FSUIPC call, so
-the 100 Hz SOF pacing is never delayed by an FSUIPC round trip. If Prepar3D is
-not running, CigiStarter still starts: it keeps retrying, answers `Valid = 0`
-until the sim appears, and shows the current terrain height in the window's
-status block.
+the SOF pacing is never delayed by an FSUIPC round trip. The poller runs only
+while answering is switched on — the window's check box starts and stops it, and
+while it is off this program makes no FSUIPC calls at all. If Prepar3D is not
+running, CigiStarter still starts: it keeps retrying, answers `Valid = 0` until
+the sim appears, and shows the current terrain height in the window's status
+block.
 
 ## Operator window
 
@@ -126,35 +133,52 @@ CigiStarter is a windowed program, so it is driven with the mouse rather than
 from a console. The window is a fixed-size plain Win32 dialog:
 
 ```
-+--------------------------------------------------------------+
-|  HOST 192.168.70.2:8001   ->  SOF destination                |
-|  IG   :8000   (this IG is 192.168.70.70)                     |
-|                                                              |
-|  Stream    : RUNNING                                         |
-|  SOF frames: 101                                             |
-|  Received  : 0 datagrams (0/s), 0 entity updates             |
-|  IG mode   : 0 (Standby)  <- commanded by the HOST           |
-|  HOST frame: 0                                               |
-|                                                              |
-|  HAT/HOT   : not answered (--respond-hathot off)             |
-|                                                              |
-|  [ START ]  [ STOP ]                                 [ EXIT ] |
-+--------------------------------------------------------------+
++--------------------------------------------------------------------------+
+|  HOST 192.168.70.2:8001   ->  SOF destination                            |
+|  IG   :8000   (this IG is 192.168.70.70)                                 |
+|                                                                          |
+|  Stream    : RUNNING                                                     |
+|  SOF rate  : 100 Hz requested, 100/s measured                            |
+|  SOF frames: 101                                                         |
+|  Received  : 0 datagrams (0/s), 0 entity updates                         |
+|  IG mode   : 0 (Standby)  <- commanded by the HOST                       |
+|  HOST frame: 0                                                           |
+|                                                                          |
+|  HAT/HOT   : answering from FSUIPC                                       |
+|  Terrain   : 27.0 m under the aircraft, 30.1 m aircraft                  |
+|                                                                          |
+|  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 100 ] Hz [ Apply ] |
+|                                                                          |
+|  [ START ]  [ STOP ]                                              [ EXIT ] |
++--------------------------------------------------------------------------+
 ```
 
-- The status block refreshes four times a second. The datagram rate is sampled
-  once a second from the cumulative counters.
+- The status block refreshes four times a second. The datagram and SOF rates are
+  sampled once a second from the cumulative counters; the SOF line shows the
+  rate that is *requested* next to the rate the transmit loop actually achieved.
 - **START** / **STOP** start and stop the SOF stream. The program boots
   *paused*, so nothing is transmitted to the HOST until START is clicked. The
   button that would be a no-op is disabled.
+- **Answer HAT/HOT** switches HAT/HOT answering on and off, and with it the
+  FSUIPC poller — switching it off means this program makes no FSUIPC calls at
+  all, switching it back on reconnects. It starts in the state `--respond-hathot`
+  asked for.
+- **SOF rate** is a whole number of Hz, from 1 to 100000. It is applied to the
+  transmit loop on the next frame, so the stream can be retuned *while it runs*
+  — no stop/start needed. Commit it with **Apply** or by pressing **Enter**. A
+  value that is not a whole number in range is refused with a warning and the
+  box snaps back to the rate actually in force; when the box merely loses focus
+  a valid value is applied quietly and an unfinished one is left alone, so
+  clicking EXIT never nags. `--fps` only seeds it.
 - **EXIT** is the **only** way out. The title-bar **X** and **Alt+F4** are
   deliberately swallowed — `SC_CLOSE` is deleted from the window's system menu
   (Windows then draws the X greyed out and non-clickable) and `WM_CLOSE` is
   ignored — so the IG cannot be taken off the link by a stray click. This
   matches the `CigiP3dBridge` GUI, which follows the same rule.
 - Since the process has no console, `Ctrl+C` cannot reach it either.
-- Terrain lines appear only with `--respond-hathot`: `responding from FSUIPC`
-  with the ground/aircraft heights, or a warning that there is no FSUIPC link.
+- Terrain lines appear while answering is on: `answering from FSUIPC` with the
+  ground/aircraft heights, or a warning that there is no FSUIPC link to
+  Prepar3D. With answering off they read `not answered (switched off)`.
 
 ## Network layout
 
@@ -192,8 +216,8 @@ from a console. The window is a fixed-size plain Win32 dialog:
 | File               | Purpose                                        |
 |--------------------|------------------------------------------------|
 | `main.cpp`         | entry point, sockets, SOF + receive threads, window callbacks |
-| `Gui.h`            | operator-window API: status snapshot + start/stop/quit hooks |
-| `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT)   |
+| `Gui.h`            | operator-window API: status snapshot + start/stop/HAT-HOT/rate/quit hooks |
+| `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT check box, SOF rate box) |
 | `cigi.h`           | CIGI 3.3 message IDs, sizes, pack/parse API    |
 | `cigi.cpp`         | explicit little-endian message packing         |
 | `TerrainSource.h`  | FSUIPC-backed terrain/aircraft snapshot API    |

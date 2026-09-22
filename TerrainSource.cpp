@@ -131,6 +131,9 @@ void stop() {
     if (g_linked.exchange(false)) {
         FSUIPC_Close();
     }
+    // The poller has gone, so the cached sample must stop claiming a live link:
+    // callers show "no FSUIPC link" rather than terrain that is now stale.
+    markDisconnected();
 }
 
 Sample latest() {
