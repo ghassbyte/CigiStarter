@@ -12,26 +12,38 @@
 //    HOST 192.168.70.2  -> IG 192.168.70.70 : 8000   (downstream data)
 //    IG   192.168.70.70 -> HOST 192.168.70.2 : 8001  (upstream SOF / responses)
 //
+//  Operator interface
+//    A small fixed-size Win32 window (Gui.cpp) showing the link, the live
+//    stream statistics and the terrain sample, with START / STOP / EXIT.
+//    EXIT is the only way out -- the title-bar X and Alt+F4 are swallowed, so
+//    the IG cannot be taken off the link by a stray click. This file owns the
+//    worker threads and the statistics that window displays.
+//
 //  Dependencies
-//    Windows sockets and the 1 ms timer (Ws2_32.lib, Winmm.lib). With
-//    --respond-hathot the FSUIPC SDK is linked as well, to read the terrain
-//    height out of the local Prepar3D (isolated in TerrainSource.cpp).
+//    Windows sockets, the 1 ms timer and user32 (Ws2_32.lib, Winmm.lib,
+//    User32.lib). With --respond-hathot the FSUIPC SDK is linked as well, to
+//    read the terrain height out of the local Prepar3D (isolated in
+//    TerrainSource.cpp).
 //
 //  Usage
 //    CigiStarter.exe [--fps 100] [--ig-mode 0] [--respond-hathot] [--help]
+//    Being a windowed program there is no console, so --help and any startup
+//    error are reported in a message box.
 //=============================================================================
 #include "cigi.h"
+#include "Gui.h"
 #include "TerrainSource.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <mmsystem.h>  // timeBeginPeriod / timeEndPeriod (high-resolution timer)
 
-#include <conio.h>  // _kbhit / _getch (console keyboard)
+// <windows.h> must come after <winsock2.h>, never before: windows.h otherwise
+// pulls in the v1 winsock.h and every socket type gets redeclared.
+#include <windows.h>
+#include <mmsystem.h>  // timeBeginPeriod / timeEndPeriod (high-resolution timer)
 
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdarg>
@@ -76,6 +88,9 @@ struct Stats {
     std::atomic<uint64_t> entityControl{0};
     std::atomic<uint64_t> hatHotReq{0};
     std::atomic<uint32_t> lastHostFrame{0};
+    // SOF frames this program has transmitted. The transmit thread owns the
+    // counter; publishing it here is what lets the window show the TX rate.
+    std::atomic<uint32_t> sofFrames{0};
     // IG mode the HOST last commanded in an IG Control packet. The IG does not
     // get to pick its own mode -- the SOF reports this value back (see
     // cigi::sofIgModeByte), which is how a real IG behaves.
@@ -97,22 +112,35 @@ struct ActiveHatHotRequest {
     uint32_t            framesSince = 0;
 };
 
+// Process-wide state, shared between the worker threads and the operator window.
 static std::atomic<bool> g_running{true};
-static std::atomic<bool> g_sending{false};  // SOF stream on/off ('s' start, 'x' stop)
+static std::atomic<bool> g_sending{false};  // SOF stream on/off (START / STOP)
+static Stats             g_stats;           // filled in by the receive thread
+// Set once from the command line: whether HAT/HOT requests are answered (and
+// therefore whether the terrain poller runs). Read by the window thread, which
+// cannot see main()'s Config.
+static bool g_respondHatHot = false;
 
 //-----------------------------------------------------------------------------
-// Ctrl+C / console-close handler
+// Error / help reporting
+//
+// CigiStarter is a windowed program, so there is no console to print to: a
+// startup failure -- or --help -- has to appear in a message box instead.
+// fail() always returns 1, so call sites read `return fail(...)`.
 //-----------------------------------------------------------------------------
-static BOOL WINAPI consoleHandler(DWORD) {
-    g_running.store(false);
-    return TRUE;
+static int fail(const char* fmt, ...) {
+    char msg[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    MessageBoxA(nullptr, msg, "CigiStarter - error", MB_OK | MB_ICONERROR);
+    return 1;
 }
 
-//-----------------------------------------------------------------------------
-// Print usage and exit
-//-----------------------------------------------------------------------------
-static void printUsage(const char* argv0) {
-    std::printf(
+static void buildUsage(char* buf, size_t n, const char* argv0) {
+    std::snprintf(
+        buf, n,
         "CigiStarter - minimal CIGI 3.3 Image Generator\n\n"
         "Link (fixed): HOST %s:%u  <->  IG %s:%u\n\n"
         "Usage: %s [options]\n\n"
@@ -128,6 +156,12 @@ static void printUsage(const char* argv0) {
         kHostIp, kHostPort, kIgIp, kIgPort, argv0);
 }
 
+static void showUsage(const char* argv0) {
+    char msg[1024];
+    buildUsage(msg, sizeof(msg), argv0);
+    MessageBoxA(nullptr, msg, "CigiStarter", MB_OK);
+}
+
 //-----------------------------------------------------------------------------
 // Minimal command-line parser
 //-----------------------------------------------------------------------------
@@ -136,13 +170,13 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
         const std::string a = argv[i];
         auto next = [&](const char* name) -> const char* {
             if (i + 1 >= argc) {
-                std::fprintf(stderr, "error: %s requires a value\n", name);
+                fail("error: %s requires a value", name);
                 return nullptr;
             }
             return argv[++i];
         };
         if (a == "--help" || a == "-h") {
-            printUsage(argv[0]);
+            showUsage(argv[0]);
             return false;
         } else if (a == "--fps") {
             const char* v = next("--fps"); if (!v) return false;
@@ -153,36 +187,20 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
         } else if (a == "--respond-hathot") {
             cfg.respondHatHot = true;
         } else {
-            std::fprintf(stderr, "error: unknown option '%s'\n", a.c_str());
-            printUsage(argv[0]);
+            fail("error: unknown option '%s'\n\nRun with --help for the option list.",
+                 a.c_str());
             return false;
         }
     }
     if (cfg.fps <= 0 || cfg.fps > 100000) {
-        std::fprintf(stderr, "error: --fps must be in [1, 100000]\n");
+        fail("error: --fps must be in [1, 100000]");
         return false;
     }
     if (cfg.igMode > 3) {
-        std::fprintf(stderr, "error: --ig-mode must be in [0, 3]\n");
+        fail("error: --ig-mode must be in [0, 3]");
         return false;
     }
     return true;
-}
-
-//-----------------------------------------------------------------------------
-// Print a fatal error and wait for Enter so the message stays visible when
-// the program is launched by double-clicking (otherwise the console closes
-// before the text can be read). Always returns 1.
-//-----------------------------------------------------------------------------
-static int fail(const char* fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    std::vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    std::fprintf(stderr, "\nPress Enter to exit...\n");
-    std::fflush(stderr);
-    (void)std::getchar();
-    return 1;
 }
 
 //-----------------------------------------------------------------------------
@@ -257,14 +275,38 @@ static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
     return ans;
 }
 
+//-----------------------------------------------------------------------------
+// Window callbacks
+//
+// All three run on the window's thread. The window owns no state of its own,
+// so it polls the statistics through uiStatus() and pokes the two atomics the
+// worker threads already watch.
+//-----------------------------------------------------------------------------
+static gui::Status uiStatus() {
+    gui::Status s;
+    s.sending           = g_sending.load();
+    s.respondingHatHot  = g_respondHatHot;
+    s.datagrams         = g_stats.datagrams.load();
+    s.entityUpdates     = g_stats.entityControl.load();
+    s.sofFrames         = g_stats.sofFrames.load();
+    s.hostIgMode        = g_stats.hostIgMode.load();
+    s.lastHostFrame     = g_stats.lastHostFrame.load();
+
+    const terrain::Sample sim = terrain::latest();
+    s.terrainConnected  = sim.connected;
+    s.groundAltMeters   = sim.groundAltMeters;
+    s.aircraftAltMeters = sim.aircraftAltMeters;
+    return s;
+}
+
+static void uiSetSending(bool on) { g_sending.store(on); }
+static void uiRequestQuit()       { g_running.store(false); }
+
 int main(int argc, char** argv) {
     Config cfg;
     if (!parseArgs(argc, argv, cfg)) {
         return 1;
     }
-
-    // Handle Ctrl+C / console close so we shut down sockets and threads cleanly.
-    SetConsoleCtrlHandler(consoleHandler, TRUE);
 
     // Initialise Winsock.
     WSADATA wsa;
@@ -317,29 +359,16 @@ int main(int argc, char** argv) {
         return fail("error: invalid host address '%s'\n", kHostIp);
     }
 
-    Stats stats;
+    g_respondHatHot = cfg.respondHatHot;
+
     // The IG does not choose its own mode: it reports back whatever the HOST
     // last commanded. --ig-mode therefore only seeds the value used until the
     // first IG Control arrives, after which the receive thread takes over.
-    stats.hostIgMode.store(static_cast<uint8_t>(cfg.igMode & 0x03u));
-
-    std::printf(
-        "CigiStarter\n"
-        "  HOST (send SOF) : %s:%u\n"
-        "  IG (bind RX)    : 0.0.0.0:%u  (IG address %s)\n"
-        "  SOF             : %d Hz, IG mode 0x%02X (follows the HOST)\n"
-        "  HAT/HOT         : %s\n"
-        "\n"
-        "  [S]tart   [X]stop   [Q]uit   (Ctrl+C also quits)\n\n",
-        kHostIp, kHostPort,
-        kIgPort, kIgIp,
-        cfg.fps, static_cast<unsigned>(cigi::sofIgModeByte(stats.hostIgMode.load())),
-        cfg.respondHatHot ? "responding (terrain read from local Prepar3D via FSUIPC)"
-                          : "ignored");
+    g_stats.hostIgMode.store(static_cast<uint8_t>(cfg.igMode & 0x03u));
 
     // The terrain poller owns every FSUIPC call in this process, so it is only
     // started when HAT/HOT answering is enabled.
-    if (cfg.respondHatHot) {
+    if (g_respondHatHot) {
         terrain::start();
     }
 
@@ -365,15 +394,15 @@ int main(int argc, char** argv) {
             }
             if (n < 2) continue;
 
-            stats.datagrams.fetch_add(1);
-            stats.bytes.fetch_add(static_cast<uint64_t>(n));
+            g_stats.datagrams.fetch_add(1);
+            g_stats.bytes.fetch_add(static_cast<uint64_t>(n));
 
             cigi::forEachMessage(buf.data(), static_cast<size_t>(n),
                                  [&](uint8_t id, const uint8_t* msg, size_t msgSize) {
-                stats.messages.fetch_add(1);
+                g_stats.messages.fetch_add(1);
                 switch (id) {
                     case cigi::MsgIGControl: {
-                        stats.igControl.fetch_add(1);
+                        g_stats.igControl.fetch_add(1);
                         // IGCtrl layout (16 bytes): [id][size][ver][db][mode]
                         // [pad][byte-swap u16][frame-ctr u32][timestamp u32].
                         //
@@ -381,7 +410,7 @@ int main(int argc, char** argv) {
                         // the IG into. The IG mirrors it back in the SOF rather
                         // than choosing for itself, so record it here.
                         if (msgSize >= 5) {
-                            stats.hostIgMode.store(
+                            g_stats.hostIgMode.store(
                                 static_cast<uint8_t>(msg[4] & 0x03u));
                         }
                         // The host frame counter is a uint32 LE at full-message
@@ -391,19 +420,19 @@ int main(int argc, char** argv) {
                                                 (static_cast<uint32_t>(msg[9]) << 8) |
                                                 (static_cast<uint32_t>(msg[10]) << 16) |
                                                 (static_cast<uint32_t>(msg[11]) << 24);
-                            stats.lastHostFrame.store(fc);
+                            g_stats.lastHostFrame.store(fc);
                         }
                         break;
                     }
                     case cigi::MsgEntityControl:
-                        stats.entityControl.fetch_add(1);
+                        g_stats.entityControl.fetch_add(1);
                         break;
                     case cigi::MsgHATHOTRequest: {
-                        stats.hatHotReq.fetch_add(1);
+                        g_stats.hatHotReq.fetch_add(1);
                         // Decode the whole request here; the SOF thread turns it
                         // into an answer against the latest terrain sample.
                         cigi::HatHotRequest req;
-                        if (cfg.respondHatHot &&
+                        if (g_respondHatHot &&
                             cigi::parseHatHotRequest(msg, msgSize, req)) {
                             std::lock_guard<std::mutex> lk(hatHot.mtx);
                             if (hatHot.items.size() < 64) {
@@ -437,8 +466,8 @@ int main(int argc, char** argv) {
                 const uint32_t ts = static_cast<uint32_t>(
                     std::chrono::duration_cast<std::chrono::microseconds>(now - started).count());
 
-                cigi::packStartOfFrame(sof, frame, ts, stats.lastHostFrame.load(),
-                                       cigi::sofIgModeByte(stats.hostIgMode.load()));
+                cigi::packStartOfFrame(sof, frame, ts, g_stats.lastHostFrame.load(),
+                                       cigi::sofIgModeByte(g_stats.hostIgMode.load()));
 
                 // Build the upstream datagram: the SOF followed by every HAT/HOT
                 // response that is due this frame, mirroring the reference
@@ -447,7 +476,7 @@ int main(int argc, char** argv) {
                 std::memcpy(pkt, sof, 24);
                 size_t used = 24;
 
-                if (cfg.respondHatHot) {
+                if (g_respondHatHot) {
                     // Adopt the requests the receive thread decoded.
                     {
                         std::lock_guard<std::mutex> lk(hatHot.mtx);
@@ -471,7 +500,7 @@ int main(int argc, char** argv) {
 
                     const terrain::Sample sim = terrain::latest();
                     const uint8_t lsn = static_cast<uint8_t>(
-                        stats.lastHostFrame.load() & 0x0Fu);
+                        g_stats.lastHostFrame.load() & 0x0Fu);
                     int answered = 0;
 
                     for (size_t i = 0;
@@ -519,6 +548,7 @@ int main(int argc, char** argv) {
                        reinterpret_cast<sockaddr*>(&hostAddr), sizeof(hostAddr));
 
                 ++frame;
+                g_stats.sofFrames.store(frame);
             }
 
             next += period;
@@ -536,75 +566,30 @@ int main(int argc, char** argv) {
         }
     });
 
-    // ---- Status line loop (main thread): keyboard + in-place status. -----
-    // The header (title + command list) stays fixed; only the status line
-    // below is rewritten in place with a carriage return so it never scrolls.
-    uint64_t lastDatagrams = 0;
-    auto lastStatus = std::chrono::steady_clock::now();
+    // ---- Operator window (main thread): blocks until EXIT is clicked. -----
+    // The worker threads keep running underneath. The window only polls their
+    // statistics and pokes g_sending / g_running -- it never touches a socket.
+    gui::Hooks hooks;
+    hooks.status      = uiStatus;
+    hooks.setSending  = uiSetSending;
+    hooks.requestQuit = uiRequestQuit;
 
-    auto printStatus = [&]() {
-        const uint64_t d = stats.datagrams.load();
-        const uint64_t e = stats.entityControl.load();
-        char terrainText[64] = "";
-        if (cfg.respondHatHot) {
-            const terrain::Sample sim = terrain::latest();
-            if (sim.connected) {
-                std::snprintf(terrainText, sizeof(terrainText),
-                              " | terrain %.1f m | alt %.1f m",
-                              sim.groundAltMeters, sim.aircraftAltMeters);
-            } else {
-                std::snprintf(terrainText, sizeof(terrainText),
-                              " | terrain: no FSUIPC link");
-            }
-        }
-        std::printf("\r[%-3s | %5llu dg/s | total %llu | entities %llu | ig mode %u | host frame %u%s]  ",
-                    g_sending.load() ? "TX" : "IDLE",
-                    static_cast<unsigned long long>(d - lastDatagrams),
-                    static_cast<unsigned long long>(d),
-                    static_cast<unsigned long long>(e),
-                    static_cast<unsigned>(stats.hostIgMode.load()),
-                    stats.lastHostFrame.load(),
-                    terrainText);
-        std::fflush(stdout);
-    };
-    printStatus();  // show the initial status immediately
+    gui::Link link;
+    link.hostIp   = kHostIp;
+    link.hostPort = kHostPort;
+    link.igIp     = kIgIp;
+    link.igPort   = kIgPort;
 
-    while (g_running.load()) {
-        // Handle keyboard commands (case-insensitive).
-        bool changed = false;
-        while (_kbhit()) {
-            const int ch = std::tolower(_getch());
-            if (ch == 's') {
-                g_sending.store(true);
-                changed = true;
-            } else if (ch == 'x') {
-                g_sending.store(false);
-                changed = true;
-            } else if (ch == 'q') {
-                g_running.store(false);
-            }
-        }
-        if (changed) printStatus();  // reflect TX/IDLE immediately
+    const int exitCode = gui::run(hooks, link);
 
-        // Refresh the status line once per second.
-        const auto now = std::chrono::steady_clock::now();
-        if (now - lastStatus >= std::chrono::seconds(1)) {
-            printStatus();
-            lastDatagrams = stats.datagrams.load();
-            lastStatus = now;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-
-    std::printf("\nShutting down...\n");
-    terrain::stop();  // joins the poller before FSUIPC/the CRT goes away
+    // ---- Shutdown ---------------------------------------------------------
+    g_running.store(false);  // in case run() returned without EXIT
+    terrain::stop();         // joins the poller before FSUIPC/the CRT goes away
     closesocket(rx);
     closesocket(tx);
     if (rxThread.joinable()) rxThread.join();
     if (txThread.joinable()) txThread.join();
     timeEndPeriod(1);
     WSACleanup();
-    std::printf("Stopped.\n");
-    return 0;
+    return exitCode;
 }

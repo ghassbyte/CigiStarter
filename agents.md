@@ -60,9 +60,12 @@ that the HOST requires to start streaming:
   read over FSUIPC (`TerrainSource.cpp`, offset `0x0020`). This is what keeps
   the HOST's altitude loop honest — the HOST commands the aircraft to the aHOT
   it is given, so a missing/wrong HOT flies the aircraft into the ground.
-- Parses inbound CIGI (IG Control, Entity Control, …) for status reporting.
-- Controlled from the console (case-insensitive): `S` start, `X` stop, `Q` quit
-  — the SOF stream starts paused.
+- Parses inbound CIGI (IG Control, Entity Control, …) for the live status block
+  in its operator window.
+- Says nothing to the HOST until **START** is clicked. The window (`Gui.cpp`) has
+  START / STOP / EXIT; the SOF stream starts paused. EXIT is the only way out —
+  the title-bar X and Alt+F4 are swallowed, so a stray click cannot take the IG
+  off the link mid-run.
 
 ## Message flow
 
@@ -97,3 +100,6 @@ the local Prepar3D over FSUIPC. The poller owning that link is described in
 | HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
 | Terrain source    | FSUIPC `0x0020` of the local Prepar3D (ground altitude under the player aircraft) |
 | Reference SOF rate| ~112 Hz (~9 ms)              |
+| Operator UI       | plain Win32 window (`Gui.cpp`): START / STOP / EXIT |
+| Exit path         | EXIT button only — the title-bar X / Alt+F4 / `WM_CLOSE` are swallowed |
+| Process type      | GUI subsystem: no console; `--help` and startup errors use a message box |
