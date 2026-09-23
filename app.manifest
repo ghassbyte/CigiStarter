@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <!--
-    The requestedExecutionLevel (requireAdministrator) is supplied by the
-    linker via /MANIFESTUAC (UACExecutionLevel=RequireAdministrator), so it is
-    intentionally absent here to avoid a conflicting level in merged snippets.
-    This file only adds the OS compatibility declarations.
+    The requestedExecutionLevel is supplied by the linker via /MANIFESTUAC
+    (UACExecutionLevel=AsInvoker), so it is intentionally absent here to avoid a
+    conflicting level in merged snippets. This file only adds the OS
+    compatibility declarations.
+
+    asInvoker rather than requireAdministrator: the program is started from an
+    unattended deployment path, where a UAC prompt would block the IG, and
+    nothing it does needs administrator on a normal install (the fan-out opens
+    Npcap unelevated; see README.md).
   -->
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>

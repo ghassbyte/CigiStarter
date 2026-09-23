@@ -132,10 +132,11 @@ PFnGetErr      g_getErr      = nullptr;
 
 bool loadNpcap(std::string& error) {
     if (!g_wpcap) {
-        // System32 first: this process runs elevated, so a wpcap.dll that
-        // happened to sit next to the executable would be a hijack waiting to
-        // be dropped there. The plain load is only a fallback for the unusual
-        // Npcap install that puts its files somewhere else.
+        // System32 first: that is where Npcap installs, and loading by name
+        // without the current directory in the search path stops a stray
+        // wpcap.dll next to the executable from shadowing it. The plain load is
+        // only a fallback for the unusual Npcap install that puts its files
+        // somewhere else.
         g_wpcap = LoadLibraryExW(L"wpcap.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
         if (!g_wpcap) {
             g_wpcap = LoadLibraryW(L"wpcap.dll");

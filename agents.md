@@ -94,14 +94,18 @@ that the HOST requires to start streaming:
   injected Ethernet frame per client, labelled with the HOST's address and port
   so that those clients need no reconfiguration. They are passive — they never
   send anything back to CigiStarter, and nothing is sent up the link on their
-  behalf. The copy needs Npcap on the IG PC; it is loaded at run time, so the
-  program still runs as a plain IG without it. No clients listed (or no
-  `client.txt`) simply means the fan-out is off.
-- Says nothing to the HOST until **START** is clicked. The window (`Gui.cpp`) has
-  START / STOP / EXIT plus the HAT/HOT check box, the flow-control check box and
-  the SOF rate box; the SOF stream starts paused. EXIT is the only way out — the
-  title-bar X and Alt+F4 are swallowed, so a stray click cannot take the IG off
-  the link mid-run.
+  behalf. The copy needs Npcap on the IG PC and nothing else — the program asks
+  for no elevation, and a normal Npcap install opens the adapter unelevated; it
+  is loaded at run time, so the program still runs as a plain IG without it. No
+  clients listed (or no `client.txt`) simply means the fan-out is off.
+- Starts transmitting as soon as it starts, and minimises its own window once it
+  is: a deployment site switches the IG PC on rather than operating it, so there
+  is nothing to click before the link is live. The window (`Gui.cpp`) has START /
+  STOP / EXIT plus the HAT/HOT check box, the flow-control check box and the SOF
+  rate box, and it waits in the taskbar while minimised; `--no-auto-start`
+  restores the old start-paused behaviour (stream stopped, window up) for
+  debugging. EXIT is the only way out — the title-bar X and Alt+F4 are swallowed,
+  so a stray click cannot take the IG off the link mid-run.
 
 ## Message flow
 
@@ -150,11 +154,13 @@ point of view that edge looks exactly like the HOST's own, which is the point.
 | Extra IG PCs      | listed in `client.txt` next to the executable (`address[:port]`, `#` comments, optional, read once at startup) |
 | Fan-out           | one copy of each downstream datagram per listed client, injected with Npcap, source address/port spoofed as the HOST's |
 | Fan-out adapter   | found automatically: the adapter owning this IG's address, else the one the route to the HOST leaves by |
+| Elevation         | none requested (`asInvoker`), so an unattended logon/startup path works; the fan-out needs Npcap, not elevation |
 | Reference SOF rate | ~100 Hz (~10 ms, an 8/12 ms alternation) |
 | HOST frame rate   | ~53 Hz — its IG Control counter advances 0.54 per datagram while a datagram arrives every ~10.2 ms, so the HOST is asked for about twice the frames it has |
 | SOF live field    | the HOST's frame counter (out of IG Control), echoed at offset 8; offsets 12/16 stay 0, as in the capture |
 | SOF rate here     | 60 Hz default (1..100000 Hz from the window), paced to the HOST's replies unless flow control is off |
 | Operator UI       | plain Win32 window (`Gui.cpp`): START / STOP / EXIT, a HAT/HOT check box, a flow-control check box and a SOF rate box |
+| Start-up          | streams from launch and minimises its own window (no click needed); `--no-auto-start` starts paused with the window up, as before |
 | Runtime settings  | SOF rate, HAT/HOT answering (drives the FSUIPC poller) and flow control, all applied on the next frame; `--fps` / `--respond-hathot` / `--flow-control` only seed them |
 | Exit path         | EXIT button only — the title-bar X / Alt+F4 / `WM_CLOSE` are swallowed |
 | Process type      | GUI subsystem: no console; `--help` and startup errors use a message box |

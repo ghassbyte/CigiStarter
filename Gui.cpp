@@ -535,6 +535,16 @@ int run(const Hooks& hooks, const Link& link) {
     UpdateWindow(hwnd);
     Refresh();
 
+    // If the stream is already running -- the normal case, since the program
+    // starts sending on launch -- then the window has nothing to ask for: get
+    // it out of the way of whatever else is on the IG desktop. It stays in the
+    // taskbar and START / STOP / EXIT keep working as soon as it is restored.
+    // Asking the caller rather than assuming keeps the window reacting to the
+    // program's state instead of to the command line, which it cannot see.
+    if (g_hooks && g_hooks->status && g_hooks->status().sending) {
+        ShowWindow(hwnd, SW_MINIMIZE);
+    }
+
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
         // Lets Tab / space drive the controls.

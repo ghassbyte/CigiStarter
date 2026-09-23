@@ -16,6 +16,12 @@
 //    The command-line options only seed these controls; whatever the window
 //    shows is what the program is doing.
 //
+//  How it starts
+//    The SOF stream is already running when the window appears, and the window
+//    minimises itself straight away: a deployment should need no click at all
+//    before the IG is on the link. --no-auto-start keeps the old behaviour --
+//    start stopped, window up, START to begin.
+//
 //  Exit is deliberate
 //    EXIT is the ONLY way out. The window's X button and Alt+F4 are swallowed
 //    (SC_CLOSE is removed from the system menu and WM_CLOSE is ignored), so a

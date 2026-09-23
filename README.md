@@ -25,8 +25,10 @@ aircraft, read from the local Prepar3D via FSUIPC — see
    reference IG did. This is on by default (the window's check box switches it
    off, as does `--no-respond-hathot`), and the terrain height is read from the
    local Prepar3D via FSUIPC — see [HAT/HOT answering](#hathot-answering).
-5. Runs as a small window with **START** / **STOP** / **EXIT**: it starts paused
-   and stays silent until START is clicked — see
+5. Runs as a small window with **START** / **STOP** / **EXIT**. It starts
+   transmitting on launch and the window minimises itself, so a deployment needs
+   no click at all before the link is live; `--no-auto-start` restores the
+   paused, window-up behaviour — see
    [Operator window](#operator-window).
 6. **Fans the HOST's downstream stream out to the other IG PCs** listed in
    `client.txt`, byte for byte, so several visual channels run off the one link
@@ -63,8 +65,14 @@ aircraft, read from the local Prepar3D via FSUIPC — see
   IG PC **without installing the Visual C++ redistributable**. (The FSUIPC SDK
   does not use the CRT across its boundary, so the mixed CRT is harmless —
   expect a benign `LNK4098` about `MSVCRT`.)
-- The embedded manifest requests **administrator** privileges (the app launches
-  elevated for network/firewall access in the simulator environment).
+- The program runs **unelevated** (the manifest asks for `asInvoker`): a
+  deployment starts it from a logon or startup path, where a UAC prompt would
+  block an unattended IG. Nothing it does needs administrator on a normal
+  install — the [fan-out](#fan-out-to-the-other-ig-pcs) opens Npcap unelevated.
+  Two things, if the deployment needs them, are an administrator's job once: an
+  Npcap installed to *restrict driver access to administrators* (the window then
+  reports that the adapter could not be opened), and a Windows Firewall prompt
+  for this program.
 
 ## Building
 
@@ -101,12 +109,18 @@ CigiStarter.exe [options]
   --flow-control      hold a SOF back while the HOST has not answered the
                       previous one                            (default on)
   --no-flow-control   transmit on the rate alone, without waiting for the HOST
+  --auto-start        transmit as soon as the program starts, and minimise the
+                      window                                  (default on)
+  --no-auto-start     start with the stream stopped and the window up, so START
+                      has to be clicked
   --help              show this help (in a message box)
 ```
 
 The options only set the *starting* state. The SOF rate, HAT/HOT answering and
 flow control can all be changed from the window while the program runs — see
-[Operator window](#operator-window).
+[Operator window](#operator-window). Whether the stream starts on launch is a
+start-up decision only, so `--no-auto-start` is the single way back to the old
+behaviour: a window that waits for the button.
 
 One input file matters too: **`client.txt`**, next to the executable, lists the
 other IG PCs to copy the downstream stream to. It is optional and is read once at
@@ -115,7 +129,8 @@ startup — see [Fan-out](#fan-out-to-the-other-ig-pcs).
 Examples:
 
 ```
-CigiStarter.exe                        # 60 Hz, paced to the HOST
+CigiStarter.exe                        # 60 Hz, paced to the HOST, live on launch
+CigiStarter.exe --no-auto-start        # wait for START instead (old behaviour)
 CigiStarter.exe --no-flow-control --fps 100
 ```
 
@@ -209,6 +224,13 @@ block.
 CigiStarter is a windowed program, so it is driven with the mouse rather than
 from a console. The window is a fixed-size plain Win32 dialog:
 
+The stream is already running by the time the window is up, and the window
+minimises itself straight away: a deployment site switches the IG PC on rather
+than operating it, so there should be nothing to click before the link is live.
+The window waits in the taskbar, and START / STOP / EXIT work as soon as it is
+brought back — EXIT is still the only way out. `--no-auto-start` starts stopped
+with the window up instead, which is the behaviour the sketch below shows.
+
 ```
 +--------------------------------------------------------------------------+
 |  HOST 192.168.70.2:8001   ->  SOF destination                            |
@@ -240,9 +262,10 @@ from a console. The window is a fixed-size plain Win32 dialog:
   and the `Stream` line names the pacing mode — `paced to the HOST` or
   `free-running` — adding `which is the limit` when it is the HOST that is
   setting the pace rather than the rate box.
-- **START** / **STOP** start and stop the SOF stream. The program boots
-  *paused*, so nothing is transmitted to the HOST until START is clicked. The
-  button that would be a no-op is disabled.
+- **START** / **STOP** start and stop the SOF stream. The stream is already
+  running when the window appears (see above), so START is the disabled button at
+  launch and STOP is the live one. The button that would be a no-op is always the
+  disabled one.
 - **Answer HAT/HOT** switches HAT/HOT answering on and off, and with it the
   FSUIPC poller — switching it off means this program makes no FSUIPC calls at
   all, switching it back on reconnects. It starts **on**, unless
@@ -299,6 +322,11 @@ is read once at startup — restart the program to pick up an edit:
 - The file is optional. Without it (or with nothing usable in it) nothing is
   relayed, the window says which of those it is, and the capture driver is never
   opened.
+- Writing the copies needs Npcap and nothing else — the program asks for no
+  elevation, and on a normal Npcap install (the *restrict driver access to
+  administrators* option left unchecked at install time) the adapter opens
+  unelevated. If it cannot be opened, the window reports why and nothing is
+  forwarded; the SOF link to the HOST is unaffected.
 
 Every datagram the HOST sends is copied **exactly as it arrived**, on the same
 UDP port, to each listed client — one Ethernet frame per client per datagram.
@@ -418,7 +446,7 @@ the clients need no reconfiguration. See
 | `Relay.h`          | fan-out API: start/stop, per-datagram copy, status snapshot |
 | `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
-| `app.manifest`     | UAC `requireAdministrator` manifest            |
+| `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |
 | `agents.md`        | description of the HOST / IG / CigiStarter agents |
 | `CigiStarter.sln`  | Visual Studio solution (x64 only)              |
 | `CigiStarter.vcxproj` | VS project (x64 only, static CRT, ws2_32, FSUIPC) |

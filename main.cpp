@@ -100,6 +100,12 @@ struct Config {
     uint8_t igMode        = 0;    // 0 = Standby (0x30), 1 = Operate (0x31)
     bool    respondHatHot = true;
     bool    flowControl   = true; // pace the SOF stream to the HOST's replies
+    // Start transmitting as soon as the program starts, and minimise the window
+    // once it is. At a deployment site the IG PC is switched on rather than
+    // operated, so there should be nothing to click before the link is live --
+    // the reference IG was free-running from the moment it started. The window
+    // is still in the taskbar, and START / STOP / EXIT still work from it.
+    bool    autoStart     = true;
 };
 
 // Most HOSTs send one HAT/HOT request per frame, so one response per SOF. The
@@ -148,7 +154,9 @@ struct ActiveHatHotRequest {
 
 // Process-wide state, shared between the worker threads and the operator window.
 static std::atomic<bool> g_running{true};
-static std::atomic<bool> g_sending{false};  // SOF stream on/off (START / STOP)
+// SOF stream on/off (START / STOP). Seeded from --auto-start, so it is on from
+// launch unless the operator asks for the old start-paused behaviour.
+static std::atomic<bool> g_sending{false};
 static Stats             g_stats;           // filled in by the receive thread
 // Answering HAT/HOT (which also decides whether the terrain poller runs), the
 // SOF transmit rate and the flow-control mode. All are seeded from the command
@@ -201,6 +209,11 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      the default)\n"
         "  --no-flow-control   transmit on the rate alone, without waiting for the\n"
         "                      HOST\n"
+        "  --auto-start        start transmitting as soon as the program starts,\n"
+        "                      and minimise the window so it is out of the way\n"
+        "                      (this is the default)\n"
+        "  --no-auto-start     start with the stream stopped and the window up, so\n"
+        "                      START has to be clicked\n"
         "  --help              show this help\n"
         "\n"
         "Extra (passive) IG PCs to copy the HOST's stream to are listed in\n"
@@ -244,6 +257,10 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             cfg.flowControl = true;     // the default; kept so old command lines work
         } else if (a == "--no-flow-control") {
             cfg.flowControl = false;
+        } else if (a == "--auto-start") {
+            cfg.autoStart = true;       // the default; kept for symmetry
+        } else if (a == "--no-auto-start") {
+            cfg.autoStart = false;
         } else {
             fail("error: unknown option '%s'\n\nRun with --help for the option list.",
                  a.c_str());
@@ -462,10 +479,14 @@ int main(int argc, char** argv) {
         return fail("error: invalid host address '%s'\n", kHostIp);
     }
 
-    // Seed the window's controls; from here on they are the live state.
+    // Seed the live state; from here on the window owns it. HAT/HOT answering,
+    // the rate and flow control are the window's controls, seeded from the
+    // command line; the stream state is seeded too, so that --auto-start (the
+    // default) has the stream on before the window is ever created.
     g_respondHatHot.store(cfg.respondHatHot);
     g_targetFps.store(cfg.fps);
     g_flowControl.store(cfg.flowControl);
+    g_sending.store(cfg.autoStart);
 
     // The IG does not choose its own mode: it reports back whatever the HOST
     // last commanded. --ig-mode therefore only seeds the value used until the
