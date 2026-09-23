@@ -9,6 +9,18 @@
 //    local Prepar3D (switched on by default; an unreachable sim just means the
 //    answers stay invalid until it appears).
 //
+//  SOF rate and flow control
+//    The HOST owns the frame rate and answers each SOF with one datagram, so an
+//    IG that transmits regardless is asking it for more frames than it can
+//    produce. The default rate is therefore 60 Hz (the HOST in the reference
+//    capture runs ~53 frames/s while it is asked for ~98 SOF replies/s), and
+//    flow control -- on by default -- holds a SOF back while the previous one is
+//    still unanswered, so the stream fits whatever the HOST on site can absorb
+//    instead of relying on the operator to pick a safe number (SofPacer.h).
+//    `--no-flow-control` restores the plain rate schedule, for a HOST that turns
+//    out to tolerate more. The SOF itself echoes the HOST's own frame counter
+//    (cigi.cpp); that field is what ties the two rates together.
+//
 //  Transport (fixed by the deployment; hardcoded below)
 //    HOST 192.168.70.2  -> IG 192.168.70.70 : 8000   (downstream data)
 //    IG   192.168.70.70 -> HOST 192.168.70.2 : 8001  (upstream SOF / responses)
@@ -16,7 +28,7 @@
 //  Operator interface
 //    A small fixed-size Win32 window (Gui.cpp) showing the link, the live
 //    stream statistics and the terrain sample, with START / STOP / EXIT plus
-//    a HAT/HOT check box and a SOF rate box.
+//    a HAT/HOT check box, a flow-control check box and a SOF rate box.
 //    EXIT is the only way out -- the title-bar X and Alt+F4 are swallowed, so
 //    the IG cannot be taken off the link by a stray click. This file owns the
 //    worker threads and the statistics that window displays.
@@ -38,11 +50,13 @@
 //    perfectly good IG (Relay.cpp).
 //
 //  Usage
-//    CigiStarter.exe [--fps 100] [--ig-mode 0] [--no-respond-hathot] [--help]
+//    CigiStarter.exe [--fps 60] [--ig-mode 0] [--no-respond-hathot]
+//                    [--no-flow-control] [--help]
 //    Being a windowed program there is no console, so --help and any startup
 //    error are reported in a message box.
 //=============================================================================
 #include "cigi.h"
+#include "SofPacer.h"
 #include "Gui.h"
 #include "Relay.h"
 #include "TerrainSource.h"
@@ -80,9 +94,12 @@ constexpr uint16_t kIgPort   = 8000;             // IG port (HOST -> IG)
 // Runtime configuration (command-line adjustable)
 //-----------------------------------------------------------------------------
 struct Config {
-    int     fps           = 100;  // SOF transmission rate
+    // 60 Hz by default: the HOST in the reference capture runs ~53 frames/s, so
+    // it has never been shown to keep up with more than that.
+    int     fps           = 60;   // SOF transmission rate
     uint8_t igMode        = 0;    // 0 = Standby (0x30), 1 = Operate (0x31)
     bool    respondHatHot = true;
+    bool    flowControl   = true; // pace the SOF stream to the HOST's replies
 };
 
 // Most HOSTs send one HAT/HOT request per frame, so one response per SOF. The
@@ -101,6 +118,10 @@ struct Stats {
     std::atomic<uint64_t> entityControl{0};
     std::atomic<uint64_t> hatHotReq{0};
     std::atomic<uint32_t> lastHostFrame{0};
+    // Downstream datagrams that came from the HOST, i.e. answers to our SOFs.
+    // The transmit loop watches this to tell whether the HOST has caught up
+    // (SofPacer.h); it is the only flow-control signal there is.
+    std::atomic<uint64_t> hostReplies{0};
     // SOF frames this program has transmitted. The transmit thread owns the
     // counter; publishing it here is what lets the window show the TX rate.
     std::atomic<uint32_t> sofFrames{0};
@@ -129,12 +150,13 @@ struct ActiveHatHotRequest {
 static std::atomic<bool> g_running{true};
 static std::atomic<bool> g_sending{false};  // SOF stream on/off (START / STOP)
 static Stats             g_stats;           // filled in by the receive thread
-// Answering HAT/HOT (which also decides whether the terrain poller runs) and
-// the SOF transmit rate. Both are seeded from the command line and from then on
-// owned by the window's controls -- the window thread cannot see main()'s
-// Config, so the live values live here.
+// Answering HAT/HOT (which also decides whether the terrain poller runs), the
+// SOF transmit rate and the flow-control mode. All are seeded from the command
+// line and from then on owned by the window's controls -- the window thread
+// cannot see main()'s Config, so the live values live here.
 static std::atomic<bool> g_respondHatHot{true};
-static std::atomic<int>  g_targetFps{100};
+static std::atomic<int>  g_targetFps{60};
+static std::atomic<bool> g_flowControl{true};
 
 //-----------------------------------------------------------------------------
 // Error / help reporting
@@ -159,9 +181,13 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "CigiStarter - minimal CIGI 3.3 Image Generator\n\n"
         "Link (fixed): HOST %s:%u  <->  IG %s:%u\n\n"
         "Usage: %s [options]\n\n"
-        "Options (these only set the starting state -- the SOF rate and HAT/HOT\n"
-        "answering can also be changed from the window while it runs):\n\n"
-        "  --fps <rate>        SOF transmit rate in Hz           (default 100)\n"
+        "Options (these only set the starting state -- the SOF rate, HAT/HOT\n"
+        "answering and flow control can also be changed from the window while it\n"
+        "runs):\n\n"
+        "  --fps <rate>        SOF transmit rate in Hz           (default 60)\n"
+        "                      The HOST runs at its own frame rate and cannot be\n"
+        "                      driven above it, so keep this at or below the rate\n"
+        "                      the HOST actually manages.\n"
         "  --ig-mode <0..3>    IG mode reported in the SOF until the HOST sends\n"
         "                      its first IG Control (0=Standby 1=Operate)\n"
         "                                                         (default 0)\n"
@@ -170,6 +196,11 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      (this is the default)\n"
         "  --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC\n"
         "                      untouched\n"
+        "  --flow-control      hold a SOF back while the HOST has not answered the\n"
+        "                      previous one, so the stream fits the HOST (this is\n"
+        "                      the default)\n"
+        "  --no-flow-control   transmit on the rate alone, without waiting for the\n"
+        "                      HOST\n"
         "  --help              show this help\n"
         "\n"
         "Extra (passive) IG PCs to copy the HOST's stream to are listed in\n"
@@ -209,6 +240,10 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             cfg.respondHatHot = true;   // the default; kept so old command lines work
         } else if (a == "--no-respond-hathot") {
             cfg.respondHatHot = false;
+        } else if (a == "--flow-control") {
+            cfg.flowControl = true;     // the default; kept so old command lines work
+        } else if (a == "--no-flow-control") {
+            cfg.flowControl = false;
         } else {
             fail("error: unknown option '%s'\n\nRun with --help for the option list.",
                  a.c_str());
@@ -301,14 +336,15 @@ static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
 //-----------------------------------------------------------------------------
 // Window callbacks
 //
-// All three run on the window's thread. The window owns no state of its own,
-// so it polls the statistics through uiStatus() and pokes the two atomics the
+// All of them run on the window's thread. The window owns no state of its own,
+// so it polls the statistics through uiStatus() and pokes the atomics the
 // worker threads already watch.
 //-----------------------------------------------------------------------------
 static gui::Status uiStatus() {
     gui::Status s;
     s.sending           = g_sending.load();
     s.respondingHatHot  = g_respondHatHot.load();
+    s.flowControl       = g_flowControl.load();
     s.datagrams         = g_stats.datagrams.load();
     s.entityUpdates     = g_stats.entityControl.load();
     s.sofFrames         = g_stats.sofFrames.load();
@@ -337,6 +373,11 @@ static gui::Status uiStatus() {
 
 static void uiSetSending(bool on) { g_sending.store(on); }
 static void uiRequestQuit()       { g_running.store(false); }
+
+// Flow control is read afresh every frame by the transmit loop, so switching it
+// needs no other bookkeeping: the loop's pacer state is kept across the change
+// (a held-back SOF simply becomes due again).
+static void uiSetFlowControl(bool on) { g_flowControl.store(on); }
 
 // Switching HAT/HOT answering on and off starts and stops the terrain poller
 // with it: the poller is the only thing in this process that touches FSUIPC and
@@ -377,10 +418,11 @@ int main(int argc, char** argv) {
 
     // Raise the system timer resolution to 1 ms for the lifetime of the
     // process. Windows' default scheduler granularity is 15.6 ms (~64 Hz), so
-    // at any SOF rate above ~60 Hz sleep_until() overshoots its deadline and
-    // the transmit loop emits bursts of back-to-back SOF datagrams. The HOST
-    // cannot absorb those bursts and drops out. timeBeginPeriod(1) keeps the
-    // 100/112 Hz pacing even, matching the reference Master IG.
+    // sleep_until() overshoots its deadline at any rate above ~60 Hz and the
+    // transmit loop emits bursts of back-to-back SOF datagrams; the HOST is the
+    // one that cannot absorb those. timeBeginPeriod(1) makes the rate the
+    // operator asks for the rate the loop actually sends, and flow control
+    // (SofPacer.h) then keeps that stream inside what the HOST can take.
     timeBeginPeriod(1);
 
     // ---- Receive socket: bound to the port the HOST streams to. ----------
@@ -423,6 +465,7 @@ int main(int argc, char** argv) {
     // Seed the window's controls; from here on they are the live state.
     g_respondHatHot.store(cfg.respondHatHot);
     g_targetFps.store(cfg.fps);
+    g_flowControl.store(cfg.flowControl);
 
     // The IG does not choose its own mode: it reports back whatever the HOST
     // last commanded. --ig-mode therefore only seeds the value used until the
@@ -467,6 +510,11 @@ int main(int argc, char** argv) {
             // receive exactly what the HOST sent. Only the HOST is copied: the
             // client IG PCs are passive and have nothing to say back.
             if (from.sin_addr.s_addr == hostAddr.sin_addr.s_addr) {
+                // This datagram is the HOST's answer to a SOF, which is the
+                // signal the transmit loop's flow control waits for. Counted
+                // before anything can reject the frame: a reply is a reply even
+                // if we cannot parse it.
+                g_stats.hostReplies.fetch_add(1);
                 relay::forward(buf.data(), static_cast<size_t>(n));
             }
 
@@ -529,13 +577,20 @@ int main(int argc, char** argv) {
     // ---- SOF thread: transmit Start-of-Frame at the configured rate. -----
     std::thread txThread([&] {
         uint8_t sof[24];
+        // Only feeds the frame count the window shows: the SOF itself carries
+        // the HOST's frame counter, not this one (see cigi.cpp).
         uint32_t frame = 0;
-        const auto started = std::chrono::steady_clock::now();
         // The rate is re-read every frame, so the window can retune the stream
         // without stopping it.
         int  fps    = g_targetFps.load();
         auto period = std::chrono::microseconds(1000000 / fps);
         auto next   = std::chrono::steady_clock::now();
+
+        // Flow-control state: which HOST reply the stream is up to, and when the
+        // last SOF went out -- the age of the SOF that may still be waiting for
+        // an answer (SofPacer.h).
+        pacer::State pacerState;
+        auto lastSend = std::chrono::steady_clock::now();
 
         // HAT/HOT requests this thread still owes an answer for. Kept across
         // frames so requests with an update period can be answered repeatedly.
@@ -552,12 +607,25 @@ int main(int argc, char** argv) {
                 next   = std::chrono::steady_clock::now();
             }
 
-            if (g_sending.load()) {
-                const auto now = std::chrono::steady_clock::now();
-                const uint32_t ts = static_cast<uint32_t>(
-                    std::chrono::duration_cast<std::chrono::microseconds>(now - started).count());
+            // A due SOF is held back while the HOST has not answered the previous
+            // one, so the stream cannot outrun the HOST's own frame rate
+            // (SofPacer.h). The deadline pacing below is unchanged either way:
+            // the configured rate stays an upper bound, and a frame that was held
+            // back is dropped rather than replayed, so it cannot become a burst.
+            const auto now = std::chrono::steady_clock::now();
+            const pacer::Inputs in{
+                g_sending.load(),
+                g_flowControl.load(),
+                g_stats.hostReplies.load(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - lastSend).count(),
+            };
 
-                cigi::packStartOfFrame(sof, frame, ts, g_stats.lastHostFrame.load(),
+            if (pacer::shouldSend(pacerState, in)) {
+                // The frame-number slot takes the HOST's own counter, as in the
+                // reference capture: it advances with the HOST's frame rate
+                // rather than with the SOF rate (see cigi.cpp).
+                cigi::packStartOfFrame(sof, g_stats.lastHostFrame.load(),
                                        cigi::sofIgModeByte(g_stats.hostIgMode.load()));
 
                 // Build the upstream datagram: the SOF followed by every HAT/HOT
@@ -647,6 +715,8 @@ int main(int argc, char** argv) {
 
                 ++frame;
                 g_stats.sofFrames.store(frame);
+                pacer::noteSent(pacerState, in);
+                lastSend = now;
             }
 
             next += period;
@@ -671,6 +741,7 @@ int main(int argc, char** argv) {
     hooks.status           = uiStatus;
     hooks.setSending       = uiSetSending;
     hooks.setRespondHatHot = uiSetRespondHatHot;
+    hooks.setFlowControl   = uiSetFlowControl;
     hooks.setFps           = uiSetFps;
     hooks.requestQuit      = uiRequestQuit;
 

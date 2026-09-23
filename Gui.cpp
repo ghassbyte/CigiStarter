@@ -8,15 +8,17 @@
 //     |   ... live status block (read-only edit): the link, the stream, the |
 //     |       client.txt fan-out and the terrain sample ...                 |
 //     |                                                                     |
-//     |  [x] Answer HAT/HOT (terrain from FSUIPC)   SOF rate: [ 100 ] Hz [Apply] |
+//     |  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 60 ] Hz [Apply] |
+//     |  [x] Pace SOF to HOST replies (flow control)                        |
 //     |                                                                     |
 //     |  [ START ]  [ STOP ]                                        [ EXIT ] |
 //     +--------------------------------------------------------------------+
 //
-//  The settings row is live: the check box switches HAT/HOT answering (and with
-//  it the FSUIPC poller) and the rate box retunes the SOF stream, both without
-//  stopping anything first. The rate box applies on Enter, on Apply, and when it
-//  loses focus, so a typed value can never be silently ignored.
+//  The settings rows are live: the check boxes switch HAT/HOT answering (and
+//  with it the FSUIPC poller) and the flow control, and the rate box retunes the
+//  SOF stream, all without stopping anything first. The rate box applies on
+//  Enter, on Apply, and when it loses focus, so a typed value can never be
+//  silently ignored.
 //
 //  There is no X button: SC_CLOSE is deleted from the system menu at creation
 //  and WM_CLOSE is ignored, so DestroyWindow() is only ever reached from the
@@ -43,7 +45,11 @@ constexpr int kStatusW   = kClientW - 2 * kMargin;
 constexpr int kStatusH   = 288;
 constexpr int kSettingsY = kMargin + kStatusH + kMargin;
 constexpr int kRowH      = 24;
-constexpr int kButtonY   = kSettingsY + kRowH + kMargin;
+// The flow-control check box gets a row of its own under the HAT/HOT row: there
+// is no width left beside it, and a squeezed label would be worse than a taller
+// window.
+constexpr int kFlagsY    = kSettingsY + kRowH;
+constexpr int kButtonY   = kFlagsY + kRowH + kMargin;
 constexpr int kButtonW   = 110;
 constexpr int kButtonH   = 32;
 constexpr int kClientH   = kButtonY + kButtonH + kMargin;
@@ -58,6 +64,7 @@ constexpr int kFpsEditId   = 1005;
 constexpr int kFpsApplyId  = 1006;
 constexpr int kFpsLabelId  = 1007;
 constexpr int kFpsUnitId   = 1008;
+constexpr int kFlowId      = 1009;
 
 // How often the status block is rewritten (ms).
 constexpr UINT_PTR kRefreshTimer = 1;
@@ -74,6 +81,7 @@ HWND  g_status  = nullptr;
 HWND  g_start   = nullptr;
 HWND  g_stop    = nullptr;
 HWND  g_respond = nullptr;
+HWND  g_flow    = nullptr;
 HWND  g_fpsEdit = nullptr;
 HFONT g_mono    = nullptr;
 
@@ -242,12 +250,27 @@ void Refresh() {
                       s.relayDevice.c_str());
     }
 
+    // How the transmit loop is pacing, and -- when flow control is holding
+    // frames back -- whether it is the HOST that is setting the pace. The SOF
+    // line already shows the rate that was achieved, so a rate well under the
+    // one requested means the HOST is the limit.
+    wchar_t pacing[64];
+    if (!s.flowControl) {
+        std::swprintf(pacing, ARRAYSIZE(pacing), L"free-running");
+    } else if (s.sending &&
+               g_sofRate * 10 < static_cast<uint64_t>(s.targetFps) * 9) {
+        std::swprintf(pacing, ARRAYSIZE(pacing),
+                      L"paced to the HOST, which is the limit");
+    } else {
+        std::swprintf(pacing, ARRAYSIZE(pacing), L"paced to the HOST");
+    }
+
     wchar_t text[2048];
     std::swprintf(text, ARRAYSIZE(text),
         L"  HOST %hs:%u   ->  SOF destination\r\n"
         L"  IG   :%u   (this IG is %hs)\r\n"
         L"\r\n"
-        L"  Stream    : %s\r\n"
+        L"  Stream    : %s (%s)\r\n"
         L"  SOF rate  : %d Hz requested, %llu/s measured\r\n"
         L"  SOF frames: %u\r\n"
         L"  Received  : %llu datagrams (%llu/s), %llu entity updates\r\n"
@@ -260,7 +283,7 @@ void Refresh() {
         L"%s\r\n",
         g_link->hostIp, static_cast<unsigned>(g_link->hostPort),
         static_cast<unsigned>(g_link->igPort), g_link->igIp,
-        s.sending ? L"RUNNING" : L"STOPPED",
+        s.sending ? L"RUNNING" : L"STOPPED", pacing,
         s.targetFps,
         static_cast<unsigned long long>(g_sofRate),
         static_cast<unsigned>(s.sofFrames),
@@ -332,15 +355,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
                                         kClientW - kMargin - 64, kSettingsY, 64, kRowH,
                                         hwnd, ControlId(kFpsApplyId), nullptr, nullptr);
+        g_flow = CreateWindowExW(0, L"BUTTON",
+                                 L"Pace SOF to HOST replies (flow control)",
+                                 WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                                 kMargin, kFlagsY, 320, kRowH,
+                                 hwnd, ControlId(kFlowId), nullptr, nullptr);
 
         if (!g_status || !g_start || !g_stop || !exitBtn || !g_respond ||
-            !fpsLabel || !g_fpsEdit || !fpsUnit || !fpsApply) {
+            !fpsLabel || !g_fpsEdit || !fpsUnit || !fpsApply || !g_flow) {
             return -1;  // abort window creation
         }
 
         // Monospace for the status block, the standard dialog font elsewhere.
         SendMessageW(g_status, WM_SETFONT, reinterpret_cast<WPARAM>(g_mono), TRUE);
-        for (HWND c : { g_start, g_stop, exitBtn, g_respond, g_fpsEdit,
+        for (HWND c : { g_start, g_stop, exitBtn, g_respond, g_flow, g_fpsEdit,
                         fpsLabel, fpsUnit, fpsApply }) {
             SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
         }
@@ -351,6 +379,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             const Status s = g_hooks->status();
             SendMessageW(g_respond, BM_SETCHECK,
                          s.respondingHatHot ? BST_CHECKED : BST_UNCHECKED, 0);
+            SendMessageW(g_flow, BM_SETCHECK,
+                         s.flowControl ? BST_CHECKED : BST_UNCHECKED, 0);
             SetFpsText(s.targetFps);
         }
 
@@ -394,6 +424,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     SendMessageW(g_respond, BM_GETCHECK, 0, 0) == BST_CHECKED;
                 if (g_hooks && g_hooks->setRespondHatHot) {
                     g_hooks->setRespondHatHot(on);
+                }
+                Refresh();
+            }
+            return 0;
+        case kFlowId:
+            if (HIWORD(wp) == BN_CLICKED) {
+                const bool on =
+                    SendMessageW(g_flow, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                if (g_hooks && g_hooks->setFlowControl) {
+                    g_hooks->setFlowControl(on);
                 }
                 Refresh();
             }
@@ -442,7 +482,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             DeleteObject(g_mono);
             g_mono = nullptr;
         }
-        g_hwnd = g_status = g_start = g_stop = g_respond = g_fpsEdit = nullptr;
+        g_hwnd = g_status = g_start = g_stop = g_respond = g_flow =
+            g_fpsEdit = nullptr;
         PostQuitMessage(0);
         return 0;
 

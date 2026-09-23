@@ -20,8 +20,8 @@
 //    FSUIPC's request buffer is process-global, so exactly one thread may issue
 //    FSUIPC_Read/Process. That is this module's poller thread and nobody else —
 //    the SOF transmit thread never touches FSUIPC, it only reads the cached
-//    snapshot via latest(). That keeps the 100 Hz SOF pacing immune to the
-//    latency of an FSUIPC round trip.
+//    snapshot via latest(). That keeps the SOF pacing immune to the latency of
+//    an FSUIPC round trip.
 //
 //  Failure behaviour
 //    If the sim is not running (or FSUIPC is not installed) the link simply

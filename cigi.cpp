@@ -33,13 +33,21 @@ inline double   readF64LE(const uint8_t* p) { double   v; std::memcpy(&v, p, 8);
 //   4    1    IG status        = 0
 //   5    1    IG mode byte     = 0x30 (mode 0 + minor version 3)
 //   6    2    byte-swap flag   = 0x00 0x80 (little-endian)
-//   8    4    frame number     (uint32 LE)
-//   12   4    timestamp        (uint32 LE, microseconds)
-//   16   4    last host frame  (uint32 LE)
+//   8    4    HOST frame counter, echoed
+//   12   4    timestamp        = 0
+//   16   4    last host frame  = 0
 //   20   4    reserved         = 0
+//
+// The frame-number slot carries the HOST's counter, not this IG's count of
+// transmitted SOFs. The reference Master IG did exactly that: in
+// Host-Master.pcapng the SOF's live field advances ~0.52 per SOF while the
+// HOST's own counter advances 0.54 per datagram -- the HOST asks for ~98 SOF
+// replies a second but only runs ~53 frames a second, so the field tracks the
+// HOST, not the link rate. Counting SOFs here instead makes the field run away
+// from the HOST by (rate - 53) every second, which is what broke the HOST above
+// ~60 Hz; echoing its counter keeps the SOF byte-identical to the capture's.
 //-----------------------------------------------------------------------------
-void packStartOfFrame(uint8_t* out, uint32_t frameNumber, uint32_t timestamp,
-                      uint32_t lastHostFrame, uint8_t igModeByte) {
+void packStartOfFrame(uint8_t* out, uint32_t hostFrameNumber, uint8_t igModeByte) {
     out[0] = kSofMessageId;
     out[1] = kSofSize;
     out[2] = kSofVersion;
@@ -48,9 +56,9 @@ void packStartOfFrame(uint8_t* out, uint32_t frameNumber, uint32_t timestamp,
     out[5] = igModeByte;         // 0x30 (standby) or 0x31 (operate)
     out[6] = 0x00;               // byte-swap flag: little-endian
     out[7] = 0x80;
-    writeU32LE(out + 8, frameNumber);
-    writeU32LE(out + 12, timestamp);
-    writeU32LE(out + 16, lastHostFrame);
+    writeU32LE(out + 8, hostFrameNumber);
+    writeU32LE(out + 12, 0);     // timestamp: the reference sent 0
+    writeU32LE(out + 16, 0);     // last host frame: unused (see the header)
     writeU32LE(out + 20, 0);     // reserved
 }
 

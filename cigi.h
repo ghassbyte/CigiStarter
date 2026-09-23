@@ -73,9 +73,9 @@ struct StartOfFrame {
     uint8_t  igStatus;       // 0
     uint8_t  igModeByte;     // 0x30
     uint8_t  byteSwap[2];    // { 0x00, 0x80 } => little-endian
-    uint32_t frameNumber;    // IG frame number
-    uint32_t timestamp;      // microseconds (0 = not valid)
-    uint32_t lastHostFrame;  // echo of host frame counter
+    uint32_t hostFrameNumber;// the HOST's frame counter, echoed (see below)
+    uint32_t timestamp;      // 0 -- the reference Master never sent one
+    uint32_t lastHostFrame;  // 0 -- ditto: the counter rides in the slot above
     uint32_t reserved;       // 0
 };
 #pragma pack(pop)
@@ -86,8 +86,20 @@ static_assert(sizeof(StartOfFrame) == 24, "StartOfFrame must be 24 bytes");
 //-----------------------------------------------------------------------------
 
 // Pack a 24-byte Start-of-Frame message into `out` (must hold >= 24 bytes).
-void packStartOfFrame(uint8_t* out, uint32_t frameNumber, uint32_t timestamp,
-                      uint32_t lastHostFrame, uint8_t igModeByte);
+//
+// `hostFrameNumber` is the frame counter out of the HOST's last IG Control, and
+// it goes in the frame-number slot at offset 8 -- an IG-side count of the SOFs
+// this program has sent must NOT be put there. That is what the reference Master
+// IG sent: every SOF in `Host-Master.pcapng` carries it in that slot, advancing
+// ~0.52 per SOF, which tracks the HOST's counter (0.54 per datagram) rather
+// than the SOF rate -- the HOST emits a datagram every ~10.2 ms (~98 Hz) while
+// its frame counter only advances ~53 times a second.
+//
+// Offsets 12 (timestamp) and 16 (last host frame) and 20 (reserved) are zero,
+// again as in the capture. See cigi.cpp for the field-by-field layout, and
+// SofPacer.h for why exceeding the HOST's own frame rate with an IG-side counter
+// used to take the HOST down.
+void packStartOfFrame(uint8_t* out, uint32_t hostFrameNumber, uint8_t igModeByte);
 
 // Pack a 16-byte HAT/HOT Response (message id 102) into `out` (>= 16 bytes).
 //

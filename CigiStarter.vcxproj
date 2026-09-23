@@ -123,6 +123,7 @@
     <ClInclude Include="cigi.h" />
     <ClInclude Include="Gui.h" />
     <ClInclude Include="Relay.h" />
+    <ClInclude Include="SofPacer.h" />
     <ClInclude Include="TerrainSource.h" />
   </ItemGroup>
   <ItemGroup>

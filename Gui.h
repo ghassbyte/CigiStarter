@@ -11,6 +11,7 @@
 //    - START / STOP of the SOF stream,
 //    - whether HAT/HOT requests are answered (which starts/stops the FSUIPC
 //      terrain poller along with it),
+//    - whether the SOF stream is paced to the HOST's replies (flow control),
 //    - the SOF transmit rate, typed as a whole number of Hz.
 //    The command-line options only seed these controls; whatever the window
 //    shows is what the program is doing.
@@ -44,10 +45,11 @@ constexpr int kMaxFps = 100000;
 struct Status {
     bool     sending           = false;  // SOF stream running?
     bool     respondingHatHot  = false;  // answering HAT/HOT requests?
+    bool     flowControl       = true;   // pacing SOF to the HOST's replies?
     uint64_t datagrams         = 0;      // downstream datagrams received
     uint64_t entityUpdates     = 0;      // Entity Control packets seen
     uint32_t sofFrames         = 0;      // SOF frames transmitted
-    int      targetFps         = 100;    // rate the transmit loop is pacing to
+    int      targetFps         = 60;     // rate the transmit loop is pacing to
     uint8_t  hostIgMode        = 0;      // mode the HOST last commanded
     uint32_t lastHostFrame     = 0;      // HOST frame counter
     bool     terrainConnected  = false;  // FSUIPC link up?
@@ -79,6 +81,7 @@ struct Hooks {
     Status (*status)();              // polled several times per second
     void   (*setSending)(bool);      // START / STOP
     void   (*setRespondHatHot)(bool);// HAT/HOT check box
+    void   (*setFlowControl)(bool);  // flow-control check box
     void   (*setFps)(int);           // rate box, already range-checked
     void   (*requestQuit)();         // EXIT
 };

@@ -15,7 +15,9 @@ aircraft, read from the local Prepar3D via FSUIPC — see
    control/flight data.
 2. Sends **SOF** (24-byte Start-of-Frame) datagrams to the HOST upstream port
    (`8001`) at the configured frame rate — this is the "request" that starts
-   the data flow.
+   the data flow. The rate defaults to **60 Hz** and the stream is paced to the
+   HOST's replies by default — see
+   [SOF rate and flow control](#sof-rate-and-flow-control).
 3. Parses inbound CIGI messages (framed by `[id][size]`) and shows a live status
    block: datagrams/s, total datagrams, entity updates, the SOF rate (requested
    and achieved), SOF frames sent, the HOST frame counter and the terrain sample.
@@ -87,29 +89,87 @@ The link addresses and ports are **fixed by the deployment** and hardcoded:
 ```
 CigiStarter.exe [options]
 
-  --fps <rate>        initial SOF transmit rate in Hz   (default 100)
+  --fps <rate>        initial SOF transmit rate in Hz   (default 60)
+                      Keep this at or below the rate the HOST itself
+                      manages — see SOF rate and flow control below.
   --ig-mode <0..3>    IG mode reported until the HOST sends its first
                       IG Control (0=Standby 1=Operate)  (default 0)
   --respond-hathot    answer HAT/HOT requests using the terrain height read
                       from the local Prepar3D via FSUIPC       (default on)
   --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC
                       untouched
+  --flow-control      hold a SOF back while the HOST has not answered the
+                      previous one                            (default on)
+  --no-flow-control   transmit on the rate alone, without waiting for the HOST
   --help              show this help (in a message box)
 ```
 
-The options only set the *starting* state. The SOF rate and HAT/HOT answering
-can both be changed from the window while the program runs — see
+The options only set the *starting* state. The SOF rate, HAT/HOT answering and
+flow control can all be changed from the window while the program runs — see
 [Operator window](#operator-window).
 
 One input file matters too: **`client.txt`**, next to the executable, lists the
 other IG PCs to copy the downstream stream to. It is optional and is read once at
 startup — see [Fan-out](#fan-out-to-the-other-ig-pcs).
 
-Example:
+Examples:
 
 ```
-CigiStarter.exe --fps 112
+CigiStarter.exe                        # 60 Hz, paced to the HOST
+CigiStarter.exe --no-flow-control --fps 100
 ```
+
+## SOF rate and flow control
+
+The HOST owns the frame rate: it answers each SOF with one datagram of flight
+data, and it cannot produce frames faster than its own simulation runs. The
+reference capture (`Host-Master.pcapng`) shows what that means in practice — the
+HOST emits a datagram every ~10.2 ms (~98 Hz) while its own frame counter only
+advances ~53 times a second, i.e. the Master IG was asking for roughly twice as
+many replies as the HOST had frames to give.
+
+That is why:
+
+- the SOF rate defaults to **60 Hz** rather than the ~100 Hz of the reference
+  Master, and
+- **flow control is on by default**: the transmit loop holds a SOF back while the
+  previous one is still unanswered (`SofPacer.h`), so the stream fits whatever the
+  HOST on site can absorb, whatever number is typed in the rate box.
+
+With flow control on the configured rate is an upper bound, not a promise: when
+the HOST keeps up the stream runs at the rate in the box, and when it cannot the
+SOF stream follows the HOST down instead of piling requests up on it. A frame
+that is held back is dropped, never replayed, so no mode of operation can turn
+the stream into a burst. Two cases keep the link usable on their own: a HOST that
+has never answered — at startup, before it has been woken — is transmitted to at
+the full rate, and a SOF that has gone unanswered for 100 ms is followed by
+another one anyway, so a HOST that has dropped out still receives something to
+wake up on.
+
+That limit is a wall-clock one rather than a number of frames, and that is what
+stops a mistyped rate from becoming a load: a HOST answering more slowly than
+once per 100 ms sees at most ~10 requests a second, whether the rate box says 60
+or 6000. Counting frames instead would make the retries scale with the rate,
+i.e. exactly the runaway this is here to prevent.
+
+`--no-flow-control`, or clearing the window's check box, transmits on the rate
+alone — what the original Master IG did, and the mode to use when measuring what
+a HOST really tolerates:
+
+```
+CigiStarter.exe --no-flow-control --fps 100
+```
+
+The window's `Stream` line always names the mode in force, and says when it is
+the HOST that is setting the pace: `paced to the HOST, which is the limit`.
+
+**Why the rate matters at all.** The SOF has exactly one live field, the *HOST's*
+frame counter echoed back (see [Protocol notes](#protocol-notes)). An IG that
+counted its own transmitted SOFs in that slot instead would drift away from the
+HOST a little further every second — at 100 Hz against a 53 Hz HOST, about 47
+frames a second — which is what used to break the HOST when the rate was set
+above 60 Hz. Echoing the HOST's counter keeps the outgoing SOF byte-identical to
+the packet the reference Master sent.
 
 ## HAT/HOT answering
 
@@ -154,8 +214,8 @@ from a console. The window is a fixed-size plain Win32 dialog:
 |  HOST 192.168.70.2:8001   ->  SOF destination                            |
 |  IG   :8000   (this IG is 192.168.70.70)                                 |
 |                                                                          |
-|  Stream    : RUNNING                                                     |
-|  SOF rate  : 100 Hz requested, 100/s measured                            |
+|  Stream    : RUNNING (paced to the HOST)                                 |
+|  SOF rate  : 60 Hz requested, 60/s measured                              |
 |  SOF frames: 101                                                         |
 |  Received  : 0 datagrams (0/s), 0 entity updates                         |
 |  IG mode   : 0 (Standby)  <- commanded by the HOST                       |
@@ -167,7 +227,8 @@ from a console. The window is a fixed-size plain Win32 dialog:
 |  HAT/HOT   : answering from FSUIPC                                       |
 |  Terrain   : 27.0 m under the aircraft, 30.1 m aircraft                  |
 |                                                                          |
-|  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 100 ] Hz [ Apply ] |
+|  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 60 ] Hz [ Apply ]  |
+|  [x] Pace SOF to HOST replies (flow control)                             |
 |                                                                          |
 |  [ START ]  [ STOP ]                                              [ EXIT ] |
 +--------------------------------------------------------------------------+
@@ -175,7 +236,10 @@ from a console. The window is a fixed-size plain Win32 dialog:
 
 - The status block refreshes four times a second. The datagram and SOF rates are
   sampled once a second from the cumulative counters; the SOF line shows the
-  rate that is *requested* next to the rate the transmit loop actually achieved.
+  rate that is *requested* next to the rate the transmit loop actually achieved,
+  and the `Stream` line names the pacing mode — `paced to the HOST` or
+  `free-running` — adding `which is the limit` when it is the HOST that is
+  setting the pace rather than the rate box.
 - **START** / **STOP** start and stop the SOF stream. The program boots
   *paused*, so nothing is transmitted to the HOST until START is clicked. The
   button that would be a no-op is disabled.
@@ -183,13 +247,19 @@ from a console. The window is a fixed-size plain Win32 dialog:
   FSUIPC poller — switching it off means this program makes no FSUIPC calls at
   all, switching it back on reconnects. It starts **on**, unless
   `--no-respond-hathot` was given.
-- **SOF rate** is a whole number of Hz, from 1 to 100000. It is applied to the
-  transmit loop on the next frame, so the stream can be retuned *while it runs*
-  — no stop/start needed. Commit it with **Apply** or by pressing **Enter**. A
-  value that is not a whole number in range is refused with a warning and the
-  box snaps back to the rate actually in force; when the box merely loses focus
-  a valid value is applied quietly and an unfinished one is left alone, so
-  clicking EXIT never nags. `--fps` only seeds it.
+- **Pace SOF to HOST replies** is the [flow
+  control](#sof-rate-and-flow-control) switch. It starts **on**, unless
+  `--no-flow-control` was given. Switch it off to transmit on the rate alone —
+  for instance to measure what the HOST really tolerates.
+- **SOF rate** is a whole number of Hz, from 1 to 100000; it starts at **60**.
+  It is applied to the transmit loop on the next frame, so the stream can be
+  retuned *while it runs* — no stop/start needed. Commit it with **Apply** or by
+  pressing **Enter**. A value that is not a whole number in range is refused with
+  a warning and the box snaps back to the rate actually in force; when the box
+  merely loses focus a valid value is applied quietly and an unfinished one is
+  left alone, so clicking EXIT never nags. `--fps` only seeds it. With
+  [flow control](#sof-rate-and-flow-control) on, this is the ceiling: the stream
+  follows the HOST down when the HOST cannot keep up.
 - **EXIT** is the **only** way out. The title-bar **X** and **Alt+F4** are
   deliberately swallowed — `SC_CLOSE` is deleted from the window's system menu
   (Windows then draws the X greyed out and non-clickable) and `WM_CLOSE` is
@@ -299,17 +369,32 @@ the clients need no reconfiguration. See
 - **CIGI version 3.3**, little-endian on the wire.
 - A message is framed as `[message-id(1)][message-size(1)][payload...]` where
   `size` is the total byte length including the two header bytes.
-- The SOF is `65 18 03 00 00 <b5> 00 80` + frame number + timestamp +
-  last-host-frame + pad, where byte 5 packs the CIGI minor version (bits 4-7;
-  3.3 => `0x30`) together with the **IG mode** (bits 0-1).
+- The SOF is `65 18 03 00 00 <b5> 00 80` + a 4-byte field + 12 zero bytes, where
+  byte 5 packs the CIGI minor version (bits 4-7; 3.3 => `0x30`) together with the
+  **IG mode** (bits 0-1). The `0x00 0x80` at offsets 6-7 is the byte-swap flag
+  (little-endian).
+- That 4-byte field at offset 8 is the **HOST's frame counter**, echoed out of
+  the IG Control it arrived in — *not* a count of the SOFs this program has sent.
+  It is the only SOF field that ever changes, and in `Host-Master.pcapng` it
+  advances ~0.52 per SOF, i.e. at the HOST's own frame rate (~53 Hz) rather than
+  at the SOF rate (~100 Hz, an 8/12 ms alternation). Offsets 12 and 16
+  (timestamp, last-host-frame) were left at zero by the reference Master and are
+  still zero here, which makes the outgoing SOF byte-identical to the captured
+  one — see [SOF rate and flow control](#sof-rate-and-flow-control) for why the
+  field matters.
 - The IG never picks its own mode: the HOST commands it with IG Control and the
   SOF reports it back. CigiStarter follows that, so byte 5 becomes `0x31`
   (Operate) as soon as the HOST asks for Operate — which the reference HOST in
   `hlm.bin` does in every one of its 1160 datagrams. `--ig-mode` only sets the
   mode reported *before* the first IG Control arrives.
 - SOF pacing uses the 1 ms system timer resolution (`timeBeginPeriod(1)`).
-  Windows' default granularity is 15.6 ms (~64 Hz), which makes any rate above
-  ~60 Hz fire in back-to-back bursts that overwhelm the HOST.
+  Windows' default granularity is 15.6 ms (~64 Hz), so without it any rate above
+  ~60 Hz is really paced at ~64 Hz with an occasional burst. That is worth
+  knowing when comparing rates against another tool: a replay loop built on
+  `Sleep(8)`/`Sleep(12)` asks for 100 Hz and gets ~64. CigiStarter raises the
+  timer so that the rate it is asked for is the rate it sends, and
+  [flow control](#sof-rate-and-flow-control) then keeps that stream inside what
+  the HOST can absorb.
 - HAT/HOT responses use the CIGI 3.3 layouts: the 16-byte Response (102) carries
   a single `Height` double at offset 8, and the 40-byte Extended Response (103)
   carries `HAT` at offset 8 and `HOT` at offset 16. **Both** have a 3-byte
@@ -323,8 +408,9 @@ the clients need no reconfiguration. See
 | File               | Purpose                                        |
 |--------------------|------------------------------------------------|
 | `main.cpp`         | entry point, sockets, SOF + receive threads, window callbacks |
-| `Gui.h`            | operator-window API: status snapshot + start/stop/HAT-HOT/rate/quit hooks |
-| `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT check box, SOF rate box) |
+| `SofPacer.h`       | flow-control rule: whether a due SOF may be sent |
+| `Gui.h`            | operator-window API: status snapshot + start/stop/HAT-HOT/flow-control/rate/quit hooks |
+| `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT + flow-control check boxes, SOF rate box) |
 | `cigi.h`           | CIGI 3.3 message IDs, sizes, pack/parse API    |
 | `cigi.cpp`         | explicit little-endian message packing         |
 | `TerrainSource.h`  | FSUIPC-backed terrain/aircraft snapshot API    |
