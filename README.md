@@ -292,16 +292,41 @@ It answers HAT/HOT whenever it is loaded, because it is the surface Prepar3D
 will actually place the aircraft on.
 
 - **Installing it** (on the IG PC): copy `PdkTerrainProbe.dll` and its
-  `add-on.xml` into a folder Prepar3D scans for add-ons — for instance
-  `C:\ProgramData\Lockheed Martin\Prepar3D v6\add-ons\PdkTerrainProbe\` — and
-  restart Prepar3D. `tasklist /m PdkTerrainProbe.dll` should then list
-  Prepar3D. See `tools\PdkTerrainProbe\README.md`.
+  `add-on.xml` into Prepar3D's default add-on discovery folder, one level deep —
+  `%USERPROFILE%\Documents\Prepar3D v6 Add-ons\PdkTerrainProbe\` (or
+  `Prepar3D v5 Add-ons` on v5) — and restart Prepar3D. That Documents folder is
+  what Prepar3D discovers; the `add-ons` folder under
+  `%PROGRAMDATA%\Lockheed Martin\Prepar3D v6\` is **not** scanned. Then
+  `tasklist /m PdkTerrainProbe.dll` should list Prepar3D — if it does not, the
+  package is probably there but switched **off**: Prepar3D keeps an `ACTIVE`
+  entry per package in `%APPDATA%\Lockheed Martin\Prepar3D vN\add-ons.cfg` and
+  shows the same switch in its **Options → Add-ons** dialog, and a disabled
+  package is never loaded however right the folder looks. See
+  `tools\PdkTerrainProbe\README.md`.
+- **On a Professional Plus sim, the sim itself holds 8000.** Prepar3D's CIGI
+  feature ships with the **Professional Plus** edition only, so the deployment's
+  Prepar3D Professional never has it: the IG owns 8000/8001 there with nothing to
+  contest it. A Professional Plus sim does have it — this bench machine's v5 is
+  one — and its CIGI is already pointed at those ports (`SendPort=8000`,
+  `ReceivePort=8001` in
+  `%APPDATA%\Lockheed Martin\Prepar3D v5\CigiConfig.cfg`), so `Prepar3D.exe`
+  holds `0.0.0.0:8000` from launch whether or not a CIGI session was started
+  (`netstat -ano -p udp | findstr :8000` shows it). Point the sim's CIGI
+  elsewhere in that file, or leave the sim alone and run the bench on other ports
+  (`--ig-port` / `--host-port`, see [Usage](#usage)).
+- **It has only ever run on the bench's sim.** The add-on is a PDK add-on, and
+  the only sim it has been loaded into is the bench's Professional Plus v5. The
+  deployment's Prepar3D Professional has not been tried yet, so whether that
+  edition accepts it is still open; if it is refused, the answers come from the
+  database ([below](#terrain-database)) and nothing else changes.
 - **Not having it** is not an error: CigiStarter opens the shared region lazily
   and re-tries every 2 s, so the two may be started in either order, and with no
   add-on the answer simply comes from the database as before.
-- **Building it** needs the Prepar3D SDK (v5 or v6 — the interface has the same
-  name and GUID in v4, v5 and v6), but *running* it does not, which is why it is
-  a separate project rather than part of `CigiStarter.sln`.
+- **Building it** needs the Prepar3D SDK (v5 or v6 — the surface query is the
+  same in both, but the object manager it ticks from is `V520` on v5 and `V540`
+  on v6, and the project picks the right one from the SDK path), but *running*
+  it does not, which is why it is a separate project rather than part of
+  `CigiStarter.sln`.
 - **`--terrain-offset` is not applied to a height that came from the sim.** That
   option calibrates the *database's* datum against the sim; a value from the sim
   needs no calibration, and applying it would correct it twice.
@@ -309,6 +334,12 @@ will actually place the aircraft on.
   echoes the latitude and longitude it was measured for, so a request that has
   moved in the meantime is refused and falls back rather than being answered
   with the terrain of wherever the aircraft used to be.
+- **A point the sim has not answered yet is waited for, briefly.** The add-on
+  answers on its own tick, so the first request for a point lands 30–60 ms
+  behind the query (79 ms worst seen on v5). Rather than drop that one reply
+  onto the database, CigiStarter waits up to 120 ms for it and stops the moment
+  it arrives. It is paid once per point — every later reply for that point is
+  already in the table — so the steady state never waits.
 
 ### Terrain database
 

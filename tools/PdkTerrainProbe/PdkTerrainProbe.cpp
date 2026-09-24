@@ -43,11 +43,19 @@ terrain::probe::Shared*   g_shm     = nullptr;
 
 ISurfaceQueryManagerV400* g_surface = nullptr;
 
-// The current manager interface, not the legacy V400 one: registering a
+// The object-manager interface the callbacks below live on.  Registering a
 // callback is enough to answer queries, but unregistering one on shutdown needs
-// the newer version, and leaving a pointer into an unloading DLL behind is a
-// good way to crash the sim on exit.
-ISimObjectManagerV540*    g_objects = nullptr;
+// an interface that can do it -- leaving a pointer into an unloading DLL behind
+// is a good way to crash the sim on exit.  That interface grew a method over
+// time and the versions do not share a GUID: the v5 SDK tops out at V520, the
+// v6 SDK at V540.  Query whichever the SDK in use declares; the project defines
+// P3D_MANAGER_V520 when it is pointed at the v5 headers.
+#if defined(P3D_MANAGER_V520)
+using ObjectManager = P3D::ISimObjectManagerV520;
+#else
+using ObjectManager = P3D::ISimObjectManagerV540;
+#endif
+ObjectManager*            g_objects = nullptr;
 
 class ProbeSim;
 ProbeSim*                 g_sim  = nullptr;  // one ref held by us, one by the host object
@@ -222,6 +230,10 @@ void attachTo(IBaseObjectV400* obj) {
     g_host = obj;
     g_sim  = sim;
     publish(0);
+
+    // Record the rate we asked the sim for, so the reader can tell a probe that
+    // is merely running from one the sim is actually ticking.
+    if (g_shm) g_shm->tickRateHz = static_cast<uint32_t>(kTickHz);
 }
 
 void detach() {
@@ -266,15 +278,22 @@ STDMETHODIMP_(void) DLLStart(__in __notnull IPdk* pPdk)
     openShared();
     if (!g_shm) return;
 
-    // The service that does the actual work.  Same interface and GUID in the
-    // v4, v5 and v6 SDKs, so one build serves any of them.
-    if (FAILED(pPdk->QueryService(IID_ISurfaceQueryManagerV400, IID_ISurfaceQueryManagerV400,
+    // The service that does the actual work.  Both the service id and the
+    // interface are the same in the v4, v5 and v6 SDKs, so one build serves any
+    // of them.
+    //
+    // QueryService takes the *service* id first and the interface second, and
+    // for this one the two are not the same GUID: SID_SurfaceQueryManager is
+    // {0099b8b4-...} while IID_ISurfaceQueryManagerV400 is {87fff968-...}.
+    // Passing the IID as the service returns E_NOINTERFACE, which left the probe
+    // ticking with no terrain service behind it (alive == 0).
+    if (FAILED(pPdk->QueryService(SID_SurfaceQueryManager, IID_ISurfaceQueryManagerV400,
                                   reinterpret_cast<void**>(&g_surface)))) {
         g_surface = nullptr;
         publish(E_NOINTERFACE);
     }
 
-    if (FAILED(pPdk->QueryService(SID_SimObjectManager, IID_ISimObjectManagerV540,
+    if (FAILED(pPdk->QueryService(SID_SimObjectManager, __uuidof(ObjectManager),
                                   reinterpret_cast<void**>(&g_objects)))) {
         g_objects = nullptr;
         if (!g_surface) publish(E_NOINTERFACE);

@@ -57,6 +57,10 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Debug'">_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Release'">NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- The object-manager interface the probe drives differs between the
+           SDKs: the v5 headers have no V540, so a build against them selects
+           V520 instead (see PdkTerrainProbe.cpp). -->
+      <PreprocessorDefinitions Condition="$(P3DSdkDir.Contains('v5 SDK'))">P3D_MANAGER_V520;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

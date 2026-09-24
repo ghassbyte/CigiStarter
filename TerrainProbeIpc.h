@@ -44,12 +44,21 @@
 // moved is refused and the caller falls back, rather than being answered with
 // somebody else's terrain.
 //
-// Everything is plain fixed-width fields, so both sides agree on the layout
-// regardless of compiler packing.  Coordinates are in CIGI's units (degrees and
-// metres); only the probe converts to the radians/feet the PDK expects.
+// Coordinates are in CIGI's units (degrees and metres); only the probe converts
+// to the radians/feet the PDK expects.
+//
+// The fields are all fixed width, so both sides agree on every field's offset.
+// The array *strides* are not implied by that, though: a struct's size still
+// depends on the packing, and if one side were built at a different /Zp the two
+// would agree on slot 0 and disagree on every slot after it -- a silently wrong
+// answer rather than a visible failure.  So the layout is pinned below with an
+// explicit pack(8), and the static_asserts make any change to it fail the build
+// on both sides.  Change the layout and you must bump kVersion as well, so a
+// stale counterpart is refused at attach instead of misread.
 //-----------------------------------------------------------------------------
 
 #include <stdint.h>
+#include <stddef.h>
 
 namespace terrain {
 namespace probe {
@@ -86,6 +95,9 @@ enum Status : uint32_t {
 // underground with the layer below the runway flattening and a point above it
 // with the runway itself, so the altitude has to be passed through rather than
 // guessed.
+// The layout below is the contract with the other process: pinned, not left to
+// the compiler's default /Zp.
+#pragma pack(push, 8)
 struct Query {
     double   latDeg;
     double   lonDeg;
@@ -127,6 +139,19 @@ struct Shared {
     Query  queries[kMaxQueries];
     Result results[kMaxQueries];
 };
+#pragma pack(pop)
+
+// The numbers here are the wire contract, not incidental: a pad byte, an added
+// field or a differently packed build shifts every slot after the first, and the
+// reader would then answer from the wrong row.  Fail the build instead.  If one
+// of these has to change, bump kVersion so the two binaries cannot mix.
+static_assert(sizeof(Query)  == 32, "Query must stay 32 bytes");
+static_assert(sizeof(Result) == 48, "Result must stay 48 bytes (44 + tail pad)");
+static_assert(offsetof(Shared, queries) == 48, "queries[] must start at 48");
+static_assert(offsetof(Shared, results) == 48 + kMaxQueries * 32,
+              "results[] must follow queries[] exactly");
+static_assert(sizeof(Shared) == 48 + kMaxQueries * (32 + 48),
+              "Shared must be exactly header + both tables");
 
 } // namespace probe
 } // namespace terrain

@@ -7,15 +7,19 @@
 //  here) against it.  It pins the three things a wrong answer would fly the
 //  aircraft into the ground over:
 //
-//    * a height is never invented -- no probe, or no reading for this point,
-//      means failure, so the caller falls back to the database;
+//    * a height is never invented -- no probe, or no reading for this point
+//      within the first-answer wait, means failure, so the caller falls back to
+//      the database rather than to a nearby point's terrain;
 //    * a reading is only used for the point it was taken at, so a request that
 //      has moved is refused rather than answered with the previous terrain;
 //    * a reading that is being rewritten underneath the reader is not believed
 //      (the seqlock), and a probe whose tick has stopped is not believed either.
 //
 //  Build/run:  msbuild test\PdkTerrainProbeTest.vcxproj /p:Configuration=Release
-//              test\bin\Release\PdkTerrainProbeTest.exe
+//              test\x64\Release\PdkTerrainProbeTest.exe
+//
+//  Close Prepar3D first: the harness plays the sim's half of the same shared
+//  region the real add-on uses, so it must be the only writer of it.
 //=============================================================================
 
 #include <windows.h>
@@ -196,13 +200,34 @@ int main(int argc, char** argv) {
     }
 
     // -- 3. A point never asked about ----------------------------------------
+    // The first ask for a point waits for the sim's tick instead of falling back
+    // to the database, so it comes back with that point's own terrain -- and
+    // never with the terrain of whatever the slot held before.
     {
         double hot = 0.0;
-        check(!terrain::probe::elevation(1, kHalimLat, kHalimLon, kHalimAlt, hot),
-              "a never-asked point is refused, not answered with nearby terrain");
-        check(poll(1, kHalimLat, kHalimLon, kHalimAlt, hot), "it is answered once sampled");
+        check(terrain::probe::elevation(1, kHalimLat, kHalimLon, kHalimAlt, hot),
+              "a never-asked point is answered");
         check(std::fabs(hot - FakeProbe::answer(kHalimLat, kHalimLon, kHalimAlt)) < 1e-9,
-              "with its own terrain");
+              "with its own terrain, not the previous point's");
+    }
+
+    // -- 3b. That wait is bounded, but long enough -----------------------------
+    // A sim that is not answering must not hold the caller up: the wait ends,
+    // the caller's height is left alone, and it falls back to the database.
+    // It must also outlast a sim that *is* answering, just slowly: Prepar3D v5
+    // was measured taking 29-79 ms to land a fresh query, so the floor pinned
+    // here is well inside that. A budget below it would put the reply back on
+    // the database, which is the bug this wait exists to fix.
+    {
+        fake.setAnswering(false);
+        double hot = -12345.0;
+        const DWORD t0 = ::GetTickCount();
+        const bool answered = terrain::probe::elevation(2, kAtangLat, kAtangLon - 1.0, kAtangAlt, hot);
+        const DWORD took = ::GetTickCount() - t0;
+        check(!answered, "a point the sim has not answered is refused");
+        check(hot == -12345.0, "and the caller's height is left alone");
+        check(took >= 100, "after waiting past the sim's slowest observed reply");
+        fake.setAnswering(true);
     }
 
     // -- 4. The same probe id, moved -----------------------------------------

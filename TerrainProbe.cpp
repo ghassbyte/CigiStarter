@@ -54,6 +54,7 @@ double g_slotHotLat[kMaxQueries] = {};
 double g_slotHotLon[kMaxQueries] = {};
 double g_slotHotAlt[kMaxQueries] = {};
 bool   g_slotHasHot[kMaxQueries] = {};
+bool   g_slotProbed[kMaxQueries] = {};  // the sim has answered this slot's query
 
 // How far a reading may be from the point that was asked about and still count
 // as an answer to it. The HOST's probes sit within a few metres of the
@@ -67,6 +68,16 @@ constexpr DWORD kReopenIntervalMs = 2000;
 
 // The port never ticks for this long and we treat it as gone.
 constexpr DWORD kStaleAfterMs = 1500;
+
+// A point the sim has not been asked about before is only answered on one of its
+// own ticks, and a tick that lands a fresh query arrives on the order of 30-60 ms
+// after the write was made -- measured against Prepar3D v5, whose callback also
+// re-queries every enabled slot on each pass, so the worst seen was 79 ms. An
+// immediate read misses that first reply and drops the caller onto the offline
+// database; wait this long instead, so the wait covers the worst case and still
+// ends the moment the answer lands. Only ever paid once per point -- every later
+// reply is already in the table.
+constexpr DWORD kFirstAnswerWaitMs = 120;
 
 bool tryOpen() {
     if (g_shm) return true;
@@ -97,6 +108,7 @@ bool tryOpen() {
     g_shm     = s;
     std::memset(g_slotUsed, 0, sizeof(g_slotUsed));
     std::memset(g_slotHasHot, 0, sizeof(g_slotHasHot));
+    std::memset(g_slotProbed, 0, sizeof(g_slotProbed));
     return true;
 }
 
@@ -135,7 +147,13 @@ bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters, dou
     }
     if (slot == kMaxQueries) {
         for (unsigned i = 0; i < kMaxQueries; ++i) {
-            if (!g_slotUsed[i]) { slot = i; g_slotUsed[i] = true; g_slotKey[i] = key; break; }
+            if (!g_slotUsed[i]) {
+                slot            = i;
+                g_slotUsed[i]   = true;
+                g_slotKey[i]    = key;
+                g_slotProbed[i] = false;  // nothing has been asked of the sim yet
+                break;
+            }
         }
     }
     if (slot == kMaxQueries) return false;  // more callers than slots
@@ -150,24 +168,50 @@ bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters, dou
 
     // Seqlock read: take the version before and after, and only believe the row
     // if it did not move underneath us.
-    bool   fresh = false;
+    bool   fresh    = false;
     double freshHot = 0.0;
 
-    for (int attempt = 0; attempt < 4 && !fresh; ++attempt) {
+    // A point the sim has not answered yet takes a tick before it has an answer
+    // at all, so wait for that first reply rather than falling through to the
+    // offline database. Only for the first reply, though: once the sim has
+    // answered this slot -- refused points included -- every later reply is
+    // already in the row, so steady state never waits.
+    const bool  firstAnswer = !g_slotProbed[slot];
+    const DWORD waitUntil   = ::GetTickCount() +
+                              (firstAnswer ? kFirstAnswerWaitMs : 0);
+
+    for (int attempt = 0; !fresh; ++attempt) {
         const uint32_t before = g_shm->rspSeq;
-        if (before & 1u) { ::Sleep(0); continue; }  // the probe is mid-rewrite
 
-        Result r;
-        std::memcpy(&r, &g_shm->results[slot], sizeof(r));
+        if (!(before & 1u)) {                       // the sim is not mid-rewrite
+            Result r;
+            std::memcpy(&r, &g_shm->results[slot], sizeof(r));
 
-        if (g_shm->rspSeq != before) continue;      // it changed while we read
+            if (g_shm->rspSeq == before &&          // it did not move while we read
+                r.key == key &&
+                std::fabs(r.latDeg - latDeg) <= kEchoToleranceDeg &&
+                std::fabs(r.lonDeg - lonDeg) <= kEchoToleranceDeg) {
+                if (r.status == StatusOk) {
+                    g_slotProbed[slot] = true;
+                    freshHot = r.hotMeters;
+                    fresh    = true;
+                } else if (r.status != StatusNone) {
+                    g_slotProbed[slot] = true;      // answered, just refused
+                    if (firstAnswer) break;
+                }
+                // StatusNone: the sim has not looked at it yet; keep waiting.
+            }
+        }
+        if (fresh) break;
 
-        if (r.status != StatusOk || r.key != key) continue;
-        if (std::fabs(r.latDeg - latDeg) > kEchoToleranceDeg) continue;
-        if (std::fabs(r.lonDeg - lonDeg) > kEchoToleranceDeg) continue;
-
-        freshHot = r.hotMeters;
-        fresh    = true;
+        if (firstAnswer) {
+            if (::GetTickCount() >= waitUntil) break;
+            ::Sleep(1);                             // let the sim's tick land
+        } else if (attempt >= 3) {
+            break;                                  // the cache below covers it
+        } else {
+            ::Sleep(0);
+        }
     }
 
     if (fresh) {
@@ -218,6 +262,7 @@ void stop() {
     g_nextTryAtMs = 0;
     std::memset(g_slotUsed, 0, sizeof(g_slotUsed));
     std::memset(g_slotHasHot, 0, sizeof(g_slotHasHot));
+    std::memset(g_slotProbed, 0, sizeof(g_slotProbed));
 }
 
 } // namespace probe

@@ -121,8 +121,9 @@ looking to them exactly like the HOST's own.
 | IG mode           | commanded by the HOST via IG Control; the SOF echoes it back |
 | HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
 | SOF live field    | the HOST's frame counter, echoed at offset 8; offsets 12/16 stay 0 |
+| Sim at the IG PC  | Prepar3D Professional — its CIGI feature is a Professional Plus extra, so the IG's 8000/8001 are not contested there |
 | Terrain source    | P3D's own terrain via the `PdkTerrainProbe` add-on; then an SRTM `.hgt` tileset; then FSUIPC `0x0020` |
-| Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D; free-standing query, no SimObject; optional |
+| Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D; free-standing query, no SimObject; optional, and so far only ever loaded into the bench's Professional Plus sim |
 | Terrain database  | `.hgt` tiles in `terrain\` by default or `--terrain-dir`; from `tools\get_terrain.ps1` or a `tools\TerrainBaker` bake |
 | Extra IG PCs      | `client.txt` beside the executable, `address[:port]`, read once at startup |
 | Fan-out           | one Npcap-injected copy per client, HOST source address/port spoofed |

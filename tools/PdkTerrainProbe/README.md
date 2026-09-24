@@ -43,6 +43,17 @@ They share one block of memory, described in `../../TerrainProbeIpc.h`:
   for the point it was actually measured at. A request that has moved in the
   meantime is refused, and the IG falls back to the database — it is never
   answered with the terrain of wherever the aircraft used to be.
+* The first request for a point is waited for, briefly, rather than being handed
+  to the database: an answer only lands on a tick, so the IG waits up to 120 ms
+  for that first reply and stops the moment it arrives. Later replies for the
+  same point are already in the row, so only the first one ever waits.
+* The layout of that memory is pinned in `TerrainProbeIpc.h` — an explicit
+  `pack(8)` plus a `static_assert` on every size and offset. The fields being
+  fixed width is not enough on its own: if the two binaries were built at
+  different packings they would agree on the first slot and silently misread
+  every slot after it, answering from the wrong row. A layout change therefore
+  has to bump `kVersion` too, so a stale DLL is refused when it attaches instead
+  of being misread.
 
 CigiStarter only ever wants about six points at a time, but the table holds 256
 and the add-on answers every enabled one on each tick. `tools\TerrainBaker` uses
@@ -51,8 +62,7 @@ no longer needs FSUIPC, slew mode or a reposition per cell.
 
 ## Building
 
-Needs the Prepar3D PDK headers (v5 or v6; the interface has the same name and
-GUID in v4, v5 and v6, so any of them builds the same DLL). A copy of `inc\PDK`
+Needs the Prepar3D PDK headers (v5 or v6). A copy of `inc\PDK` from the v6 SDK
 ships in `..\..\external\Prepar3D-SDK\inc\PDK\`, and that is what the project
 defaults to — the add-on links only system libraries, so a full SDK installation
 is not needed.
@@ -61,8 +71,19 @@ is not needed.
 msbuild PdkTerrainProbe.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
 
-Point it at a full SDK installation instead with `/p:P3DSdkDir=...`. Output
-lands in `bin\Release\PdkTerrainProbe.dll`.
+Point it at a full SDK installation instead with `/p:P3DSdkDir=...`. The surface
+query (`ISurfaceQueryManagerV400`) is the same in v5 and v6, but the tick that
+drives it hangs off the object manager, and that interface grew a method: **v5
+tops out at `V520`, v6 at `V540`**, and the two do not share a GUID. The project
+picks the right one from the path — `v5 SDK` in it selects `V520` — so the v5
+DLL is built with:
+
+```
+msbuild PdkTerrainProbe.vcxproj /p:Configuration=Release /p:Platform=x64 ^
+        /p:P3DSdkDir="C:\Program Files\Lockheed Martin\Prepar3D v5 SDK 5.4.9.28482"
+```
+
+Output lands in `bin\Release\PdkTerrainProbe.dll`.
 
 Note: this project is deliberately **not** in `CigiStarter.sln`. It needs the
 sim's SDK, and a machine that only builds the IG should not have its build
@@ -70,13 +91,21 @@ broken by that. Build it where the SDK is, and ferry the DLL.
 
 ## Installing on the IG PC
 
-1. Make a folder Prepar3D scans for add-ons — the usual place is
+1. Put the pair in Prepar3D's default add-on discovery folder, one level deep:
 
    ```
-   C:\ProgramData\Lockheed Martin\Prepar3D v6\add-ons\PdkTerrainProbe\
+   %USERPROFILE%\Documents\Prepar3D v6 Add-ons\PdkTerrainProbe\
    ```
 
-   (use `...\Prepar3D v5\add-ons\` on v5).
+   (use `...\Prepar3D v5 Add-ons\` on v5). The Documents folder is the one
+   Prepar3D discovers; the `add-ons` folder beside `add-ons.cfg` under
+   `%PROGRAMDATA%\Lockheed Martin\Prepar3D v6\` is **not** scanned, and an
+   add-on left there is silently never loaded. For a machine-wide install
+   instead of a per-user one, register the package:
+
+   ```
+   Prepar3D.exe "-Configure: Category=Add-on Package, Operation=Add, Path=<the folder>"
+   ```
 
 2. Copy `PdkTerrainProbe.dll` and `add-on.xml` into it. `add-on.xml` refers to
    the DLL by relative path, so the two must sit together.
@@ -90,9 +119,13 @@ Check that it loaded:
 tasklist /m PdkTerrainProbe.dll
 ```
 
-Prepar3D should be listed. If it is not, Prepar3D is not loading the add-on —
-check the folder and `add-on.xml`, and look for loading errors in Prepar3D's
-own logging.
+Prepar3D should be listed. If it is not, the usual cause is not the files but
+the enable flag: Prepar3D keeps one `ACTIVE` entry per package in
+`%APPDATA%\Lockheed Martin\Prepar3D v5\add-ons.cfg` (v6 likewise), its
+**Options → Add-ons** dialog shows the same switch, and a package with
+`ACTIVE=false` is not loaded at all — the folder and `add-on.xml` can be
+perfect while the DLL never appears. Look there first, then at the folder and
+`add-on.xml`, then at Prepar3D's own logging for loading errors.
 
 No elevation is needed, and unlike the fan-out it needs no Npcap.
 
@@ -135,4 +168,4 @@ alt*0.001`, so a tool run against it can be checked against that formula.
 
 What it cannot cover is Prepar3D's side: whether `QuerySurfaceElevation` returns
 what the reference IG returned at a given airport. That needs the sim, and is
-the first thing to check on the IG PC once v6 is up.
+the first thing to check on the IG PC once the add-on is loaded.
