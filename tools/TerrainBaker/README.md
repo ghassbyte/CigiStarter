@@ -67,7 +67,7 @@ either the 1″ set or the 90 m set. A bake of the default boxes consults only
 # 0. the add-on, once per IG PC (see tools\PdkTerrainProbe\README.md)
 $addons = "$env:USERPROFILE\Documents\Prepar3D v6 Add-ons\PdkTerrainProbe"
 mkdir $addons
-copy tools\PdkTerrainProbe\bin\Release\PdkTerrainProbe.dll $addons
+copy tools\PdkTerrainProbe\bin\Release-v6\PdkTerrainProbe.dll $addons
 copy tools\PdkTerrainProbe\add-on.xml                      $addons
 #    ...and restart Prepar3D.
 

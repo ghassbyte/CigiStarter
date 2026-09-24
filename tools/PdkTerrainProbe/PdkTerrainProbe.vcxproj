@@ -32,17 +32,26 @@
 
   <!-- Where the Prepar3D PDK headers live. The default is the vendored copy of
        inc\PDK from the v6 SDK; a full SDK installation is not needed, because
-       the add-on links only system libraries. The surface query interface has
-       the same name and GUID in the v4, v5 and v6 SDKs, so any of them builds
-       the same DLL; override to build against a full installation, e.g.
+       the add-on links only system libraries. Point it at a full installation
+       to build for another simulator, e.g.
 
          msbuild PdkTerrainProbe.vcxproj /p:Configuration=Release ^
                  /p:P3DSdkDir="C:\Program Files\Lockheed Martin\Prepar3D v5 SDK 5.4.9.28482" -->
   <PropertyGroup>
     <P3DSdkDir Condition="'$(P3DSdkDir)'==''">$(MSBuildProjectDirectory)\..\..\external\Prepar3D-SDK</P3DSdkDir>
     <P3DPdkInc>$(P3DSdkDir)\inc\PDK</P3DPdkInc>
-    <OutDir>$(MSBuildProjectDirectory)\bin\$(Configuration)\</OutDir>
-    <IntDir>$(MSBuildProjectDirectory)\obj\$(Configuration)\</IntDir>
+    <!-- The SDKs are not interchangeable: the tick that drives the surface
+         query hangs off the object-manager interface, and that grew a method.
+         v5 tops out at V520 and v6 at V540 (see PdkTerrainProbe.cpp), so the
+         two builds really are two different DLLs and must not share an output
+         folder (one would overwrite the other) or an intermediate folder (one
+         build would reuse the other's objects). Both are named for the variant,
+         tagged by the same test that picks the interface, so the folder and the
+         compiled interface cannot disagree. -->
+    <P3DSdkTag Condition="$(P3DSdkDir.Contains('v5 SDK'))">v5</P3DSdkTag>
+    <P3DSdkTag Condition="'$(P3DSdkTag)'==''">v6</P3DSdkTag>
+    <OutDir>$(MSBuildProjectDirectory)\bin\$(Configuration)-$(P3DSdkTag)\</OutDir>
+    <IntDir>$(MSBuildProjectDirectory)\obj\$(Configuration)-$(P3DSdkTag)\</IntDir>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />

@@ -67,28 +67,39 @@ no longer needs FSUIPC, slew mode or a reposition per cell.
 
 ## Building
 
-Needs the Prepar3D PDK headers (v5 or v6). A copy of `inc\PDK` from the v6 SDK
-ships in `..\..\external\Prepar3D-SDK\inc\PDK\`, and that is what the project
-defaults to — the add-on links only system libraries, so a full SDK installation
-is not needed.
+There are two DLLs, one per simulator, each built against that simulator's own
+headers. Needs the Prepar3D PDK headers (v5 or v6); a copy of `inc\PDK` from the
+v6 SDK ships in `..\..\external\Prepar3D-SDK\inc\PDK\`, and that is what the
+project defaults to — the add-on links only system libraries, so a full SDK
+installation is not needed.
+
+The surface query (`ISurfaceQueryManagerV400`) is the same in v5 and v6, but the
+tick that drives it hangs off the object manager, and that interface grew a
+method: **v5 tops out at `V520`, v6 at `V540`**, and the two do not share a GUID.
+The project takes the interface from the SDK path — `v5 SDK` in it selects
+`V520` — so point `/p:P3DSdkDir` at the SDK for the simulator you are building
+for:
 
 ```
+# for Prepar3D v6, against the vendored v6 headers (the default)
 msbuild PdkTerrainProbe.vcxproj /p:Configuration=Release /p:Platform=x64
-```
 
-Point it at a full SDK installation instead with `/p:P3DSdkDir=...`. The surface
-query (`ISurfaceQueryManagerV400`) is the same in v5 and v6, but the tick that
-drives it hangs off the object manager, and that interface grew a method: **v5
-tops out at `V520`, v6 at `V540`**, and the two do not share a GUID. The project
-picks the right one from the path — `v5 SDK` in it selects `V520` — so the v5
-DLL is built with:
-
-```
+# for Prepar3D v5, against the v5 SDK
 msbuild PdkTerrainProbe.vcxproj /p:Configuration=Release /p:Platform=x64 ^
         /p:P3DSdkDir="C:\Program Files\Lockheed Martin\Prepar3D v5 SDK 5.4.9.28482"
 ```
 
-Output lands in `bin\Release\PdkTerrainProbe.dll`.
+Each lands in its own folder, named for the simulator, so both can be built and
+kept side by side — the SDK path selects the folder as well as the interface, so
+one build cannot overwrite the other:
+
+| Built for | Headers | Output |
+|---|---|---|
+| Prepar3D v6 | the vendored copy, or a v6 SDK via `/p:P3DSdkDir` | `bin\Release-v6\PdkTerrainProbe.dll` |
+| Prepar3D v5 | a v5 SDK via `/p:P3DSdkDir` | `bin\Release-v5\PdkTerrainProbe.dll` |
+
+Deploy the one that matches the Prepar3D on the machine. Both are called
+`PdkTerrainProbe.dll`, because `add-on.xml` names it that way.
 
 Note: this project is deliberately **not** in `CigiStarter.sln`. It needs the
 sim's SDK, and a machine that only builds the IG should not have its build
