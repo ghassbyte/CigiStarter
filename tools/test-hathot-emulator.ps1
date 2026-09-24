@@ -30,15 +30,19 @@
     (CigiStarter, and the Host Emulator from external\HostEmulator_Win32_v3.3.3)
     unless -NoLaunch is given. Starting the emulator writes its link setup to
     HKCU\Software\Boeing TSS\CIGI Host Emulator 3 first, because that is where
-    the emulator reads it.
+    the emulator reads it. A running emulator saved to a different port is
+    restarted, because it reads that setup once, at startup.
 
     On this machine's bench Prepar3D (Professional Plus) holds UDP 8000 for its
-    own CIGI, so the bench link runs on 8010/8011:
+    own CIGI, so the bench link runs on 8010/8011. -Local is that whole-bench
+    preset, and is the one command a local run needs:
 
-        .\tools\test-hathot-emulator.ps1 -IgPort 8010 -HostPort 8011
+        .\tools\test-hathot-emulator.ps1 -Local
 
-    The exit code is 0 when every check passed (or was skipped with a reason)
-    and 1 when any check failed.
+    The last line is the verdict, RESULT: PASS or RESULT: FAIL, and the exit
+    code is 0 when every check passed (or was skipped with a reason) and 1 when
+    any check failed. With -Stop, the CigiStarter and Host Emulator this run
+    started are taken down before the verdict is printed.
 
 .PARAMETER IgPort
     CigiStarter's receive port: the HOST's flight data and HAT/HOT requests
@@ -68,19 +72,32 @@
     Only test a bench that is already up: never start CigiStarter or the Host
     Emulator. The script fails with what is missing.
 
+.PARAMETER Local
+    The whole-bench-on-one-PC preset: the loopback adapter and the 8010/8011
+    port pair (8000 is Prepar3D's own CIGI on this machine). An -IgPort or
+    -HostPort given explicitly still wins over it.
+
+.PARAMETER Stop
+    Stop the CigiStarter and Host Emulator that this run started, once the
+    checks are done. A bench that was already up is left alone.
+
 .PARAMETER Out
     Folder for the captures and dumpcap's stderr. Defaults to
     %TEMP%\cigi-hathot-tests.
 
 .EXAMPLE
-    # the full bench, start to finish (P3D running with the terrain probe, so
-    # the 'sim is the terrain source' check runs too):
-    .\tools\test-hathot-emulator.ps1 -IgPort 8010 -HostPort 8011
+    # the whole local bench, one command, ending in a PASS or FAIL verdict:
+    .\tools\test-hathot-emulator.ps1 -Local
+
+.EXAMPLE
+    # the full bench (P3D running with the terrain probe, so the 'sim is the
+    # terrain source' check runs too), then take it down again:
+    .\tools\test-hathot-emulator.ps1 -Local -Stop
 
 .EXAMPLE
     # no P3D needed: CigiStarter answers geodetic requests from the SRTM
-    # database instead, and the probe check is skipped with that reason:
-    .\tools\test-hathot-emulator.ps1 -IgPort 8010 -HostPort 8011 -NoLaunch
+    # database instead, and the two sim-dependent checks are skipped:
+    .\tools\test-hathot-emulator.ps1 -Local -NoLaunch
 #>
 [CmdletBinding()]
 param(
@@ -91,6 +108,8 @@ param(
     [string] $CigiStarterExe = '',
     [string] $EmulatorExe    = '',
     [switch] $NoLaunch,
+    [switch] $Local,
+    [switch] $Stop,
     [string] $Out = "$env:TEMP\cigi-hathot-tests"
 )
 
@@ -101,6 +120,15 @@ if (-not $CigiStarterExe) { $CigiStarterExe = Join-Path $repo 'x64\Release\CigiS
 if (-not $EmulatorExe)    { $EmulatorExe    = Join-Path $repo 'external\HostEmulator_Win32_v3.3.3\Hemu3.exe' }
 $decodeTool = Join-Path $PSScriptRoot 'capture-hat-hot.ps1'
 $regKey     = 'HKCU:\Software\Boeing TSS\CIGI Host Emulator 3'
+
+# -Local is the whole bench on one PC: the loopback adapter and the port pair
+# that is free while Prepar3D's own CIGI holds 8000. A port given by hand still
+# wins, so a one-off can still be aimed at another pair.
+if ($Local) {
+    if (-not $PSBoundParameters.ContainsKey('IgPort'))   { $IgPort   = 8010 }
+    if (-not $PSBoundParameters.ContainsKey('HostPort')) { $HostPort = 8011 }
+    if (-not $PSBoundParameters.ContainsKey('Device'))   { $Device   = '\Device\NPF_Loopback' }
+}
 
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
@@ -148,6 +176,11 @@ $script:emuDialog = [IntPtr]::Zero
 $script:emuRadios = @{ 'HAT' = 1052; 'HOT' = 1053; 'Extended' = 1058; 'Geodetic' = 1059; 'Entity' = 1060 }
 $script:emuFields = @{ Id = 1482; X = 1474; Y = 1475; Z = 1476; Period = 1526 }
 $script:shmView   = $null
+
+# What this run started, so -Stop takes down only that and never a bench the
+# operator had already brought up.
+$script:startedCigi = $false
+$script:startedEmu  = $false
 
 #-----------------------------------------------------------------------------
 # Small helpers
@@ -200,6 +233,16 @@ function Run-Test([string]$Name, [scriptblock]$Body) {
     $script:currentTest = $Name
     try { & $Body }
     catch { Assert 'ran without throwing' $false $_.Exception.Message }
+}
+
+# The one line a run is read by, whether the bench came up or not.
+function Write-Verdict([string]$Text, [string]$Colour) {
+    $line = ('  RESULT: {0}' -f $Text)
+    $rule = '=' * $line.Length
+    Write-Host ''
+    Write-Host $rule -ForegroundColor $Colour
+    Write-Host $line -ForegroundColor $Colour
+    Write-Host $rule -ForegroundColor $Colour
 }
 
 #-----------------------------------------------------------------------------
@@ -402,16 +445,56 @@ function Set-EmulatorLink {
     Set-ItemProperty -Path $regKey -Name 'Big Endian'         -Value '0'
 }
 
-function Initialize-Bench {
-    Write-Host ("link: IG {0} (CigiStarter)  <->  HOST {1} (Host Emulator)   device {2}" -f $IgPort, $HostPort, $Device)
+# Close the emulator the way a person does: WM_CLOSE on its frame, which takes
+# HemuDrv down with it. The process is only forced when the window will not go.
+function Stop-Emulator {
+    foreach ($name in @('Hemu3', 'HemuDrv')) {
+        $procs = @(Get-Process $name -ErrorAction SilentlyContinue)
+        if ($procs.Count -eq 0) { continue }
+        foreach ($p in $procs) { [void][Emu]::PostMessage($p.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
+        $by = (Get-Date).AddSeconds(6)
+        while (@(Get-Process $name -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $by) {
+            Start-Sleep -Milliseconds 200
+        }
+        @(Get-Process $name -ErrorAction SilentlyContinue) | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+}
 
+# CigiStarter's title-bar X is swallowed by design, so it is stopped through its
+# own EXIT button (control id 1003), the one path the program provides.
+function Stop-CigiStarter {
+    $procs = @(Get-Process CigiStarter -ErrorAction SilentlyContinue)
+    if ($procs.Count -eq 0) { return }
+    foreach ($p in $procs) { [void][Emu]::PostMessage($p.MainWindowHandle, 0x0111, [IntPtr]1003, [IntPtr]::Zero) }
+    $by = (Get-Date).AddSeconds(8)
+    while (@(Get-Process CigiStarter -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $by) {
+        Start-Sleep -Milliseconds 200
+    }
+    @(Get-Process CigiStarter -ErrorAction SilentlyContinue) | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
+# -Stop: take down what this run started, and nothing else.
+function Stop-Bench {
+    Write-Host ''
+    Write-Host 'stopping the bench this run started'
+    if ($script:startedCigi) {
+        Write-Host '  CigiStarter (EXIT)'
+        Stop-CigiStarter
+    }
+    if ($script:startedEmu) {
+        Write-Host '  the Host Emulator (window close)'
+        Stop-Emulator
+    }
+}
+
+function Initialize-Bench {
     $owner = Get-UdpOwner $IgPort
     if ($owner -ne 0) {
         $proc = Get-Process -Id $owner -ErrorAction SilentlyContinue
         $name = 'another program'
         if ($proc) { $name = $proc.ProcessName }
         if (-not $proc -or $name -ne 'CigiStarter') {
-            throw ("UDP port {0} is held by {1} (pid {2}), not CigiStarter - stop it, or pass a different -IgPort" -f $IgPort, $name, $owner)
+            throw ("UDP port {0} is held by {1} (pid {2}), not CigiStarter - stop it, or run the local bench with -Local (8010/8011)" -f $IgPort, $name, $owner)
         }
         Write-Host ("  CigiStarter is listening on {0} (pid {1})" -f $IgPort, $owner)
     } elseif ($NoLaunch) {
@@ -421,18 +504,29 @@ function Initialize-Bench {
         Write-Host ("  starting {0}" -f $CigiStarterExe)
         Start-Process -FilePath $CigiStarterExe -WorkingDirectory (Split-Path -Parent $CigiStarterExe) `
             -ArgumentList @('--host-ip','127.0.0.1','--ig-ip','127.0.0.1','--ig-port',"$IgPort",'--host-port',"$HostPort")
+        $script:startedCigi = $true
         $by = (Get-Date).AddSeconds(15)
         while ((Get-UdpOwner $IgPort) -eq 0 -and (Get-Date) -lt $by) { Start-Sleep -Milliseconds 250 }
         if ((Get-UdpOwner $IgPort) -eq 0) { throw "CigiStarter did not come up on UDP port $IgPort" }
         Write-Host ("  CigiStarter is listening on {0} (pid {1})" -f $IgPort, (Get-UdpOwner $IgPort))
     }
 
-    $hemu = Get-Process Hemu3 -ErrorAction SilentlyContinue
+    $hemu  = Get-Process Hemu3 -ErrorAction SilentlyContinue
+    $saved = (Get-ItemProperty -Path $regKey -Name 'Remote Port' -ErrorAction SilentlyContinue).'Remote Port'
+
+    # The emulator reads its link setup once, at startup, so a running one saved
+    # against another port cannot be re-pointed from here: it is restarted
+    # rather than left to send into the void.
+    if ($hemu -and -not $NoLaunch -and $saved -and $saved -ne "$IgPort") {
+        Write-Host ("  the Host Emulator is up but saved to port {0}, not {1} - restarting it" -f $saved, $IgPort)
+        Stop-Emulator
+        $hemu = $null
+    }
+
     if ($hemu) {
         Write-Host ("  Host Emulator is running (pid {0})" -f $hemu.Id)
-        $saved = (Get-ItemProperty -Path $regKey -Name 'Remote Port' -ErrorAction SilentlyContinue).'Remote Port'
-        if ($saved -and $saved -ne "$IgPort") {
-            Write-Warning ("the emulator's saved Remote Port is $saved but CigiStarter is on $IgPort - if the running emulator was not re-pointed, no request will reach the IG")
+        if ($NoLaunch -and $saved -and $saved -ne "$IgPort") {
+            Write-Warning ("the emulator's saved Remote Port is $saved but this run wants $IgPort; -NoLaunch leaves it alone")
         }
     } elseif ($NoLaunch) {
         throw "-NoLaunch: the Host Emulator (Hemu3) is not running"
@@ -441,6 +535,7 @@ function Initialize-Bench {
         Write-Host ("  starting {0}" -f $EmulatorExe)
         Set-EmulatorLink
         Start-Process -FilePath $EmulatorExe -WorkingDirectory (Split-Path -Parent $EmulatorExe)
+        $script:startedEmu = $true
         $by = (Get-Date).AddSeconds(20)
         $hemu = $null
         while ((Get-Date) -lt $by) {
@@ -459,20 +554,40 @@ function Initialize-Bench {
 }
 
 #-----------------------------------------------------------------------------
-# Preflight
+# Preflight: say what the run has to work with, before it touches the bench.
+# Whatever stops it from coming up is reported as a FAIL verdict rather than as
+# a crash, so one command always ends in the same line.
 #-----------------------------------------------------------------------------
-$script:dumpcap = Find-Tool 'dumpcap.exe'
-$null = Find-Tool 'tshark.exe'
-if (-not (Test-Path $decodeTool)) { throw "the decode tool is missing: $decodeTool" }
-$script:hasP3d = [bool](Get-Process Prepar3D -ErrorAction SilentlyContinue)
-
+Write-Host ''
 Write-Host 'CigiStarter HAT/HOT bench tests'
-Initialize-Bench
-$probe = Get-ProbeHeader
-if ($null -ne $probe -and $probe.Alive -eq 1) {
-    Write-Host ("  terrain probe: loaded, ticking at {0} Hz, {1} query failure(s)" -f $probe.TickRateHz, $probe.QueryFails)
-} else {
-    Write-Host '  terrain probe: not loaded (answers come from the terrain database / FSUIPC)'
+try {
+    $script:dumpcap = Find-Tool 'dumpcap.exe'
+    $null = Find-Tool 'tshark.exe'
+    if (-not (Test-Path $decodeTool)) { throw "the decode tool is missing: $decodeTool" }
+    $script:hasP3d = [bool](Get-Process Prepar3D -ErrorAction SilentlyContinue)
+
+    Write-Host ("  link        IG {0} (CigiStarter)  <->  HOST {1} (Host Emulator)" -f $IgPort, $HostPort)
+    Write-Host ("  capture     {0}, {1}s per check, into {2}" -f $Device, $Seconds, $Out)
+    Write-Host ("  tooling     {0}" -f $script:dumpcap)
+    if ($script:hasP3d) {
+        Write-Host '  sim         Prepar3D is running'
+    } else {
+        Write-Host '  sim         Prepar3D is not running: the two sim-dependent checks will be skipped'
+    }
+
+    Initialize-Bench
+    $probe = Get-ProbeHeader
+    if ($null -ne $probe -and $probe.Alive -eq 1) {
+        Write-Host ("  probe       loaded, ticking at {0} Hz, {1} query failure(s)" -f $probe.TickRateHz, $probe.QueryFails)
+    } else {
+        Write-Host '  probe       not loaded (answers come from the terrain database / FSUIPC)'
+    }
+} catch {
+    Write-Host ''
+    Write-Host ("the bench did not come up: {0}" -f $_.Exception.Message) -ForegroundColor Red
+    if ($Stop) { Stop-Bench }
+    Write-Verdict 'FAIL   --   the bench did not come up' 'Red'
+    exit 1
 }
 
 # The points below: Atang Senjaya, Halim Perdanakusuma and Soekarno-Hatta. Any
@@ -691,8 +806,16 @@ if ($failed -gt 0) {
     $script:results | Where-Object { $_.Result -eq 'FAIL' } | Format-Table -AutoSize | Out-String | Write-Host
 }
 $script:results | Format-Table -AutoSize | Out-String | Write-Host
-Write-Host ''
-Write-Host ("{0} passed, {1} failed, {2} skipped   (captures in {3})" -f $passed, $failed, $skipped, $Out)
+Write-Host ("captures in {0}" -f $Out)
+
+if ($Stop) { Stop-Bench }
+
+# The verdict, last on the terminal and in colour, so a run can be read at a
+# glance and scripted from the exit code.
+$verdict = 'FAIL'
+$colour  = 'Red'
+if ($failed -eq 0) { $verdict = 'PASS'; $colour = 'Green' }
+Write-Verdict ('{0}   --   {1} passed, {2} failed, {3} skipped' -f $verdict, $passed, $failed, $skipped) $colour
 
 if ($failed -gt 0) { exit 1 }
 exit 0

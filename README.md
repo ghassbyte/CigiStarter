@@ -205,29 +205,94 @@ bench link runs on **8010/8011** instead — see
 [Terrain from the sim](#terrain-from-the-sim) for why. Only the four numbers
 change; everything else is the same.
 
-### The automated tests
+### Local bench, one command
 
-`tools\test-hathot-emulator.ps1` drives the emulator's *Send HAT/HOT Request*
-dialog through a set of requests, captures each exchange and checks the answers:
+Nothing has to be started by hand. `-Local` is the whole-bench-on-one-PC preset
+— the loopback adapter and the 8010/8011 pair — and the script does the rest:
 
 ```
+.\tools\test-hathot-emulator.ps1 -Local
+```
+
+In order, it:
+
+1. says what the run has to work with: the link it is about to use, the capture
+   device, Wireshark's `dumpcap`, whether Prepar3D is running, and whether the
+   terrain probe is loaded;
+2. brings the bench up. CigiStarter is started as `CigiStarter.exe --host-ip
+   127.0.0.1 --ig-ip 127.0.0.1 --ig-port 8010 --host-port 8011` unless something
+   is already listening, and the emulator is pointed at the same pair through its
+   registry key and started unless it is already up. A running emulator saved to
+   a different port is restarted, because it reads that setup once, at startup. A
+   bench that is already up is used as it is;
+3. runs the checks below, capturing each exchange on the loopback adapter with
+   `dumpcap` and decoding it with `tshark`;
+4. prints the per-check table, then the verdict.
+
+```
+================================================================
+  RESULT: PASS   --   35 passed, 0 failed, 0 skipped
+================================================================
+```
+
+That `PASS`/`FAIL` line is last, in green or red, and the exit code matches it —
+0 for PASS, 1 for FAIL — so a run can be automated:
+
+```
+.\tools\test-hathot-emulator.ps1 -Local
+if ($LASTEXITCODE -ne 0) { throw 'the HAT/HOT bench failed' }
+```
+
+A check whose prerequisite is missing is **skipped**, with the reason, and not
+counted as a pass: with Prepar3D closed, the two sim-dependent checks report SKIP
+and the run still ends `PASS`. `0 skipped` needs Prepar3D running *and* the
+terrain probe loaded.
+
+`-Stop` takes the bench down once the checks are done. It stops only what the run
+itself started — CigiStarter through its own EXIT button, the emulator through
+its window close — and leaves a bench the operator brought up alone:
+
+```
+.\tools\test-hathot-emulator.ps1 -Local -Stop
+```
+
+Prepar3D is the one thing it will not start: launch it first if the sim-backed
+checks matter. The captures are left in `%TEMP%\cigi-hathot-tests` (change that
+with `-Out`), and a failed check's capture is the one to open in Wireshark.
+
+To test a bench that is already up without the script touching it, `-NoLaunch`
+requires it and fails with what is missing instead of starting it. On a bench
+where the deployment's 8000/8001 pair is free, drop `-Local` and give the ports:
+
+```
+.\tools\test-hathot-emulator.ps1 -NoLaunch
 .\tools\test-hathot-emulator.ps1 -IgPort 8010 -HostPort 8011
 ```
 
-It starts whatever is not already up — CigiStarter from `x64\Release`, the
-emulator from `external\`, writing its link setup to the registry first — and
-with `-NoLaunch` it requires a bench that is already up instead. Each check is
-one a wrong answer would break: that a request is answered, and answered exactly
-once (or every *n*-th frame when it carries an update period); that the request
-id and type pick the right response message; that `HAT = request altitude −
-HOT`, which is what catches the two doubles packed in the wrong place; that
-`Valid` is set only when a terrain source could answer; that an entity-relative
-request is answered at the aircraft's position; and, when the sim's terrain
-probe is loaded, that the height on the wire is the probe's own reading for the
-very point that was asked about. A check whose prerequisite is absent (no
-running sim, no loaded probe) is reported as **skipped** with the reason rather
-than passed. The exit code is 0 when nothing failed and 1 otherwise, and the
-captures are left in `%TEMP%\cigi-hathot-tests`.
+### What the checks cover
+
+The script drives the emulator's *Send HAT/HOT Request* dialog through a set of
+requests and asserts on the answers that come back. Each check is one a wrong
+answer would break: that a request is answered, and answered exactly once (or
+every *n*-th frame when it carries an update period); that the request id and
+type pick the right response message; that `HAT = request altitude − HOT`, which
+is what catches the two doubles packed in the wrong place; that `Valid` is set
+only when a terrain source could answer; that an entity-relative request is
+answered at the aircraft's position; and, when the sim's terrain probe is loaded,
+that the height on the wire is the probe's own reading for the very point that
+was asked about.
+
+### When the bench does not come up
+
+| What the run says | What it means |
+|---|---|
+| `UDP port 8000 is held by Prepar3D … not CigiStarter` | Prepar3D's own CIGI has the port — run with `-Local`, or pass another `-IgPort` |
+| `dumpcap.exe not found` | Wireshark is not installed, or not on `PATH`; its `dumpcap` and `tshark` are the capture and the decoder |
+| `CigiStarter.exe not found at …` | build Release x64 first — see [Building](#building) |
+| `CigiStarter did not come up on UDP port 8010` | the bind was refused, usually by the firewall, or the exe predates the `--ig-port` option |
+| requests but no answers, on every check | the emulator is pointed at another port; check its `Remote Port` key, or let the script restart it rather than pairing a stale emulator with `-NoLaunch` |
+| two `SKIP`s | Prepar3D is not running, or its `ACTIVE` entry is off for the probe check |
+| `LNK1104 … CigiStarter.exe` while rebuilding | a CigiStarter from an earlier run still holds the file — stop it with `-Stop`, or from its own window |
 
 ### Watching the wire by hand
 
@@ -752,7 +817,7 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source, and the sampler `TerrainBaker` uses) |
 | `tools\get_terrain.ps1` | option 1: downloads generic SRTM tiles for `terrain\` |
 | `tools\capture-hat-hot.ps1` | bench aid: captures the CIGI link and prints every HAT/HOT request and answer |
-| `tools\test-hathot-emulator.ps1` | bench aid: drives the Host Emulator through the HAT/HOT tests and checks the answers |
+| `tools\test-hathot-emulator.ps1` | bench aid: drives the Host Emulator through the HAT/HOT checks and prints a PASS/FAIL verdict; `-Local` is the whole bench on one PC |
 | `tools\TerrainBaker\` | option 2: bakes Prepar3D's own ground heights over an SRTM base |
 | `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |
 | `agents.md`        | description of the HOST / IG / CigiStarter agents |
