@@ -8,7 +8,7 @@
 //     |   ... live status block (read-only edit): the link, the stream, the |
 //     |       client.txt fan-out and the terrain sample ...                 |
 //     |                                                                     |
-//     |  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 60 ] Hz [Apply] |
+//     |  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 150 ] Hz [Apply] |
 //     |  [x] Pace SOF to HOST replies (flow control)                        |
 //     |                                                                     |
 //     |  [ START ]  [ STOP ]                                        [ EXIT ] |

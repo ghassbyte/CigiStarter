@@ -55,7 +55,7 @@ struct Status {
     uint64_t datagrams         = 0;      // downstream datagrams received
     uint64_t entityUpdates     = 0;      // Entity Control packets seen
     uint32_t sofFrames         = 0;      // SOF frames transmitted
-    int      targetFps         = 60;     // rate the transmit loop is pacing to
+    int      targetFps         = 150;    // rate the transmit loop is pacing to
     uint8_t  hostIgMode        = 0;      // mode the HOST last commanded
     uint32_t lastHostFrame     = 0;      // HOST frame counter
     bool     terrainConnected  = false;  // FSUIPC link up?

@@ -10,16 +10,17 @@
 //    answers stay invalid until it appears).
 //
 //  SOF rate and flow control
-//    The HOST owns the frame rate and answers each SOF with one datagram, so an
-//    IG that transmits regardless is asking it for more frames than it can
-//    produce. The default rate is therefore 60 Hz (the HOST in the reference
-//    capture runs ~53 frames/s while it is asked for ~98 SOF replies/s), and
-//    flow control -- on by default -- holds a SOF back while the previous one is
-//    still unanswered, so the stream fits whatever the HOST on site can absorb
-//    instead of relying on the operator to pick a safe number (SofPacer.h).
-//    `--no-flow-control` restores the plain rate schedule, for a HOST that turns
-//    out to tolerate more. The SOF itself echoes the HOST's own frame counter
-//    (cigi.cpp); that field is what ties the two rates together.
+//    The HOST answers each SOF with one datagram, and each answer carries a fresh
+//    attitude (the position comes on every other one), so the SOF rate is what
+//    sets how smoothly the aircraft moves. The default rate is 150 Hz with flow
+//    control on: the transmit loop holds a SOF back while the previous one is
+//    still unanswered, so the stream settles at whatever the HOST on site can
+//    absorb rather than piling requests up on it (SofPacer.h). The rate box is
+//    therefore a ceiling, not a promise -- the reference Master IG ran at ~100 Hz
+//    and the HOST kept up, and the site runs the IG higher than that without the
+//    HOST falling behind. `--no-flow-control` restores the plain rate schedule,
+//    for a HOST that turns out to tolerate more. The SOF itself echoes the HOST's
+//    own frame counter (cigi.cpp); that field is what ties the two rates together.
 //
 //  Transport (fixed by the deployment; hardcoded below)
 //    HOST 192.168.70.2  -> IG 192.168.70.70 : 8000   (downstream data)
@@ -50,7 +51,7 @@
 //    perfectly good IG (Relay.cpp).
 //
 //  Usage
-//    CigiStarter.exe [--fps 60] [--ig-mode 0] [--no-respond-hathot]
+//    CigiStarter.exe [--fps 150] [--ig-mode 0] [--no-respond-hathot]
 //                    [--no-flow-control] [--help]
 //    Being a windowed program there is no console, so --help and any startup
 //    error are reported in a message box.
@@ -94,9 +95,10 @@ constexpr uint16_t kIgPort   = 8000;             // IG port (HOST -> IG)
 // Runtime configuration (command-line adjustable)
 //-----------------------------------------------------------------------------
 struct Config {
-    // 60 Hz by default: the HOST in the reference capture runs ~53 frames/s, so
-    // it has never been shown to keep up with more than that.
-    int     fps           = 60;   // SOF transmission rate
+    // 150 Hz by default: flow control (below) holds the stream back to whatever
+    // the HOST can absorb, so this is a ceiling rather than a promise, and the
+    // higher rate keeps the aircraft's motion smooth.
+    int     fps           = 150;  // SOF transmission rate
     uint8_t igMode        = 0;    // 0 = Standby (0x30), 1 = Operate (0x31)
     bool    respondHatHot = true;
     bool    flowControl   = true; // pace the SOF stream to the HOST's replies
@@ -163,7 +165,7 @@ static Stats             g_stats;           // filled in by the receive thread
 // line and from then on owned by the window's controls -- the window thread
 // cannot see main()'s Config, so the live values live here.
 static std::atomic<bool> g_respondHatHot{true};
-static std::atomic<int>  g_targetFps{60};
+static std::atomic<int>  g_targetFps{150};
 static std::atomic<bool> g_flowControl{true};
 
 //-----------------------------------------------------------------------------
@@ -192,10 +194,10 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "Options (these only set the starting state -- the SOF rate, HAT/HOT\n"
         "answering and flow control can also be changed from the window while it\n"
         "runs):\n\n"
-        "  --fps <rate>        SOF transmit rate in Hz           (default 60)\n"
-        "                      The HOST runs at its own frame rate and cannot be\n"
-        "                      driven above it, so keep this at or below the rate\n"
-        "                      the HOST actually manages.\n"
+        "  --fps <rate>        SOF transmit rate in Hz           (default 150)\n"
+        "                      With flow control on this is a ceiling: the stream is\n"
+        "                      held back while the HOST has not answered, so a rate\n"
+        "                      above what the HOST manages costs nothing.\n"
         "  --ig-mode <0..3>    IG mode reported in the SOF until the HOST sends\n"
         "                      its first IG Control (0=Standby 1=Operate)\n"
         "                                                         (default 0)\n"

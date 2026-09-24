@@ -15,7 +15,7 @@ aircraft, read from the local Prepar3D via FSUIPC — see
    control/flight data.
 2. Sends **SOF** (24-byte Start-of-Frame) datagrams to the HOST upstream port
    (`8001`) at the configured frame rate — this is the "request" that starts
-   the data flow. The rate defaults to **60 Hz** and the stream is paced to the
+   the data flow. The rate defaults to **150 Hz** and the stream is paced to the
    HOST's replies by default — see
    [SOF rate and flow control](#sof-rate-and-flow-control).
 3. Parses inbound CIGI messages (framed by `[id][size]`) and shows a live status
@@ -97,9 +97,10 @@ The link addresses and ports are **fixed by the deployment** and hardcoded:
 ```
 CigiStarter.exe [options]
 
-  --fps <rate>        initial SOF transmit rate in Hz   (default 60)
-                      Keep this at or below the rate the HOST itself
-                      manages — see SOF rate and flow control below.
+  --fps <rate>        initial SOF transmit rate in Hz   (default 150)
+                      With flow control on this is a ceiling: the stream
+                      is held back while the HOST has not answered, so a
+                      rate above what the HOST manages costs nothing.
   --ig-mode <0..3>    IG mode reported until the HOST sends its first
                       IG Control (0=Standby 1=Operate)  (default 0)
   --respond-hathot    answer HAT/HOT requests using the terrain height read
@@ -129,7 +130,7 @@ startup — see [Fan-out](#fan-out-to-the-other-ig-pcs).
 Examples:
 
 ```
-CigiStarter.exe                        # 60 Hz, paced to the HOST, live on launch
+CigiStarter.exe                        # 150 Hz, paced to the HOST, live on launch
 CigiStarter.exe --no-auto-start        # wait for START instead (old behaviour)
 CigiStarter.exe --no-flow-control --fps 100
 ```
@@ -145,8 +146,9 @@ many replies as the HOST had frames to give.
 
 That is why:
 
-- the SOF rate defaults to **60 Hz** rather than the ~100 Hz of the reference
-  Master, and
+- the SOF rate defaults to **150 Hz**: every answer carries a fresh attitude (the
+  position comes on every other one), so how often the IG asks is how smoothly the
+  aircraft moves, and
 - **flow control is on by default**: the transmit loop holds a SOF back while the
   previous one is still unanswered (`SofPacer.h`), so the stream fits whatever the
   HOST on site can absorb, whatever number is typed in the rate box.
@@ -163,7 +165,7 @@ wake up on.
 
 That limit is a wall-clock one rather than a number of frames, and that is what
 stops a mistyped rate from becoming a load: a HOST answering more slowly than
-once per 100 ms sees at most ~10 requests a second, whether the rate box says 60
+once per 100 ms sees at most ~10 requests a second, whether the rate box says 150
 or 6000. Counting frames instead would make the retries scale with the rate,
 i.e. exactly the runaway this is here to prevent.
 
@@ -237,7 +239,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  IG   :8000   (this IG is 192.168.70.70)                                 |
 |                                                                          |
 |  Stream    : RUNNING (paced to the HOST)                                 |
-|  SOF rate  : 60 Hz requested, 60/s measured                              |
+|  SOF rate  : 150 Hz requested, 150/s measured                            |
 |  SOF frames: 101                                                         |
 |  Received  : 0 datagrams (0/s), 0 entity updates                         |
 |  IG mode   : 0 (Standby)  <- commanded by the HOST                       |
@@ -249,7 +251,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  HAT/HOT   : answering from FSUIPC                                       |
 |  Terrain   : 27.0 m under the aircraft, 30.1 m aircraft                  |
 |                                                                          |
-|  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 60 ] Hz [ Apply ]  |
+|  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 150 ] Hz [ Apply ]  |
 |  [x] Pace SOF to HOST replies (flow control)                             |
 |                                                                          |
 |  [ START ]  [ STOP ]                                              [ EXIT ] |
@@ -274,7 +276,7 @@ with the window up instead, which is the behaviour the sketch below shows.
   control](#sof-rate-and-flow-control) switch. It starts **on**, unless
   `--no-flow-control` was given. Switch it off to transmit on the rate alone —
   for instance to measure what the HOST really tolerates.
-- **SOF rate** is a whole number of Hz, from 1 to 100000; it starts at **60**.
+- **SOF rate** is a whole number of Hz, from 1 to 100000; it starts at **150**.
   It is applied to the transmit loop on the next frame, so the stream can be
   retuned *while it runs* — no stop/start needed. Commit it with **Apply** or by
   pressing **Enter**. A value that is not a whole number in range is refused with

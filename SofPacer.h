@@ -28,7 +28,7 @@
 //    kPokeMs is a wall-clock limit rather than a count of frames on purpose: it
 //    keeps a mistyped rate from turning into a load. With it, a HOST that answers
 //    more slowly than one frame per kPokeMs sees at most ~10 requests a second,
-//    whether the rate box says 60 or 6000. A count of frames would make the
+//    whether the rate box says 150 or 6000. A count of frames would make the
 //    retries scale with the rate, which is exactly the runaway this whole change
 //    is about.
 //

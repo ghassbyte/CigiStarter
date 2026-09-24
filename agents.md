@@ -62,12 +62,14 @@ that the HOST requires to start streaming:
 - Binds `0.0.0.0:8000` (all interfaces) and sends SOF to `192.168.70.2:8001`;
   the HOST addresses the IG as `192.168.70.70` (addresses/ports are hardcoded
   in `main.cpp`).
-- Sends SOF at a configurable rate (`--fps`, default 60 Hz; the window's rate
+- Sends SOF at a configurable rate (`--fps`, default 150 Hz; the window's rate
   box retunes the running stream), and **flow control is on by default**: the
   transmit loop holds a SOF back while the HOST has not answered the previous
   one, so the stream fits whatever frame rate the HOST can actually produce
-  instead of piling requests up on it. `--no-flow-control` transmits on the rate
-  alone, which is what the original Master IG did.
+  instead of piling requests up on it. Each answer carries a fresh attitude (the
+  position comes on every other one), so the SOF rate is what keeps the aircraft's
+  motion smooth. `--no-flow-control` transmits on the rate alone, which is what
+  the original Master IG did.
 - The SOF's only live field is the **HOST's frame counter**, echoed out of the
   IG Control it arrived in: that is what the reference Master put there, and it
   advances with the HOST's frame rate (~53 Hz in the reference capture) rather
@@ -158,7 +160,7 @@ point of view that edge looks exactly like the HOST's own, which is the point.
 | Reference SOF rate | ~100 Hz (~10 ms, an 8/12 ms alternation) |
 | HOST frame rate   | ~53 Hz — its IG Control counter advances 0.54 per datagram while a datagram arrives every ~10.2 ms, so the HOST is asked for about twice the frames it has |
 | SOF live field    | the HOST's frame counter (out of IG Control), echoed at offset 8; offsets 12/16 stay 0, as in the capture |
-| SOF rate here     | 60 Hz default (1..100000 Hz from the window), paced to the HOST's replies unless flow control is off |
+| SOF rate here     | 150 Hz default (1..100000 Hz from the window), paced to the HOST's replies unless flow control is off |
 | Operator UI       | plain Win32 window (`Gui.cpp`): START / STOP / EXIT, a HAT/HOT check box, a flow-control check box and a SOF rate box |
 | Start-up          | streams from launch and minimises its own window (no click needed); `--no-auto-start` starts paused with the window up, as before |
 | Runtime settings  | SOF rate, HAT/HOT answering (drives the FSUIPC poller) and flow control, all applied on the next frame; `--fps` / `--respond-hathot` / `--flow-control` only seed them |
