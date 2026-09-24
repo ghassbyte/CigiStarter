@@ -51,15 +51,18 @@ no longer needs FSUIPC, slew mode or a reposition per cell.
 
 ## Building
 
-Needs the Prepar3D SDK (v5 or v6; the interface has the same name and GUID in
-v4, v5 and v6, so any of them builds the same DLL).
+Needs the Prepar3D PDK headers (v5 or v6; the interface has the same name and
+GUID in v4, v5 and v6, so any of them builds the same DLL). A copy of `inc\PDK`
+ships in `..\..\external\Prepar3D-SDK\inc\PDK\`, and that is what the project
+defaults to — the add-on links only system libraries, so a full SDK installation
+is not needed.
 
 ```
 msbuild PdkTerrainProbe.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
 
-The SDK defaults to the v6 path baked into the `.vcxproj`. Point it elsewhere
-with `/p:P3DSdkDir=...`. Output lands in `bin\Release\PdkTerrainProbe.dll`.
+Point it at a full SDK installation instead with `/p:P3DSdkDir=...`. Output
+lands in `bin\Release\PdkTerrainProbe.dll`.
 
 Note: this project is deliberately **not** in `CigiStarter.sln`. It needs the
 sim's SDK, and a machine that only builds the IG should not have its build

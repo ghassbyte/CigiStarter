@@ -30,16 +30,16 @@
     <WholeProgramOptimization>false</WholeProgramOptimization>
   </PropertyGroup>
 
-  <!-- Where the Prepar3D SDK lives.  Override on the command line if it is
-       somewhere else, or if the IG PC is still on v5:
+  <!-- Where the Prepar3D PDK headers live. The default is the vendored copy of
+       inc\PDK from the v6 SDK; a full SDK installation is not needed, because
+       the add-on links only system libraries. The surface query interface has
+       the same name and GUID in the v4, v5 and v6 SDKs, so any of them builds
+       the same DLL; override to build against a full installation, e.g.
 
          msbuild PdkTerrainProbe.vcxproj /p:Configuration=Release ^
-                 /p:P3DSdkDir="C:\Program Files\Lockheed Martin\Prepar3D v5 SDK 5.4.9.28482"
-
-       The surface query interface has the same name and GUID in the v4, v5 and
-       v6 SDKs, so any of them builds the same DLL. -->
+                 /p:P3DSdkDir="C:\Program Files\Lockheed Martin\Prepar3D v5 SDK 5.4.9.28482" -->
   <PropertyGroup>
-    <P3DSdkDir Condition="'$(P3DSdkDir)'==''">C:\Program Files\Lockheed Martin\Prepar3D v6 SDK 6.1.10.31609</P3DSdkDir>
+    <P3DSdkDir Condition="'$(P3DSdkDir)'==''">$(MSBuildProjectDirectory)\..\..\external\Prepar3D-SDK</P3DSdkDir>
     <P3DPdkInc>$(P3DSdkDir)\inc\PDK</P3DPdkInc>
     <OutDir>$(MSBuildProjectDirectory)\bin\$(Configuration)\</OutDir>
     <IntDir>$(MSBuildProjectDirectory)\obj\$(Configuration)\</IntDir>

@@ -45,15 +45,16 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros">
-    <!-- The FSUIPC SDK is the one shared with CigiP3dBridge (same prebuilt
-         v140 library, so the two programs always agree on the wire format).
-         Override this on the command line if the repository layout differs:
+    <!-- Both SDKs are vendored in external\ so this folder builds on its own.
+         Override on the command line to build against another copy, e.g.
            msbuild ... /p:FsuipcSdkDir=C:\path\to\UIPC64_SDK_C_version2 -->
-    <FsuipcSdkDir Condition="'$(FsuipcSdkDir)'==''">$(ProjectDir)..\CigiP3dBridge\external\UIPC64_SDK_C_version2</FsuipcSdkDir>
+    <!-- FSUIPC: the prebuilt v140 library, so this program and CigiP3dBridge
+         always agree on the wire format whatever built them. -->
+    <FsuipcSdkDir Condition="'$(FsuipcSdkDir)'==''">$(ProjectDir)external\UIPC64_SDK_C_version2</FsuipcSdkDir>
     <!-- Npcap headers, for the client.txt fan-out (Relay.cpp). Only the
          headers are needed: wpcap.dll is loaded with LoadLibrary() at run
          time, so this program still starts on an IG PC that has no Npcap. -->
-    <NpcapSdkDir Condition="'$(NpcapSdkDir)'==''">$(ProjectDir)..\CigiP3dBridge\external\npcap-sdk-1.16</NpcapSdkDir>
+    <NpcapSdkDir Condition="'$(NpcapSdkDir)'==''">$(ProjectDir)external\npcap-sdk-1.16</NpcapSdkDir>
   </PropertyGroup>
   <!-- Static CRT (/MT, /MTd) so the exe runs on a fresh IG PC with no
        Visual C++ redistributable installation. -->

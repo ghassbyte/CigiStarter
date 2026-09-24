@@ -20,6 +20,10 @@ Release/
 *.ipdb
 *.recipe
 
+# The vendored Npcap SDK keeps its import libraries in a Lib\x64 folder; the
+# build-output rule above must not swallow it.
+!external/npcap-sdk-1.16/Lib/x64/
+
 # Editor / OS
 *.swp
 Thumbs.db
