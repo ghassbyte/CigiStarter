@@ -151,6 +151,15 @@ public:
 
             if (!q.enabled) { r.status = terrain::probe::StatusNone; continue; }
 
+            // Echo the point before deciding anything, so a row always says
+            // which point it is about -- including one that is refused.  Only
+            // `status` tells an answer from a refusal; without the echo a reader
+            // could not tell a refused row from one it had since replaced, and a
+            // refused point would look like a wedged probe.
+            r.latDeg = q.latDeg;
+            r.lonDeg = q.lonDeg;
+            r.key    = q.key;
+
             if (!(q.latDeg == q.latDeg) || !(q.lonDeg == q.lonDeg) ||
                 q.latDeg < -90.0 || q.latDeg > 90.0 ||
                 q.lonDeg < -180.0 || q.lonDeg > 180.0) {
@@ -169,9 +178,6 @@ public:
             float feet = 0.0f;
             const HRESULT hr = g_surface->QuerySurfaceElevation(feet, pos);
 
-            r.latDeg = q.latDeg;
-            r.lonDeg = q.lonDeg;
-            r.key    = q.key;
             if (SUCCEEDED(hr)) {
                 r.hotMeters = static_cast<double>(feet) * kFtToMeters;
                 r.status    = terrain::probe::StatusOk;

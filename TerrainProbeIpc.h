@@ -58,10 +58,14 @@ namespace probe {
 constexpr uint32_t kMagic   = 0x50425450u;  // 'P','T','B','P'
 constexpr uint32_t kVersion = 1u;
 
-// Slots in the table.  The HOST asks about six points (see the capture
-// analysis: three gear legs, the reference point, the tail and one 10 m below),
-// so this is generous for the IG and leaves room for a batch sampler later.
-constexpr int kMaxQueries = 64;
+// Slots in the table; the probe answers every enabled one on each simulation
+// tick.  The HOST only ever asks about six points (see the capture analysis:
+// three gear legs, the reference point, the tail and one 10 m below), so for the
+// IG this is enormous -- but it is also what lets TerrainBaker fill a whole tile
+// in seconds instead of the hours a reposition-per-cell FSUIPC sweep took, by
+// keeping the table full.  A slot that is not enabled costs the probe one compare
+// per tick, so a capacity this size is free at run time.
+constexpr int kMaxQueries = 256;
 
 // Session-local, because CigiStarter and Prepar3D both run in the logged-on
 // user's session (the IG PC starts unattended at logon rather than as a
@@ -92,7 +96,9 @@ struct Query {
 
 struct Result {
     // Echo of the query this answers, so the reader can tell a current answer
-    // from one taken for a point it has since left.
+    // from one taken for a point it has since left.  Written for every enabled
+    // slot the probe looks at, refused ones included, so `status` alone decides
+    // whether there is a height here.
     double   latDeg;
     double   lonDeg;
     double   hotMeters;     // terrain elevation, metres above mean sea level

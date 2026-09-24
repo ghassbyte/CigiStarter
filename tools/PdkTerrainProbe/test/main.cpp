@@ -23,7 +23,9 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <thread>
 
 #include "TerrainProbe.h"      // the half under test
@@ -141,9 +143,31 @@ bool poll(unsigned key, double lat, double lon, double alt, double& hot, int tri
     return false;
 }
 
+// Stand in for the sim for a *different* process: `--serve <seconds>` starts the
+// fake probe and then just lets it tick, so a tool that talks to the same region
+// -- TerrainBaker, whose batch driver is not part of this harness -- can be run
+// against it. The checks below drive exactly the same fake in-process.
+int serve(int seconds) {
+    FakeProbe fake;
+    if (!fake.start()) { std::printf("harness could not start\n"); return 2; }
+    std::printf("serving as the sim for %d s (pid %lu, mapping %ls)\n",
+                seconds, (unsigned long)::GetCurrentProcessId(), terrain::probe::kMappingName);
+    std::fflush(stdout);
+    for (int i = 0; i < seconds * 10; ++i) ::Sleep(100);
+    fake.stop();
+    return 0;
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--serve") {
+            const int secs = (i + 1 < argc) ? std::atoi(argv[i + 1]) : 30;
+            return serve(secs > 0 ? secs : 30);
+        }
+    }
+
     std::printf("PdkTerrainProbe contract test\n\n");
 
     const double kAtangLat = -6.5428, kAtangLon = 106.7566, kAtangAlt = 178.0;

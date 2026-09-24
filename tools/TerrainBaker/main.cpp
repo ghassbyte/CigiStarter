@@ -2,51 +2,48 @@
 //  TerrainBaker.cpp — build CigiStarter's HAT/HOT terrain database from the sim
 //
 //  Why this exists
-//    CigiStarter can answer HAT/HOT from an offline SRTM ".hgt" tile set (see
-//    TerrainDb.h), but SRTM is a generic world model: it has no idea that a
-//    particular strip of ground was levelled by Prepar3D for a runway. The
-//    HOST drives the aircraft to whatever Height Of Terrain the IG reports, so
-//    at a flattened field a generic SRTM height that is a few metres out is a
-//    few metres of aircraft flying into or floating over the pavement.
+//    CigiStarter answers HAT/HOT from Prepar3D's own terrain at run time (see
+//    TerrainProbe.h). This tool exists for the IG PCs where it cannot: it copies
+//    the sim's ground out into an ordinary SRTM ".hgt" tile, so TerrainDb can
+//    answer from it when the add-on is not loaded.
 //
-//    The only thing that knows the *sim's* ground -- runway flattening
-//    included -- is the simulator itself. This tool asks it. It walks a grid of
-//    points over the areas that matter, reads Prepar3D's own ground altitude at
-//    each through FSUIPC, and writes the result back out as an ordinary SRTM
-//    ".hgt" tile: SRTM everywhere, sim-exact where it sampled. TerrainDb reads
-//    the output unchanged.
+//    A plain SRTM tile is not enough on its own. SRTM is a generic world model
+//    and has no idea that a particular strip of ground was levelled by Prepar3D
+//    for a runway. The HOST drives the aircraft to whatever Height Of Terrain
+//    the IG reports, so at a flattened field a generic SRTM height that is a few
+//    metres out is a few metres of aircraft flying into or floating over the
+//    pavement. So the tile this tool writes is SRTM everywhere, sim-exact where
+//    it sampled.
 //
 //    So there are two ways to fill "terrain\":
 //      1. plain   -- tools/get_terrain.ps1, generic SRTM, no sim needed.
 //      2. baked   -- this tool: SRTM base + sim-exact patches at the fields.
 //    Option 2 builds on option 1: the SRTM tile is the base it overlays.
 //
+//  How it samples
+//    Through the same add-on CigiStarter uses: PdkTerrainProbe.dll, loaded
+//    inside Prepar3D, answers points from the sim's own surface query and
+//    publishes them in shared memory (see TerrainProbeIpc.h). This tool fills
+//    that table a batch at a time -- 256 points per simulation tick, at 60 Hz --
+//    so a whole tile takes seconds.
+//
+//    It deliberately does NOT use FSUIPC. The earlier version walked the grid
+//    one cell at a time, writing the aircraft's position over FSUIPC and reading
+//    0x0020 back, which needed slew mode to make the writes land and took hours
+//    per tile. The surface query is answered about the *world* rather than about
+//    where the aircraft is, so there is nothing to reposition, nothing to hold,
+//    and no slew mode to get right.
+//
 //  Three modes
 //    probe    sample a handful of well-spread points and print sim vs SRTM.
-//             Run this first: it proves the FSUIPC link and, crucially, whether
-//             the sim's ground model follows a reposition (see --slew).
-//    survey   sweep every grid point that falls inside the chosen boxes,
+//             Run this first: it proves the add-on is loaded and answering, and
+//             shows how far the bake will move the ground at each field.
+//    survey   walk every grid point that falls inside the chosen boxes,
 //             appending each reading to "<out>\<tile>.samples.csv".
 //             Interruptible and resumable -- re-running skips what is already
 //             in the CSV.
 //    compose  fold the base SRTM tile and the survey CSV into "<out>\<tile>.hgt".
 //             Needs no sim, so it can be run on any machine.
-//
-//  The ground model and --slew
-//    FSUIPC's 0x0020 is "ground altitude under the player aircraft". Reading it
-//    for a *specific* cell only means anything if the position write has taken
-//    effect first, and slew mode decides that. Measured on Prepar3D v5:
-//      --slew on   the writes land, the ground under the requested cell comes
-//                  back, and the reading repeats to ~0.05 m at any settle >= 25 ms.
-//      --slew off  the writes are mostly not applied: the number still changes
-//                  from point to point, but it belongs to wherever the aircraft
-//                  already was, and drifts by up to ~8 m along a survey row.
-//    So neither is assumed: probe reports which setting tracks (values change)
-//    and repeats (points revisited), and is worth running on the machine that
-//    will do the bake -- it is a property of the sim, not of this tool. The
-//    default is --slew on, because in slew the aircraft is held at the written
-//    coordinate, so 0x0020 is that cell's ground by construction; --slew off is
-//    kept for a sim where slew freezes the ground model instead.
 //
 //  Usage: TerrainBaker <probe|survey|compose|plan> [options]   (see --help)
 //=============================================================================
@@ -56,8 +53,7 @@
 #endif
 #include <windows.h>
 
-#include "FSUIPC_User64.h"
-#include "../../../CigiP3dBridge/src/Conversion.h"   // same fixed-point maths as the bridge
+#include "../../TerrainProbeIpc.h"   // the shared-memory link to PdkTerrainProbe.dll
 
 #include <algorithm>
 #include <chrono>
@@ -75,21 +71,6 @@
 #include <vector>
 
 namespace {
-
-// ---------------------------------------------------------------------------
-// FSUIPC offsets. Kept identical to CigiP3dBridge/src/FsuipcOffsets.h and
-// CigiStarter/TerrainSource.cpp so all three programs agree on the layout.
-// ---------------------------------------------------------------------------
-constexpr DWORD kGroundAltOffset = 0x0020;  // 4 bytes, signed, ground altitude m x 256
-constexpr DWORD kLatitudeOffset  = 0x0560;  // 8 bytes, SINT64
-constexpr DWORD kLongitudeOffset = 0x0568;  // 8 bytes, SINT64
-constexpr DWORD kAltitudeLow     = 0x0570;  // 4 bytes, UINT32, fractional metres
-constexpr DWORD kAltitudeHigh    = 0x0574;  // 4 bytes, INT32,  integer metres
-constexpr DWORD kPitchOffset     = 0x0578;  // 4 bytes, INT32
-constexpr DWORD kBankOffset      = 0x057C;  // 4 bytes, INT32
-constexpr DWORD kHeadingOffset   = 0x0580;  // 4 bytes, UINT32
-constexpr DWORD kSlewModeOffset  = 0x05DC;  // 2 bytes, WORD, 1 = slew on
-constexpr DWORD kSlewCtlOffset   = 0x05DE;  // 2 bytes, companion write for 0x05DC
 
 // ---------------------------------------------------------------------------
 // The two tile products TerrainDb.cpp accepts, and the byte size each gives.
@@ -269,11 +250,7 @@ struct Options {
     std::string baseDir;    // SRTM tiles (get_terrain.ps1 output)
     std::string outDir;     // baked tiles + sample CSVs
     int         res      = 3;      // 1 or 3 arc-seconds
-    double      settleMs = 60.0;   // wait after a reposition before reading
-    bool        settleGiven = false;  // ...unless the mode picks its own default
-    int         repeat   = 1;      // readings per point (last one wins)
-    bool        slew     = true;   // pin the aircraft at the sampled coordinate
-    double      altitude = 3500.0; // metres to hold the aircraft at while sampling
+    double      altitude = 3500.0; // altitude the surface is asked about from, m
     bool        resume   = true;
     int         limit    = 0;      // cap on samples this run (0 = no cap)
     bool        allowEmptyBase = false;
@@ -289,102 +266,164 @@ std::string csvPath(const std::string& dir, const std::string& tile) {
 }
 
 // ---------------------------------------------------------------------------
-// FSUIPC
-// ---------------------------------------------------------------------------
-bool fsuipcOpen() {
-    DWORD dw = 0;
-    return FSUIPC_Open(SIM_ANY, &dw) != FALSE;
-}
-
-bool writeSlew(bool on) {
-    DWORD dw = 0;
-    WORD  v  = on ? 1 : 0;
-    WORD  c  = 1;
-    return FSUIPC_Write(kSlewModeOffset, 2, &v, &dw) != FALSE
-        && FSUIPC_Write(kSlewCtlOffset,  2, &c, &dw) != FALSE
-        && FSUIPC_Process(&dw) != FALSE;
-}
-
-// Survey walks adjacent cells, so a short settle is enough; probe teleports tens
-// of kilometres, into scenery that is not resident yet, so it defaults to a long
-// one. An explicit --settle-ms always wins.
-double settleFor(const Options& o) {
-    if (o.settleGiven) return o.settleMs;
-    return (o.mode == "probe") ? 400.0 : 60.0;
-}
-
-// Inverse of the plain linear scales above, for reading a position back.
-constexpr double kLatDegPerFs = 90.0  / (10001750.0 * 65536.0 * 65536.0);
-constexpr double kLonDegPerFs = 360.0 / (65536.0 * 65536.0 * 65536.0 * 65536.0);
-
-// Reposition the player aircraft, then read the ground altitude beneath it.
-// Separate Process() calls on purpose: the write has to reach the sim before the
-// read can be answered for the new position.
+// The link to Prepar3D's own terrain
 //
-// A fixed sleep cannot tell us the write landed, and how long it takes depends on
-// what the sim is doing -- so the position is read back (in the same round trip
-// as the ground) and we wait until it is where we asked. Otherwise the reading
-// can belong to the previous cell: a few metres of terrain away, and silently
-// wrong. `--settle-ms` is the wait between checks, and `positionErrDeg`, when
-// given, receives the residual that was accepted.
-bool samplePoint(const Options& o, double lat, double lon, double& groundOut,
-                 double* positionErrDeg = nullptr) {
-    DWORD dw = 0;
+// PdkTerrainProbe.dll runs inside the sim and answers every enabled slot of the
+// shared table from Prepar3D's own surface query on each simulation tick (see
+// TerrainProbeIpc.h). Filling the table is what makes a bake fast: the query is
+// answered about the *world*, at the coordinate asked for, so there is no
+// aircraft to reposition, no slew mode to get right and no settling to wait for
+// -- the earlier FSUIPC sweep needed all three, one cell at a time.
+// ---------------------------------------------------------------------------
+class ProbeLink {
+public:
+    ~ProbeLink() { close(); }
 
-    long long latFs = conv::latitudeToFs(lat);
-    long long lonFs = conv::longitudeToFs(lon);
-    int         altHi = 0;
-    unsigned    altLo = 0;
-    conv::altitudeToFs(o.altitude, altHi, altLo);
-    DWORD headingFs = conv::headingToFs(0.0);   // face north, wings level
-    int   pitchFs   = 0;
-    int   bankFs    = 0;
-
-    if (!FSUIPC_Write(kLatitudeOffset,  8, &latFs,    &dw) ||
-        !FSUIPC_Write(kLongitudeOffset, 8, &lonFs,    &dw) ||
-        !FSUIPC_Write(kAltitudeHigh,    4, &altHi,    &dw) ||
-        !FSUIPC_Write(kAltitudeLow,     4, &altLo,    &dw) ||
-        !FSUIPC_Write(kHeadingOffset,   4, &headingFs, &dw) ||
-        !FSUIPC_Write(kPitchOffset,     4, &pitchFs,   &dw) ||
-        !FSUIPC_Write(kBankOffset,      4, &bankFs,    &dw) ||
-        !FSUIPC_Process(&dw)) {
-        return false;
-    }
-
-    constexpr double kTolDeg = 1.0e-5;   // ~1 m: far inside one 3 arc-sec cell
-    const int reps = std::max(1, o.repeat);
-    for (int attempt = 0; attempt < 20; ++attempt) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(int(settleFor(o))));
-
-        DWORD rw = 0;
-        long long gotLatFs = 0, gotLonFs = 0;
-        int32_t   groundRaw = 0;
-        if (!FSUIPC_Read(kLatitudeOffset,  8, &gotLatFs,  &rw) ||
-            !FSUIPC_Read(kLongitudeOffset, 8, &gotLonFs,  &rw) ||
-            !FSUIPC_Read(kGroundAltOffset, 4, &groundRaw, &rw) ||
-            !FSUIPC_Process(&rw)) {
+    bool open() {
+        if (m_shm) return true;
+        HANDLE h = ::OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE,
+                                      terrain::probe::kMappingName);
+        if (!h) {
+            m_error = "PdkTerrainProbe.dll is not loaded in Prepar3D "
+                      "(no shared region to open)";
             return false;
         }
+        void* v = ::MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0,
+                                  sizeof(terrain::probe::Shared));
+        if (!v) {
+            ::CloseHandle(h);
+            m_error = "could not map the probe's shared region";
+            return false;
+        }
+        auto* s = static_cast<terrain::probe::Shared*>(v);
+        if (s->magic != terrain::probe::kMagic ||
+            s->version != terrain::probe::kVersion ||
+            s->capacity != terrain::probe::kMaxQueries) {
+            ::UnmapViewOfFile(v);
+            ::CloseHandle(h);
+            m_error = "the shared region belongs to a different build of the probe";
+            return false;
+        }
+        m_map = h;
+        m_shm = s;
+        return true;
+    }
 
-        const double gotLat = double(gotLatFs) * kLatDegPerFs;
-        const double gotLon = double(gotLonFs) * kLonDegPerFs;
-        const double err    = std::max(std::abs(gotLat - lat), std::abs(gotLon - lon));
-        if (err > kTolDeg) continue;   // not there yet; wait and look again
+    void close() {
+        if (m_shm) { ::UnmapViewOfFile(m_shm); m_shm = nullptr; }
+        if (m_map) { ::CloseHandle(m_map); m_map = nullptr; }
+    }
 
-        groundOut = double(groundRaw) / 256.0;
-        if (positionErrDeg) *positionErrDeg = err;
-        for (int i = 1; i < reps; ++i) {   // further readings, this one already had
-            std::this_thread::sleep_for(std::chrono::milliseconds(int(settleFor(o))));
-            int32_t raw2 = 0;
-            if (!FSUIPC_Read(kGroundAltOffset, 4, &raw2, &rw) || !FSUIPC_Process(&rw)) {
-                return false;
-            }
-            groundOut = double(raw2) / 256.0;
+    // The add-on is loaded and its simulation tick is running. Checked by
+    // watching the tick counter move, so a DLL that failed to get the surface
+    // service -- the usual failure -- is caught here rather than after a run of
+    // empty answers.
+    bool live() {
+        if (!open()) return false;
+        if (!m_shm->alive) {
+            m_error = "the probe is loaded but has no surface service";
+            return false;
+        }
+        const uint32_t before = m_shm->ticks;
+        ::Sleep(250);
+        if (m_shm->ticks == before) {
+            m_error = "the probe is loaded but its simulation tick is not running";
+            return false;
         }
         return true;
     }
-    return false;   // never arrived: better to fail than to record the wrong cell
-}
+
+    const std::string& error() const { return m_error; }
+
+    // Ask about a batch of points; one height and one "answered" flag per point.
+    // A point the sim has no surface for comes back with `ok` false, which the
+    // caller resolves by leaving that cell to the SRTM base.
+    bool sample(const std::vector<std::pair<double,double>>& pts, double altitude,
+                std::vector<double>& hot, std::vector<uint8_t>& ok) {
+        if (!open()) return false;
+        hot.assign(pts.size(), 0.0);
+        ok.assign(pts.size(), 0);
+
+        const int cap = terrain::probe::kMaxQueries;
+        for (std::size_t base = 0; base < pts.size(); base += std::size_t(cap)) {
+            const int count = int(std::min<std::size_t>(cap, pts.size() - base));
+
+            for (int i = 0; i < count; ++i) {
+                terrain::probe::Query& q = m_shm->queries[i];
+                q.latDeg    = pts[base + i].first;
+                q.lonDeg    = pts[base + i].second;
+                q.altMeters = altitude;
+                q.key       = uint32_t(i);
+                q.enabled   = 1;
+            }
+            for (int i = count; i < cap; ++i) m_shm->queries[i].enabled = 0;
+            ++m_shm->reqSeq;
+
+            // Take a completed pass, but only one that read the table after we
+            // wrote it -- a pass already in flight answers the previous batch,
+            // and the position echoed back says so.
+            bool matched = false;
+            for (int attempt = 0; attempt < 8 && !matched; ++attempt) {
+                if (!waitForPass(2000)) {
+                    m_error = "the sim stopped answering";
+                    return false;
+                }
+                matched = true;
+                for (int i = 0; i < count; ++i) {
+                    double   h  = 0.0;
+                    uint32_t st = 0;
+                    if (!readSlot(unsigned(i), pts[base + i].first, pts[base + i].second, h, st)) {
+                        matched = false;   // answered a batch we had replaced
+                        break;
+                    }
+                    hot[base + i] = h;
+                    ok[base + i]  = (st == terrain::probe::StatusOk) ? 1 : 0;
+                }
+            }
+            if (!matched) {
+                m_error = "the sim did not answer a batch (the probe may be wedged)";
+                return false;
+            }
+        }
+        return true;
+    }
+
+private:
+    // Wait for one whole write pass: the sequence goes odd at its start and back
+    // to even at its end.
+    bool waitForPass(int ms) {
+        const DWORD deadline = ::GetTickCount() + DWORD(ms);
+        const auto past = [&] { return LONG(::GetTickCount() - deadline) >= 0; };
+
+        while (m_shm->rspSeq & 1u)     { if (past()) return false; ::Sleep(1); }
+        const uint32_t start = m_shm->rspSeq;
+        while (m_shm->rspSeq == start) { if (past()) return false; ::Sleep(1); }
+        while (m_shm->rspSeq & 1u)     { if (past()) return false; ::Sleep(1); }
+        return true;
+    }
+
+    // One slot, read under the seqlock. False when the row is not an answer to
+    // (lat, lon): the probe has not picked up this batch yet, so the caller
+    // should wait for another pass rather than record someone else's height.
+    // The doubles are copied through unchanged, hence the exact compare.
+    bool readSlot(unsigned i, double lat, double lon, double& hot, uint32_t& status) {
+        for (int attempt = 0; attempt < 8; ++attempt) {
+            const uint32_t before = m_shm->rspSeq;
+            if (before & 1u) { ::Sleep(1); continue; }
+            const terrain::probe::Result r = m_shm->results[i];
+            if (m_shm->rspSeq != before) continue;
+            if (r.latDeg != lat || r.lonDeg != lon) return false;
+            hot    = r.hotMeters;
+            status = r.status;
+            return true;
+        }
+        return false;
+    }
+
+    HANDLE                   m_map = nullptr;
+    terrain::probe::Shared*  m_shm = nullptr;
+    std::string              m_error;
+};
 
 // ---------------------------------------------------------------------------
 // Sample cache: "<out>\<tile>.samples.csv", one "lat,lon,alt" per reading.
@@ -432,9 +471,9 @@ std::vector<std::string> tilesForBoxes(const std::vector<Box>& boxes) {
     return std::vector<std::string>(names.begin(), names.end());
 }
 
-// Every grid point of `g` that falls inside some box, in a serpentine order so
-// consecutive teleports land next door and the sim never has to page in a new
-// patch of mesh.
+// Every grid point of `g` that falls inside some box, walked in a serpentine
+// order so the CSV reads row by row like a raster and a resumed run continues
+// where the last one stopped.
 std::vector<std::pair<int,int>> pointsInBoxes(const Grid& g, const std::vector<Box>& boxes) {
     std::vector<std::pair<int,int>> pts;
     for (int r = 0; r < g.n; ++r) {
@@ -457,9 +496,8 @@ int modePlan(const Options& o) {
     const double cell = 1.0 / (n - 1);
 
     int total = 0;
-    std::printf("plan: %d arc-sec (%s, ~%.0f m), %.0f ms settle, slew %s\n",
-                o.res, (o.res == 1) ? "3601x3601" : "1201x1201",
-                cell * 111320.0, settleFor(o), o.slew ? "ON" : "off");
+    std::printf("plan: %d arc-sec (%s, ~%.0f m)\n",
+                o.res, (o.res == 1) ? "3601x3601" : "1201x1201", cell * 111320.0);
     std::printf("base: %s\nout : %s\n\n", o.baseDir.c_str(), o.outDir.c_str());
 
     for (const std::string& tile : tiles) {
@@ -494,34 +532,61 @@ int modePlan(const Options& o) {
 
     std::printf("\ntotal points to sample: %d\n", total);
     if (total > 0) {
-        const double perSec = std::max(1.0, 1000.0 / settleFor(o));
-        std::printf("ceiling from --settle-ms alone: %.0f samples/s, so >= %.1f h;\n"
-                    "a real run is slower. Raise or lower --settle-ms to trade speed for safety.\n",
-                    perSec, total / perSec / 3600.0);
+        const double perSec = 60.0 * terrain::probe::kMaxQueries;
+        std::printf("through the probe: up to %.0f samples/s (60 ticks/s x %d slots), "
+                    "so about %.1f min,\n"
+                    "plus whatever the surface query costs the sim per tick.\n",
+                    perSec, terrain::probe::kMaxQueries, total / perSec / 60.0);
     }
     std::printf("\nrun:  TerrainBaker survey  (same options)  then  TerrainBaker compose\n");
     return 0;
 }
 
+// The SRTM height at a point, for comparison only; false when there is no base
+// tile covering it (or the cell is a "no data" void).
+bool srtmAt(const Options& o, double lat, double lon, double& out) {
+    const std::string tile = tileName(int(std::floor(lat)), int(std::floor(lon)));
+    Grid raw;
+    std::string reason;
+    if (!readHgt(tilePath(o.baseDir, tile), raw, reason)) return false;
+    raw.lat0 = int(std::floor(lat));
+    raw.lon0 = int(std::floor(lon));
+
+    Grid g;
+    std::string err;
+    if (!toResolution(raw, (o.res == 1) ? kSrtm1 : kSrtm3, g, err)) return false;
+
+    const int     r = std::clamp(g.rowOfLat(lat), 0, g.n - 1);
+    const int     c = std::clamp(g.colOfLon(lon), 0, g.n - 1);
+    const int16_t v = g.h[g.idx(r, c)];
+    if (v == kVoid) return false;
+    out = double(v);
+    return true;
+}
+
+// Confirm the add-on is loaded and answering before anything depends on it.
+int requireProbe(ProbeLink& link, const char* mode) {
+    if (link.live()) return 0;
+    std::fprintf(stderr,
+                 "[%s] %s\n"
+                 "       The bake reads Prepar3D's own terrain through PdkTerrainProbe.dll,\n"
+                 "       the same add-on CigiStarter answers HAT/HOT from. Install it and\n"
+                 "       restart the sim -- see tools\\PdkTerrainProbe\\README.md.\n"
+                 "       (TerrainBaker does not use FSUIPC, so FSUIPC being loaded or not\n"
+                 "       makes no difference here.)\n",
+                 mode, link.error().c_str());
+    return 2;
+}
+
 int modeProbe(const Options& o) {
-    if (!fsuipcOpen()) {
-        std::fprintf(stderr, "[probe] FSUIPC_Open failed: is Prepar3D running, with FSUIPC6 loaded?\n");
-        return 2;
-    }
-    if (!writeSlew(o.slew)) {
-        std::fprintf(stderr, "[probe] could not set slew mode\n");
-        return 2;
-    }
-    if (!o.slew) {
-        std::fprintf(stderr, "[probe] warning: --slew off leaves the aircraft free-flying, so a reading\n"
-                             "        can belong to wherever it drifted to, not the requested point.\n");
-    }
+    ProbeLink link;
+    if (const int rc = requireProbe(link, "probe")) return rc;
 
-    std::printf("probe: slew %s, holding %.0f m, settling %.0f ms\n\n",
-                o.slew ? "ON" : "off", o.altitude, settleFor(o));
+    std::printf("probe: surface queries through PdkTerrainProbe.dll, asked from %.0f m\n\n",
+                o.altitude);
 
-    // Centre plus the four corners of each box, so consecutive probes are far
-    // apart: if the ground model is frozen the values will not move at all.
+    // Centre plus the four corners of each box. Far apart on purpose: it shows
+    // the sim really is answering per point rather than handing back one number.
     std::vector<std::pair<double,double>> pts;
     for (const Box& b : o.boxes) {
         const double e = 0.05 * (b.lat1 - b.lat0);
@@ -531,130 +596,103 @@ int modeProbe(const Options& o) {
         pts.emplace_back(b.lat1 - e, b.lon0 + e);
         pts.emplace_back(b.lat1 - e, b.lon1 - e);
     }
+    if (o.limit > 0 && int(pts.size()) > o.limit) pts.resize(std::size_t(o.limit));
 
-    std::set<double> distinct;
-    std::vector<std::pair<double,double>> taken;
-    std::vector<double>                   takenSim;
-    int  shown = 0;
-    for (const auto& p : pts) {
-        if (o.limit > 0 && shown >= o.limit) break;
-        double sim = 0.0, posErr = 0.0;
-        if (!samplePoint(o, p.first, p.second, sim, &posErr)) {
-            std::fprintf(stderr, "[probe] sample failed at %.5f,%.5f -- the aircraft never\n"
-                                 "        reached the requested position\n", p.first, p.second);
-            return 2;
-        }
-        // The SRTM reading at the same spot, for reference only: the point is
-        // to see the sim's own number move.
-        int  lat0 = 0, lon0 = 0;
-        const std::string tile = tileName(int(std::floor(p.first)), int(std::floor(p.second)));
-        parseTileName(tile, lat0, lon0);
-        const int targetN = (o.res == 1) ? kSrtm1 : kSrtm3;
-        Grid raw;
-        std::string reason;
+    std::vector<double>  sim;
+    std::vector<uint8_t> ok;
+    if (!link.sample(pts, o.altitude, sim, ok)) {
+        std::fprintf(stderr, "[probe] %s\n", link.error().c_str());
+        return 2;
+    }
+
+    int    answered = 0;
+    int    worstD   = 0;
+    double sumAbsD  = 0.0;
+    int    compared = 0;
+    std::set<int> distinct;
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        const bool have = ok[i] != 0;
+        if (have) ++answered;
+
         double base = 0.0;
-        bool   haveBase = false;
-        if (readHgt(tilePath(o.baseDir, tile), raw, reason)) {
-            raw.lat0 = lat0;
-            raw.lon0 = lon0;
-            Grid g;
-            std::string err;
-            if (toResolution(raw, targetN, g, err)) {
-                const int r = std::clamp(g.rowOfLat(p.first), 0, g.n - 1);
-                const int c = std::clamp(g.colOfLon(p.second), 0, g.n - 1);
-                const int16_t v = g.h[g.idx(r, c)];
-                base = double(v);
-                haveBase = (v != kVoid);
-            }
+        const bool haveBase = srtmAt(o, pts[i].first, pts[i].second, base);
+        std::string vs;
+        if (haveBase && have) {
+            const int d = int(std::lround(sim[i] - base));
+            sumAbsD += std::abs(sim[i] - base);
+            ++compared;
+            if (std::abs(d) > std::abs(worstD)) worstD = d;
+            vs = std::to_string(int(std::lround(base))) + " m   d " + std::to_string(d);
+        } else if (haveBase) {
+            vs = std::to_string(int(std::lround(base))) + " m";
+        } else {
+            vs = "n/a";
         }
-        std::printf("  %9.5f %9.5f   sim %8.2f m   pos %4.1f m   srtm %s\n",
-                    p.first, p.second, sim, posErr * 111320.0,
-                    haveBase ? (std::to_string(int(base)) + " m   d " +
-                                std::to_string(int(std::lround(sim - base)))).c_str()
-                             : "n/a");
-        distinct.insert(std::round(sim * 16.0) / 16.0);   // ~6 cm buckets
-        taken.emplace_back(p.first, p.second);
-        takenSim.push_back(sim);
-        ++shown;
+
+        std::printf("  %9.5f %9.5f   sim %s   srtm %s\n",
+                    pts[i].first, pts[i].second,
+                    have ? (std::to_string(int(std::lround(sim[i]))) + " m").c_str()
+                         : "no surface",
+                    vs.c_str());
+        if (have) distinct.insert(int(std::lround(sim[i] * 16.0)));   // ~6 cm buckets
     }
 
-    // A frozen value is only one way to be wrong. If the position writes are not
-    // being applied at all, the ground model still "moves" -- it just reports
-    // wherever the aircraft really is (the previous point, or wherever it
-    // drifted to), which fakes its way past the distinct-values check above.
-    // Re-visiting points settles it: the same coordinates must give the same
-    // ground. Measured spread when the writes take effect is ~0.05 m.
-    double worst = 0.0;
-    int    checked = 0;
-    const int n = int(taken.size());
-    const int revisits[3] = {0, n / 2, n - 1};
-    for (int k = 0; k < 3 && n > 1; ++k) {
-        const int i = revisits[k];
-        if (i < 0 || i >= n || (k > 0 && i == revisits[k - 1])) continue;
-        double again = 0.0;
-        if (!samplePoint(o, taken[i].first, taken[i].second, again)) {
-            std::fprintf(stderr, "[probe] revisit failed at %.5f,%.5f\n",
-                         taken[i].first, taken[i].second);
-            FSUIPC_Close();
-            return 2;
-        }
-        const double d = std::abs(again - takenSim[i]);
-        worst = std::max(worst, d);
-        ++checked;
-        std::printf("  revisit %9.5f %9.5f   first %8.2f m   again %8.2f m   d %.2f m\n",
-                    taken[i].first, taken[i].second, takenSim[i], again, d);
+    // The query is stateless, so asking twice must give the same height; a
+    // disagreement means the add-on is being fed the wrong point.
+    std::vector<double>  again;
+    std::vector<uint8_t> againOk;
+    double worstRepeat = 0.0;
+    if (!link.sample(pts, o.altitude, again, againOk)) {
+        std::fprintf(stderr, "[probe] %s\n", link.error().c_str());
+        return 2;
+    }
+    for (std::size_t i = 0; i < pts.size(); ++i) {
+        if (ok[i] && againOk[i]) worstRepeat = std::max(worstRepeat, std::abs(again[i] - sim[i]));
     }
 
-    writeSlew(false);   // hand the sim back in normal flight, not sampling mode
-
-    std::printf("\n%d distinct sim values across %d points; %d revisited, worst |d| %.2f m\n",
-                int(distinct.size()), shown, checked, worst);
-    if (shown > 1 && distinct.size() == 1) {
-        std::printf("VERDICT: the ground model did NOT follow the reposition "
-                    "(frozen). Try --slew off.\n");
-        FSUIPC_Close();
+    std::printf("\n%d of %d point(s) answered; %d distinct height(s); worst repeat |d| %.2f m\n",
+                answered, int(pts.size()), int(distinct.size()), worstRepeat);
+    if (answered == 0) {
+        std::printf("VERDICT: the add-on is running but answered nothing -- check that\n"
+                    "         Prepar3D is not paused and that its scenery is loaded.\n");
         return 1;
     }
-    if (checked > 0 && worst > 0.5) {
-        std::printf("VERDICT: readings do not repeat at fixed coordinates "
-                    "(worst %.2f m), so the position writes are not taking effect --\n"
-                    "         the numbers above are from where the aircraft actually was.\n"
-                    "         Try the other --slew setting; do not survey like this.\n", worst);
-        FSUIPC_Close();
+    if (answered < int(pts.size())) {
+        std::printf("VERDICT: some points had no surface (open water or no data). Those\n"
+                    "         cells keep their SRTM height in the bake, which is what you want.\n");
+    }
+    if (worstRepeat > 0.05) {
+        std::printf("VERDICT: repeat queries disagree (%.2f m), so the answers are not\n"
+                    "         tied to the points asked. Do not bake with this.\n", worstRepeat);
         return 1;
     }
-    std::printf("VERDICT: the ground model tracked the reposition and readings repeat "
-                "at fixed coordinates.\n"
-                "         Survey with these settings is sound.\n");
-    FSUIPC_Close();
+    std::printf("VERDICT: the sim is answering per point and repeating; sample against\n"
+                "         it is sound.%s\n",
+                compared > 0 ? " Where SRTM and the sim differ, the bake moves the ground to the sim."
+                             : "");
     return 0;
 }
 
 int modeSurvey(Options o) {
-    if (!fsuipcOpen()) {
-        std::fprintf(stderr, "[survey] FSUIPC_Open failed: is Prepar3D running, with FSUIPC6 loaded?\n");
-        return 2;
-    }
-    if (!writeSlew(o.slew)) {
-        std::fprintf(stderr, "[survey] could not set slew mode\n");
-        return 2;
-    }
-    if (!o.slew) {
-        std::fprintf(stderr, "[survey] warning: --slew off leaves the aircraft free-flying, so a reading\n"
-                             "         can belong to wherever it drifted to, not the requested cell.\n");
-    }
+    ProbeLink link;
+    if (const int rc = requireProbe(link, "survey")) return rc;
 
     const auto tiles = tilesForBoxes(o.boxes);
     const int  n     = (o.res == 1) ? kSrtm1 : kSrtm3;
     int  totalTaken = 0;
+    int  totalMiss  = 0;
     bool limited    = false;
     bool failed     = false;
-    double worstPos = 0.0;   // worst residual between requested and reached position
 
     // Create it up front: a survey that cannot write its samples must say so
-    // now, not after an hour of sampling.
+    // now, not after a run of sampling.
     std::error_code ec;
     std::filesystem::create_directories(o.outDir, ec);
+
+    std::printf("sampling from Prepar3D through PdkTerrainProbe: %d points per tick, "
+                "asked from %.0f m\n\n", terrain::probe::kMaxQueries, o.altitude);
+
+    const int cap = terrain::probe::kMaxQueries;
 
     for (const std::string& tile : tiles) {
         if (g_stop) break;
@@ -676,7 +714,7 @@ int modeSurvey(Options o) {
             std::filesystem::remove(csv);
         }
 
-        // Hold the file open for the whole tile: one open per sample is slow,
+        // Hold the file open for the whole tile: one open per batch is slow,
         // and -- more to the point -- a write that fails has to stop the run
         // rather than vanish. A survey that cannot record its samples must not
         // look like it succeeded.
@@ -699,60 +737,80 @@ int modeSurvey(Options o) {
                     tile.c_str(), int(pts.size()), already);
 
         const auto t0  = std::chrono::steady_clock::now();
-        int        got = 0;
-        for (std::size_t i = 0; i < pts.size() && !g_stop; ++i) {
-            const int r = pts[i].first, c = pts[i].second;
-            if (have[g.idx(r, c)]) continue;
-            if (o.limit > 0 && totalTaken >= o.limit) { g_stop = true; limited = true; break; }
+        int        got = 0, missed = 0, batches = 0;
 
-            const double lat = g.latOfRow(r);
-            const double lon = g.lonOfCol(c);
-            double ground = 0.0, posErr = 0.0;
-            if (!samplePoint(o, lat, lon, ground, &posErr)) {
-                std::fprintf(stderr, "[%s] sample failed at %.6f,%.6f -- the aircraft never reached\n"
-                                     "        the requested position -- stopping\n",
-                             tile.c_str(), lat, lon);
+        std::vector<std::pair<double,double>> batch;   // the points asked about
+        std::vector<int>                      cell;    // their cell in `have`
+        cell.reserve(std::size_t(cap));
+        batch.reserve(std::size_t(cap));
+
+        auto flush = [&]() -> bool {
+            if (batch.empty()) return true;
+
+            std::vector<double>  hot;
+            std::vector<uint8_t> ok;
+            if (!link.sample(batch, o.altitude, hot, ok)) {
+                std::fprintf(stderr, "[%s] %s -- stopping\n", tile.c_str(), link.error().c_str());
+                failed = true;
                 g_stop = true;
-                break;
+                return false;
             }
-            worstPos = std::max(worstPos, posErr);
-            {
-                char line[96];
-                std::snprintf(line, sizeof(line), "%.8f,%.8f,%.2f\n", lat, lon, ground);
-                sink << line;
-                sink.flush();
-                if (!sink) {
-                    std::fprintf(stderr, "[%s] write failed at %.6f,%.6f -- stopping\n",
-                                 tile.c_str(), lat, lon);
-                    failed = true;
-                    g_stop = true;
-                    break;
-                }
-            }
-            have[g.idx(r, c)] = 1;
-            ++got;
-            ++totalTaken;
 
-            if ((got % 25) == 0) {
+            for (std::size_t i = 0; i < batch.size(); ++i) {
+                if (!ok[i]) { ++missed; continue; }   // no surface: the SRTM base keeps the cell
+                char line[96];
+                std::snprintf(line, sizeof(line), "%.8f,%.8f,%.2f\n",
+                              batch[i].first, batch[i].second, hot[i]);
+                sink << line;
+                have[std::size_t(cell[i])] = 1;
+                ++got;
+                ++totalTaken;
+            }
+            sink.flush();
+            if (!sink) {
+                std::fprintf(stderr, "[%s] write failed at %d sample(s) -- stopping\n",
+                             tile.c_str(), got);
+                failed = true;
+                g_stop = true;
+                return false;
+            }
+            batch.clear();
+            cell.clear();
+
+            if ((++batches % 10) == 0) {
                 const double secs = std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - t0).count();
                 const double rate = (secs > 0.0) ? got / secs : 0.0;
                 const int    left = int(pts.size()) - already - got;
                 const double eta  = (rate > 0.0) ? left / rate / 60.0 : 0.0;
-                std::printf("  %6d/%6d  %5.1f%%  %5.1f/s  ETA %5.1f min\n",
+                std::printf("  %6d/%6d  %5.1f%%  %6.0f/s  ETA %5.1f min\n",
                             already + got, int(pts.size()),
                             100.0 * (already + got) / std::max<std::size_t>(1, pts.size()),
                             rate, eta);
             }
+            return true;
+        };
+
+        for (std::size_t i = 0; i < pts.size() && !g_stop; ++i) {
+            const int r = pts[i].first, c = pts[i].second;
+            if (have[g.idx(r, c)]) continue;
+            if (o.limit > 0 && totalTaken >= o.limit) { g_stop = true; limited = true; break; }
+
+            batch.emplace_back(g.latOfRow(r), g.lonOfCol(c));
+            cell.push_back(int(g.idx(r, c)));
+            if (int(batch.size()) >= cap && !flush()) break;
         }
-        std::printf("[%s] wrote %d new sample(s) to %s\n", tile.c_str(), got, csv.c_str());
+        if (!g_stop) flush();
+
+        std::printf("[%s] wrote %d new sample(s) to %s%s\n", tile.c_str(), got, csv.c_str(),
+                    missed ? (" (" + std::to_string(missed) + " had no surface; left to SRTM)").c_str()
+                           : "");
+        totalMiss += missed;
     }
 
-    writeSlew(false);   // hand the sim back in normal flight, not sampling mode
-    FSUIPC_Close();
-    if (totalTaken > 0) {
-        std::printf("\nposition: worst residual %.1f m over %d sample(s)\n",
-                    worstPos * 111320.0, totalTaken);
+    if (totalMiss > 0) {
+        std::printf("\n%d point(s) had no surface in the sim and keep their SRTM height.\n",
+                    totalMiss);
     }
     const char* why = failed  ? "FAILED -- "
                     : limited ? "limit reached -- "
@@ -859,9 +917,8 @@ void usage() {
         "\n"
         "modes:\n"
         "  plan      print which tiles/points the options would bake (no sim needed)\n"
-        "  probe     sample a few points and report whether the sim's ground model\n"
-        "            follows the reposition and repeats at fixed coordinates;\n"
-        "            run this before a long survey\n"
+        "  probe     ask the sim about a few well-spread points and print sim vs SRTM;\n"
+        "            run this first to prove the add-on is loaded and answering\n"
         "  survey    walk every grid point in the boxes, appending to <out>\\<tile>.samples.csv\n"
         "  compose   fold base SRTM + the sample CSV into <out>\\<tile>.hgt (no sim needed)\n"
         "\n"
@@ -876,20 +933,21 @@ void usage() {
         "                     (with none of --site/--box, all of them are used)\n"
         "  --box a,b,c,d      add an explicit box: lat0,lon0,lat1,lon1; repeatable\n"
         "  --tile <name>      for compose, the tile(s) to assemble; repeatable\n"
-        "  --settle-ms <ms>   wait between position checks (default 60; probe uses 400)\n"
-        "  --repeat <n>       readings per point, last wins (default 1)\n"
-        "  --slew on|off      slew while repositioning (default on: holds the aircraft at\n"
-        "                     the sampled coordinate). Probe both; measured on P3D v5,\n"
-        "                     slew OFF does not apply the position writes.\n"
-        "  --altitude <m>     altitude to hold while sampling (default 3500)\n"
+        "  --altitude <m>     the height the surface is asked about from (default 3500).\n"
+        "                     The query is answered for the surface at that lat/lon, so\n"
+        "                     a height well above the ground gives the ground itself.\n"
         "  --no-resume        ignore the sample CSV and start the tile over\n"
         "  --limit <n>        stop after n samples this run (smoke test)\n"
         "  --allow-empty-base emit a tile from samples alone when no SRTM base is present\n"
         "  --help\n"
         "\n"
+        "The sim side is PdkTerrainProbe.dll, the add-on CigiStarter answers HAT/HOT\n"
+        "from (tools\\PdkTerrainProbe\\README.md). No FSUIPC, no slew, no repositioning:\n"
+        "the surface query is about the world, so a whole tile takes seconds.\n"
+        "\n"
         "typical run:\n"
         "  TerrainBaker plan\n"
-        "  TerrainBaker probe                       (Prepar3D running, nothing else flying it)\n"
+        "  TerrainBaker probe                       (Prepar3D running, add-on loaded)\n"
         "  TerrainBaker survey\n"
         "  TerrainBaker compose\n"
         "  copy <out>\\*.hgt over terrain\\   (or point CigiStarter at it: --terrain-dir)\n");
@@ -910,21 +968,11 @@ bool parseArgs(int argc, char** argv, Options& o) {
         else if (a == "--base")   { const char* v = next("--base");   if (!v) return false; o.baseDir = v; }
         else if (a == "--out")    { const char* v = next("--out");    if (!v) return false; o.outDir  = v; }
         else if (a == "--res")    { const char* v = next("--res");    if (!v) return false; o.res = std::atoi(v); }
-        else if (a == "--settle-ms") { const char* v = next("--settle-ms"); if (!v) return false; o.settleMs = std::atof(v); o.settleGiven = true; }
-        else if (a == "--repeat") { const char* v = next("--repeat"); if (!v) return false; o.repeat = std::atoi(v); }
         else if (a == "--altitude") { const char* v = next("--altitude"); if (!v) return false; o.altitude = std::atof(v); }
         else if (a == "--limit")  { const char* v = next("--limit");  if (!v) return false; o.limit = std::atoi(v); }
         else if (a == "--tile")   { const char* v = next("--tile");   if (!v) return false; o.tileArg.push_back(v); }
         else if (a == "--allow-empty-base") { o.allowEmptyBase = true; }
         else if (a == "--no-resume") { o.resume = false; }
-        else if (a == "--slew") {
-            const char* v = next("--slew");
-            if (!v) return false;
-            const std::string s = v;
-            if (s == "on") o.slew = true;
-            else if (s == "off") o.slew = false;
-            else { std::fprintf(stderr, "--slew takes on or off\n"); return false; }
-        }
         else if (a == "--site") {
             const char* v = next("--site");
             if (!v) return false;

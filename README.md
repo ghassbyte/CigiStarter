@@ -352,25 +352,25 @@ client.txt
 
   2. **Sim-exact bake.** `tools\TerrainBaker` overlays the *simulator's own*
      ground heights on the SRTM base, exactly where the aircraft flies. It walks
-     a grid over the chosen boxes, reads Prepar3D's ground altitude over FSUIPC
-     at each point, and writes the result back out as an ordinary `.hgt` tile:
-     SRTM everywhere, sim-exact at the fields, runway flattening and all. This
-     program reads the output unchanged.
+     a grid over the chosen boxes, asks Prepar3D for its own surface height at
+     each point through the same `PdkTerrainProbe` add-on the program uses live,
+     and writes the result back out as an ordinary `.hgt` tile: SRTM everywhere,
+     sim-exact at the fields, runway flattening and all. This program reads the
+     output unchanged.
 
      ```powershell
      .\TerrainBaker plan      # tiles, point counts, rough cost -- no sim needed
-     .\TerrainBaker probe     # with Prepar3D up: does the ground model track?
+     .\TerrainBaker probe     # with Prepar3D up: is the add-on answering?
      .\TerrainBaker survey    # the sweep; interruptible and resumable
      .\TerrainBaker compose   # SRTM base + samples -> terrain-sim\*.hgt
      ```
 
-     Run `probe` first: it proves the FSUIPC link and that the readings really
-     follow the reposition — Prepar3D can freeze its ground model while an
-     aircraft is held in slew, and position writes can go unapplied, so the tool
-     reads its own position back on every sample and only records a point once
-     the aircraft is verifiably there. `plan`, `compose` and `--help` need
-     no simulator, so they can be run anywhere. A bake builds on option 1 —
-     fetch the SRTM tiles first, since they are its base. See
+     Run `probe` first: it asks about a few spread-out points, twice, and prints
+     sim against SRTM. No FSUIPC and no repositioning are involved — the surface
+     query is answered about the world, so the whole sweep takes seconds — but
+     `probe` and `survey` need Prepar3D running with the add-on loaded. `plan`,
+     `compose` and `--help` need neither. A bake builds on option 1 — fetch the
+     SRTM tiles first, since they are its base. See
      `tools\TerrainBaker\README.md`.
 
   Either way, a tile is read into memory the first time it is asked about and
@@ -626,7 +626,7 @@ the clients need no reconfiguration. See
 | `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
 | `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles the HAT/HOT fallback is answered from |
-| `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source) |
+| `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source, and the sampler `TerrainBaker` uses) |
 | `tools\get_terrain.ps1` | option 1: downloads generic SRTM tiles for `terrain\` |
 | `tools\TerrainBaker\` | option 2: bakes Prepar3D's own ground heights over an SRTM base |
 | `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |

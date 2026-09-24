@@ -44,6 +44,11 @@ They share one block of memory, described in `../../TerrainProbeIpc.h`:
   meantime is refused, and the IG falls back to the database — it is never
   answered with the terrain of wherever the aircraft used to be.
 
+CigiStarter only ever wants about six points at a time, but the table holds 256
+and the add-on answers every enabled one on each tick. `tools\TerrainBaker` uses
+that: it fills the whole table to sample a tile in seconds, which is why a bake
+no longer needs FSUIPC, slew mode or a reposition per cell.
+
 ## Building
 
 Needs the Prepar3D SDK (v5 or v6; the interface has the same name and GUID in
@@ -114,6 +119,16 @@ that a row caught mid-rewrite is not believed.
 msbuild test\PdkTerrainProbeTest.vcxproj /p:Configuration=Release /p:Platform=x64
 test\x64\Release\PdkTerrainProbeTest.exe
 ```
+
+The same executable can also play the sim for a *different* process, which is
+how TerrainBaker's batch driver is exercised without Prepar3D:
+
+```
+test\x64\Release\PdkTerrainProbeTest.exe --serve 30
+```
+
+While it is serving it answers every enabled slot with `100 + lat*10 + lon +
+alt*0.001`, so a tool run against it can be checked against that formula.
 
 What it cannot cover is Prepar3D's side: whether `QuerySurfaceElevation` returns
 what the reference IG returned at a given airport. That needs the sim, and is

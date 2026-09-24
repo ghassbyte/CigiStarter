@@ -101,7 +101,8 @@ that the HOST requires to start streaming:
   or frozen HOT flies the aircraft into the ground. The `terrain\` folder is
   filled either with generic SRTM tiles (`tools\get_terrain.ps1`) or with a
   **sim-exact bake** that overlays Prepar3D's own ground heights on them
-  (`tools\TerrainBaker`), which is what captures a runway's flattening.
+  (`tools\TerrainBaker`), which is what captures a runway's flattening; the bake
+  asks the same add-on, so it is a fast batch sample and not a slew sweep.
 - Parses inbound CIGI (IG Control, Entity Control, …) for the live status block
   in its operator window.
 - **Fans the downstream stream out** to the extra IG PCs listed in `client.txt`

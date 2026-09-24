@@ -5,11 +5,18 @@ simulator's own ground heights**, instead of the generic SRTM world model.
 
 ```
   option 1  tools\get_terrain.ps1      generic SRTM tiles        minutes, no sim
-  option 2  tools\TerrainBaker         SRTM base + sim patches   hours, needs P3D
+  option 2  tools\TerrainBaker         SRTM base + sim patches   seconds, needs P3D
 ```
 
 Option 2 builds on option 1: the SRTM tile is the base, and the bake overlays
 the sim's readings on the parts of it that matter.
+
+The sim's readings come through **`PdkTerrainProbe.dll`**, the same in-process
+add-on CigiStarter answers HAT/HOT from at run time (see
+`tools\PdkTerrainProbe\README.md`). It does not use FSUIPC, slew mode or
+repositioning: the surface query is answered about the world at the coordinate
+asked for, so a whole tile is sampled in seconds rather than the hours the old
+one-cell-at-a-time FSUIPC sweep took.
 
 This file is the design and the reference. **`RUNBOOK.md`** is the step-by-step
 procedure for running a real bake on the IG PC.
@@ -32,17 +39,21 @@ The project is part of `CigiStarter.sln` (configurations `Debug|x64` and
 msbuild CigiStarter.sln /p:Configuration=Release /p:Platform=x64
 ```
 
-It links the same FSUIPC SDK as the IG, with the same static CRT, so it runs on
-a fresh PC. `--help`, `plan` and `compose` need no simulator.
+It links the same static CRT as the IG, so it runs on a fresh PC, and it uses no
+SDK of its own (`--help`, `plan` and `compose` need no simulator, and the project
+builds without the Prepar3D SDK installed).
 
 ## Modes
 
 | Mode | Needs P3D | What it does |
 |------|-----------|--------------|
 | `plan` | no | prints the tiles, the point counts and a rough cost |
-| `probe` | yes | samples a few spread-out points and says whether the ground model tracks |
+| `probe` | yes | asks the sim about a few spread-out points and prints sim vs SRTM |
 | `survey` | yes | walks every grid point in the boxes, appending to `<out>\<tile>.samples.csv` |
 | `compose` | no | folds the SRTM base and that CSV into `<out>\<tile>.hgt` |
+
+`probe` and `survey` need Prepar3D running with the add-on loaded; everything
+else is offline.
 
 `plan`, `survey` and `compose` take the same `--site` / `--box` / `--res`
 options, so the survey and the compose agree on the area. `--tile` selects tiles
@@ -50,12 +61,17 @@ for `compose` explicitly.
 
 ## Procedure
 
-Run it on the **IG PC**, with Prepar3D up and running (not paused) and nothing
-else driving the aircraft — the vendor program or `CigiP3dBridge` must be
-closed, because this tool moves the aircraft itself. It sets slew mode for the
-sweep and switches it back off at the end.
+Run it on the **IG PC**, with Prepar3D up and running (not paused) and the
+`PdkTerrainProbe` add-on loaded. Nothing else has to be held still: the bake
+reads the world rather than steering the aircraft, so the vendor program or
+`CigiP3dBridge` may be running, and the aircraft is never touched.
 
 ```powershell
+# 0. the add-on, once per IG PC
+copy tools\PdkTerrainProbe\bin\Release\PdkTerrainProbe.dll <add-ons folder>
+copy tools\PdkTerrainProbe\add-on.xml                     <add-ons folder>
+#    ...and restart Prepar3D. See tools\PdkTerrainProbe\README.md.
+
 # 1. the SRTM base (option 1)
 .\tools\get_terrain.ps1 -Points "-6.54,106.76","-6.27,106.89","-6.13,106.66","-6.90,107.58" `
                         -Out x64\Release\terrain
@@ -63,10 +79,10 @@ sweep and switches it back off at the end.
 # 2. what would be baked
 .\x64\Release\TerrainBaker.exe plan
 
-# 3. prove the link and the tracking -- minutes, not hours
+# 3. prove the add-on is answering -- seconds
 .\x64\Release\TerrainBaker.exe probe
 
-# 4. the sweep. Ctrl+C is safe: it stops after the sample in flight
+# 4. the sweep. Ctrl+C is safe: it stops between batches
 .\x64\Release\TerrainBaker.exe survey
 
 # 5. assemble and deploy
@@ -83,41 +99,25 @@ looks like, and the failure modes.
 
 ### Probe first, and read what it says
 
-`probe` samples the centre and corners of each box, far enough apart that a
-frozen ground model cannot hide, then revisits three of the points. It exits
-non-zero on either failure: values that never move at all (a frozen ground
-model), or values that do not repeat at fixed coordinates (the position writes
-are not being applied, so a reading belongs to wherever the aircraft already
-was). The second one is the nastier, because it still produces plausible-looking
-numbers.
+`probe` asks about the centre and corners of each box, far enough apart that one
+invented number could not pass for five, then asks about the same points again.
+It exits non-zero if the add-on answers nothing (Prepar3D paused, or scenery not
+loaded) or if the repeat disagrees with the first answer, which would mean the
+answers are not tied to the points asked. It also prints the SRTM height and the
+difference, so the size of the correction is visible before anything is baked.
 
-FSUIPC's `0x0020` is *ground altitude under the player aircraft*, and Prepar3D
-can freeze its ground model while an aircraft is held in slew — which is why
-CigiStarter needs its own database at all. So neither mode is assumed: the tool
-reads its own latitude/longitude back in the same round trip as the ground
-height and records a point only once the aircraft is verifiably at the requested
-coordinate (1 m tolerance). `survey` reports the worst residual, which should be
-`0.0 m`.
+The query is **altitude dependent** — Prepar3D decides which surface is meant
+from the height it is asked about — which is why `--altitude` exists and defaults
+to 3500 m: high enough to be above the ground everywhere in these boxes, so the
+answer is the surface an aircraft would land on. It is the same field
+CigiStarter fills in at run time with the HAT point's altitude, so a baked tile
+and a live answer describe the same surface.
 
-Measured on Prepar3D v5 (dev box, 2026-09), flattened airfield:
-
-| setting | result |
-|---------|--------|
-| `--slew on` | writes land; reading repeats to 0.05 m at any `--settle-ms` from 25 up; agrees with SRTM to ~1.3 m mean |
-| `--slew off` | writes are mostly not applied; the number still changes from point to point, but it belongs to wherever the aircraft had drifted to — up to ~8 m along a survey row |
-
-So `--slew on` is the default: in slew the aircraft is held at the written
-coordinate, so the ground under it *is* that cell's ground by construction.
-`--slew off` stays available for a sim where slew freezes the ground model
-instead. `probe` is how you find out which sim you have — run it on the machine
-that will actually do the bake, since it is a property of the sim, not the tool.
-
-That measurement is about the *baker's* case, where the aircraft is moved to a
-new coordinate and asked about that one point. It does not contradict the
-runtime behaviour the IG sees — Prepar3D freezing the ground model while the
-bridge holds an aircraft in slew — which is why CigiStarter carries its own
-database rather than trusting a live HOT. Both are worth confirming on the IG
-PC: `probe` there settles the baker's half.
+Measured on Prepar3D v5 (dev box, 2026-09), the retired FSUIPC path: `--slew on`
+made the position writes land and repeat to 0.05 m, while `--slew off` mostly did
+not apply them. That whole question is gone with the surface query, which never
+moves the aircraft — and it is why CigiStarter's own live answer moved to the
+same source.
 
 ### Cost
 
@@ -125,14 +125,15 @@ With the built-in site boxes (±0.10°, ~22 km across) at the default 3
 arc-seconds (~90 m), the four fields are about **230 000 points** — S07E106
 (172 800) plus S07E107 (57 600), the only two tiles involved.
 
-The pace is one FSUIPC round trip per point plus `--settle-ms`, so about
-**9–10 points/s** at the default, i.e. several hours for the full sweep, and
-proportionally less if `--repeat` is raised. `--settle-ms` is the wait between
-*position checks* rather than a fixed delay, so it can be short without risking
-the wrong cell; `probe` defaults to a much longer 400 ms because it teleports
-tens of kilometres, into scenery that has not loaded yet. The sweep is resumable,
-so a long bake can be split across sessions, and `--limit N` caps a run for a
-smoke test.
+The probe answers every enabled slot of its table on each simulation tick, and
+`survey` keeps all 256 of them full, so the ceiling is 60 ticks/s × 256 ≈
+**15 000 points/s** and the full sweep is **well under a minute** — measured at
+about 9 400 points/s against a stand-in sim, i.e. ~25 s for the 230 400 points.
+In practice the pace is set by the sim's tick, not by the tool.
+
+The sweep is resumable, `--limit N` caps a run for a smoke test, and a point the
+sim has no surface for (open water, or no data) is simply not recorded, so that
+cell keeps its SRTM height.
 
 Widen a field's box with `--box lat0,lon0,lat1,lon1` if the HOST's approaches
 start further out; the cost rises with the square of the box.
@@ -150,9 +151,8 @@ refused: it would invent detail the base never had.
 
 ## Notes and limits
 
-- The sweep moves the aircraft under slew, so when it finishes the sim is
-  wherever the last sample was, at `--altitude`, with slew switched back off.
-  Land it or reload the scenario.
+- The bake does not touch the aircraft: no slew mode, no position writes, so the
+  sim is left exactly as it was found.
 - The tool writes `<out>\<tile>.samples.csv` alongside the tiles. That file is
   the bake — keep it, and re-running `survey` resumes from it. `--no-resume`
   starts a tile over. `survey` creates `<out>` if needed and stops with a clear
@@ -162,4 +162,5 @@ refused: it would invent detail the base never had.
   arc-second), so a baked tile is a drop-in replacement. Keep the original SRTM
   tiles somewhere for a re-bake.
 - The bake reflects the **installed scenery** at the time it runs. Change an
-  airport's add-on scenery and that area wants a re-bake.
+  airport's add-on scenery and that area wants a re-bake. (An IG PC with the
+  add-on loaded does not: it answers the same question live.)
