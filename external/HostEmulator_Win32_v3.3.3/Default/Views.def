@@ -1,0 +1,161 @@
+VIEWGROUP
+{
+	NAME = "OTW";
+	ID = 1;
+
+
+	COMPONENT
+	{
+		NAME        = "View Group Component 1";
+		ID          = 4001;
+		INSTANCE_ID = -1;
+		DEF_STATE   = 0;
+
+		STATE
+		{
+			NAME  = "Off";
+			VALUE = 0;
+		}
+
+		STATE
+		{
+			NAME  = "On";
+			VALUE = 1;
+		}
+	}
+}
+
+VIEW
+{
+	NAME = "Front";
+	ID = 0;
+	GROUP = 1;
+	TYPE = 0;
+	PROJECTION_TYPE = PERSPECTIVE;
+	REPLICATION_MODE = NONE;
+	MIRROR_MODE = NONE;
+	X_OFFSET = 0;
+	Y_OFFSET = 0;
+	Z_OFFSET = 0;
+	YAW = 0;
+	PITCH = 0;
+	ROLL = 0;
+	TOP = 30;
+	BOTTOM = -30;
+	LEFT = -40;
+	RIGHT = 40;
+	NEAR = 1;
+	FAR = 100000;
+
+	COMPONENT
+	{
+		NAME        = "View Component 1";
+		ID          = 4002;
+		INSTANCE_ID = -1;
+		DEF_STATE   = 0;
+
+		STATE
+		{
+			NAME  = "Off";
+			VALUE = 0;
+		}
+
+		STATE
+		{
+			NAME  = "On";
+			VALUE = 1;
+		}
+	}
+}
+
+VIEW
+{
+	NAME = "Left";
+	ID = 1;
+	GROUP = 1;
+	TYPE = 0;
+	PROJECTION_TYPE = PERSPECTIVE;
+	REPLICATION_MODE = NONE;
+	MIRROR_MODE = NONE;
+	X_OFFSET = 0;
+	Y_OFFSET = 0;
+	Z_OFFSET = 0;
+	YAW = -80;
+	PITCH = 0;
+	ROLL = 0;
+	TOP = 30;
+	BOTTOM = -30;
+	LEFT = -40;
+	RIGHT = 40;
+	NEAR = 1;
+	FAR = 100000;
+}
+
+VIEW
+{
+	NAME = "Right";
+	ID = 2;
+	GROUP = 1;
+	TYPE = 0;
+	PROJECTION_TYPE = PERSPECTIVE;
+	REPLICATION_MODE = NONE;
+	MIRROR_MODE = NONE;
+	X_OFFSET = 0;
+	Y_OFFSET = 0;
+	Z_OFFSET = 0;
+	YAW = 80;
+	PITCH = 0;
+	ROLL = 0;
+	TOP = 30;
+	BOTTOM = -30;
+	LEFT = -40;
+	RIGHT = 40;
+	NEAR = 1;
+	FAR = 100000;
+}
+
+VIEW
+{
+	NAME = "Top";
+	ID = 3;
+	GROUP = 1;
+	TYPE = 0;
+	PROJECTION_TYPE = PERSPECTIVE;
+	REPLICATION_MODE = NONE;
+	MIRROR_MODE = NONE;
+	X_OFFSET = 0;
+	Y_OFFSET = 0;
+	Z_OFFSET = 0;
+	YAW = 0;
+	PITCH = 60;
+	ROLL = 0;
+	TOP = 30;
+	BOTTOM = -30;
+	LEFT = -40;
+	RIGHT = 40;
+	NEAR = 1;
+	FAR = 100000;
+}
+
+VIEW
+{
+	NAME = "HDD";
+	ID = 4;
+	GROUP = 0;
+	TYPE = 0;
+	PROJECTION_TYPE = PARALLEL;
+	REPLICATION_MODE = NONE;
+	MIRROR_MODE = NONE;
+	X_OFFSET = 0;
+	Y_OFFSET = 0;
+	Z_OFFSET = 0;
+	YAW = 0;
+	PITCH = 0;
+	ROLL = 0;
+	TOP = 15;
+	BOTTOM = -15;
+	LEFT = -20;
+	RIGHT = 20;
+	NEAR = 1;
+	FAR = 50000;
+}

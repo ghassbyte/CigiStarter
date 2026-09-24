@@ -1,0 +1,29 @@
+database
+{
+	name	= "St. Louis";
+	id	= 1;
+	origin_latitude		= 38.624670999999999;
+	origin_longitude	= -90.184962999999996;
+	origin_altitude		= 0.0;
+	default_latitude	= 38.624670999999999;
+	default_longitude	= -90.184962999999996;
+	default_altitude	= 500.0;
+    COMPONENT
+	{
+		NAME        = "Terrain Component 1";
+		COMPONENT_CLASS = GLOBAL_TERRAIN;
+		ID          = 4000;
+		INSTANCE_ID = -1;
+		DEF_STATE   = 0;
+		STATE
+		{
+			NAME  = "Off";
+			VALUE = 0;
+		}
+		STATE
+		{
+			NAME  = "On";
+			VALUE = 1;
+		}
+	}
+}

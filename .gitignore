@@ -24,6 +24,10 @@ Release/
 # build-output rule above must not swallow it.
 !external/npcap-sdk-1.16/Lib/x64/
 
+# The vendored CIGI Host Emulator is a binary distribution: its executables are
+# the whole point of having it in the tree, for the bench tests.
+!external/HostEmulator_Win32_v3.3.3/*.exe
+
 # Editor / OS
 *.swp
 Thumbs.db

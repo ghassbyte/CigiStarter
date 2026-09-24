@@ -1,0 +1,455 @@
+Version 3.3.3
+-------------------------------------------------------------------------
+- Fixed Component Class combo box not being populated in Short Component Control dialog.
+
+- Updated DummyIG "usage" text to say DummyIG3 instead of HostDemo.
+
+
+Version 3.3.2
+-------------------------------------------------------------------------
+- Audited CIGI packet implementations for correctness.
+    - Fixed incorrect field sizes in CIGI_POSITION_REQUEST and others.
+    - Implemented missing "Request ID" field in Environmental Conditions packet.
+    - Other misc. fixes.
+
+- Fixed buggy behavior in Component States pane (on Entity page). It was often
+  the case that when trying to set a state in the pane, you had to set it to a
+  different state first. (For example, if you wanted to turn a switch ON, just
+  selecting ON would not always work. You had to select OFF first, and then ON.)
+  
+- An IG Control packet with bogus data that was sent from the Host Emulator
+  during initial connection to an IG should no longer occur.
+
+- Fixed incorrect positioning of entities on terrain database [re]load.
+
+- Implemented CIGI 3.3 versions of Component Control and Short Component Control.
+
+- Numeric fields that show various state (e.g. entity state like lat/long) are
+  now grayed out and uneditable while in Run mode. Putting the HE into Freeze
+  will ungray the fields for editing.
+    - The HE used to function this way, but the ability to edit state while
+      in Run was added. However, the feature was proving to be problematic
+      and not easily solvable with the current GUI design. It was decided
+      to revert to the old behavior.
+
+- Fixed Component-related bugs that were introduced in 3.3.1.
+    - Terrain/Environment-related components will now show up in the correct lists.
+    - Component States will again be listed correctly for components with instance
+      IDs set to -1 in .def files.
+
+- Menu items for symbology-related packets (e.g. Actions -> Send Packet) are
+  now disabled when the user configures the Host Emulator to use CIGI versions
+  below 3.3 in the Setup screen. Symbology packets will also be disabled in
+  scripts when the version is too low.
+
+- Capture filtering checkboxes for symbology-related packets now work and persist.
+
+- Scripting:
+    - Fixed GTERRAIN_COMPONENT commands not looking for database terrain
+      components, causing "invalid component" errors when running scripts.
+    - Add "instance ID" argument to documentation for various XXX_COMPONENT commands.
+    - Support for scripting System Components should now be fully in place.
+
+- Fly window:
+    - Switching fly modes will now reset the joystick to the center.
+    - The current fly mode will be maintained when hitting Reset.
+    - Made the horizontal slider in the Fly window slightly wider, so that it's
+      easier (and possible) to manually set the slider back to 0 by hand.
+    - The displayed Airspeed/Speed number is now rounded, so that it can
+      actually top out at e.g. 1200 instead of 1199.
+    - The window can now be closed by pressing Escape.
+    - The Freeze/Resume button will no longer erroneously say "Freeze" on
+      application start (when no exercise is being run).
+
+- Scripts dialog:
+    - The width of the scripts dropdown list is now dynamically sized to match
+      the width of the longest path name, so that the paths do not get cut off.
+    - The vertical allowance has also been increased, so that more of the list
+      can be shown before the vertical scroll bar kicks in.
+
+- Various other user interface fixes/improvements:
+    - Fixed the odd GUI behavior of the Time field in the Celestial Sphere
+      section of Environment -> Sky and Global Atmosphere.
+    - Script commands that set entity position will now cause a refresh in the GUI
+      entity state view, so that the user can see the updated entity position.
+    - All windows/dialogs are now centered upon first opening them.
+    - The list of packets under "Send Packet" has been alphabetized.
+    - Fixed misnamed Line of Sight Vector packet ("Vector" was misnamed "Volume".)
+    - Multiple packets are no longer sent when using Celestial Sphere Control dialog.
+    - On the HAT/HOT and LOS tabs in the Entity pane, "Request ID Range" entries
+      now correctly show a range that spans 64 IDs (instead of 16).
+    - Fixed the Enable Segment/Volume checkbox on the Collision Detection tab.
+
+- DummyIG now also prints:
+    - Atmosphere Control Packet
+    - Celestial Sphere Control
+    - Collision Detection Segment Definition
+    - Collision Detection Volume Definition
+    - Earth Reference Model Definition
+    - Environmental Condition
+    - Environmental Region Control
+    - Maritime Surface Conditions Control
+    - Motion Tracker Control
+    - Position Request
+    - Rate Control
+    - Sensor Control
+    - Terrestrial Surface Conditions Control
+    - Trajectory Definition
+    - Wave Control
+
+
+Version 3.3.1
+-------------------------------------------------------------------------
+- Various bug fixes.
+
+- Added the ability to have multiple terrain components with the same
+  component ID but different instance IDs.
+  
+- Entity and view script commands now set the reset points for the entity.
+  This emulates the behavior of the HE 2.x where if you are running a script
+  and go into free flight, you can reset back to that point without
+  re-running the entire script again.
+  
+- Defeated sending of short component control packets.  This feature may be
+  re-introduced as an optional behavior in a later release.
+  
+- Entity Control Packets are now sent with Parent ID=0 if there is no parent.
+
+- Fixed issues with View Components.
+
+- Added system.cfg and scriptable system components.  System Components
+  GUI is still TBD.
+  
+- Deprecated .cfg component "DEF_STATE" and "DEF_DATA" entries.  Renamed to
+  "DEFAULT_STATE" and "DEFAULT_DATA", respectively.
+  for all component entries in the .cfg files.
+
+- Fixed issue with scripts where entity and view states would be reset if
+  the user would pause the script and go into free flight.
+
+- Fixed issues where weather control script commands would not send a
+  Weather Control packet.
+
+- Fixed LOS request script commands not working.
+
+- Added <instance ID> parameters to the following script commands:
+
+    GTERRAIN_COMPONENT_STATE
+    GTERRAIN_COMONENT_DATUM_INT32
+    GTERRAIN_COMONENT_DATUM_UINT32
+    GTERRAIN_COMONENT_DATUM_INT64
+    GTERRAIN_COMONENT_DATUM_UINT64
+    GTERRAIN_COMONENT_DATUM_FLOAT
+    GTERRAIN_COMONENT_DATUM_DOUBLE
+    GTERRAIN_COMONENT_DATUM_END_UPDATE
+    ATMOSPHERE_COMPONENT_STATE
+    ATMOSPHERE_COMONENT_DATUM_INT32
+    ATMOSPHERE_COMONENT_DATUM_UINT32
+    ATMOSPHERE_COMONENT_DATUM_INT64
+    ATMOSPHERE_COMONENT_DATUM_UINT64
+    ATMOSPHERE_COMONENT_DATUM_FLOAT
+    ATMOSPHERE_COMONENT_DATUM_DOUBLE
+    ATMOSPHERE_COMONENT_DATUM_END_UPDATE
+    CEL_SPHERE_COMPONENT_STATE
+    CEL_SPHERE_COMONENT_DATUM_INT3
+    CEL_SPHERE_COMONENT_DATUM_UINT32
+    CEL_SPHERE_COMONENT_DATUM_INT64
+    CEL_SPHERE_COMONENT_DATUM_UINT64
+    CEL_SPHERE_COMONENT_DATUM_FLOAT
+    CEL_SPHERE_COMONENT_DATUM_DOUBLE
+    CEL_SPHERE_COMONENT_DATUM_END_UPDATE
+    SYSTEM_COMPONENT_STATE
+    SYSTEM_COMONENT_DATUM_INT32
+    SYSTEM_COMONENT_DATUM_UINT32
+    SYSTEM_COMONENT_DATUM_INT64
+    SYSTEM_COMONENT_DATUM_UINT64
+    SYSTEM_COMONENT_DATUM_FLOAT
+    SYSTEM_COMONENT_DATUM_DOUBLE
+    SYSTEM_COMONENT_DATUM_END_UPDATE
+
+  See script reference in help file for additional details.
+
+- Fixed Weather Control packets not being sent from Environment
+  view.
+
+
+Version 3.3.1
+-------------------------------------------------------------------------
+- Various bug fixes.
+
+- Added the ability to have multiple terrain components with the same
+  component ID but different instance IDs.
+  
+- Entity and view script commands now set the reset points for the entity.
+  This emulates the behavior of the HE 2.x where if you are running a script
+  and go into free flight, you can reset back to that point without
+  re-running the entire script again.
+  
+- Defeated sending of short component control packets.  This feature may be
+  re-introduced as an optional behavior in a later release.
+  
+- Entity Control Packets are now sent with Parent ID=0 if there is no parent.
+
+- Fixed issues with View Components.
+
+- Added system.cfg and scriptable system components.  System Components
+  GUI is still TBD.
+  
+- Deprecated .cfg component "DEF_STATE" and "DEF_DATA" entries.  Renamed to
+  "DEFAULT_STATE" and "DEFAULT_DATA", respectively.
+  for all component entries in the .cfg files.
+
+- Fixed issue with scripts where entity and view states would be reset if
+  the user would pause the script and go into free flight.
+
+- Fixed issues where weather control script commands would not send a
+  Weather Control packet.
+
+- Fixed LOS request script commands not working.
+
+- Added <instance ID> parameters to the following script commands:
+
+    GTERRAIN_COMPONENT_STATE
+    GTERRAIN_COMONENT_DATUM_INT32
+    GTERRAIN_COMONENT_DATUM_UINT32
+    GTERRAIN_COMONENT_DATUM_INT64
+    GTERRAIN_COMONENT_DATUM_UINT64
+    GTERRAIN_COMONENT_DATUM_FLOAT
+    GTERRAIN_COMONENT_DATUM_DOUBLE
+    GTERRAIN_COMONENT_DATUM_END_UPDATE
+    ATMOSPHERE_COMPONENT_STATE
+    ATMOSPHERE_COMONENT_DATUM_INT32
+    ATMOSPHERE_COMONENT_DATUM_UINT32
+    ATMOSPHERE_COMONENT_DATUM_INT64
+    ATMOSPHERE_COMONENT_DATUM_UINT64
+    ATMOSPHERE_COMONENT_DATUM_FLOAT
+    ATMOSPHERE_COMONENT_DATUM_DOUBLE
+    ATMOSPHERE_COMONENT_DATUM_END_UPDATE
+    CEL_SPHERE_COMPONENT_STATE
+    CEL_SPHERE_COMONENT_DATUM_INT3
+    CEL_SPHERE_COMONENT_DATUM_UINT32
+    CEL_SPHERE_COMONENT_DATUM_INT64
+    CEL_SPHERE_COMONENT_DATUM_UINT64
+    CEL_SPHERE_COMONENT_DATUM_FLOAT
+    CEL_SPHERE_COMONENT_DATUM_DOUBLE
+    CEL_SPHERE_COMONENT_DATUM_END_UPDATE
+    SYSTEM_COMPONENT_STATE
+    SYSTEM_COMONENT_DATUM_INT32
+    SYSTEM_COMONENT_DATUM_UINT32
+    SYSTEM_COMONENT_DATUM_INT64
+    SYSTEM_COMONENT_DATUM_UINT64
+    SYSTEM_COMONENT_DATUM_FLOAT
+    SYSTEM_COMONENT_DATUM_DOUBLE
+    SYSTEM_COMONENT_DATUM_END_UPDATE
+
+  See script reference in help file for additional details.
+
+- Fixed Weather Control packets not being sent from Environment
+  view.
+
+
+Version 3.3.0
+-------------------------------------------------------------------------
+- Fixed View and View Group Component tabs.
+
+- Added entries for LINEAR_RATE and ANGULAR_RATE script commands to the
+  help file.
+  
+- Added the following script capabilities and documented in the help file:
+	MISSILE_FIRE
+	MISSILE_HIT_EFFECT
+	MISSILE_TERMINATING_LAUNCH_EFFECT
+	MISSILE_PERSISTENT_LAUNCH_EFFECT
+	MISSILE_TARGET
+	LOS_SEGMENT_REQ_BEGIN
+	LOS_SEGMENT_REQ_END
+	LOS_SEGMENT_REQ_TYPE
+	LOS_SEGMENT_REQ_SOURCE
+	LOS_SEGMENT_REQ_DESTINATION
+	LOS_SEGMENT_REQ_RESP_COORD_SYS
+	LOS_SEGMENT_REQ_MATERIAL_MASK
+	LOS_SEGMENT_REQ_UPDATE_PERIOD
+	LOS_VECTOR_REQ_BEGIN
+	LOS_VECTOR_REQ_END
+	LOS_VECTOR_REQ_TYPE
+	LOS_VECTOR_REQ_SOURCE
+	LOS_VECTOR_REQ_AZ_EL
+	LOS_VECTOR_REQ_MIN_MAX_RANGE
+	LOS_VECTOR_REQ_RESP_COORD_SYS
+	LOS_VECTOR_REQ_MATERIAL_MASK
+	LOS_VECTOR_REQ_ALPHA_THRESH
+	LOS_VECTOR_REQ_UPDATE_PERIOD
+	HAT_HOT_REQ_BEGIN
+	HAT_HOT_REQ_END
+	HAT_HOT_REQ_TYPE
+	HAT_HOT_REQ_SOURCE
+	HAT_HOT_REQ_UPDATE_PERIOD
+	
+- Added a CIGI Version 3.3 option in the Setup dialog.
+
+- Increased the size of the Component Class field of the Component Control and
+  Short Component Control packets to 6 bits.  This should not affect backwards-
+  compatibility with CIGI 3.2 or earlier.
+
+- Added support for the following CIGI 3.3 packets in the Watch window
+  and Send Packet interface:
+  
+    Symbol Surface Definition
+    Symbol Text Definition
+    Symbol Circle Definition
+    Symbol Line Definition
+    Symbol Clone
+    Symbol Control
+    Short Symbol Control
+
+
+Version 3.2.1
+-------------------------------------------------------------------------
+- Fixed bug where Send Articulated Part Packet and Send Component Control
+  Packet windows caused a crash if the user specified a non-configured
+  part or component.
+  
+- Improved performance when creating many entities from a script.  Up to
+  approximately 500 entities may now be created.
+  
+- Fixed the watch window so that messages are grouped properly for CIGI 3.2.
+
+- Added CIGI 3.2 packet fields to the watch window.
+
+
+Version 3.2.0
+-------------------------------------------------------------------------
+- Added support for CIGI 3.2 features:
+	- Added CIGI Version combo to Setup dialog
+	- Modified Start of Frame and IG Control packets
+	- Added Coord System parameter to Rate Control packet
+	- Modified HAT/HOT Request, LOS Segment Request, and LOS Vector
+	  Request packets. The new fields can be accessed through the
+	  Send Packet interface.
+
+- Fixed a bug in the driver where waypoint flight and missile tracking
+  gave the wrong heading.
+
+- Fixed byte-swapping of Conformal Clamped Entity Control, Articulated
+  Part Control, and Weather Control packets for Big-Endian emulation.
+
+- Fixed a problem where the driver process would sometimes remain loaded
+  after the main process exited.
+
+- Added the following script commands:
+	ATMOSPHERE_COMPONENT_END_UPDATE
+	CELSPHERE_COMPONENT_END_UPDATE
+	ENTITY_COMPONENT_END_UPDATE
+	EVENT_COMPONENT_END_UPDATE
+	GLAYER_COMPONENT_END_UPDATE
+	GSEA_COMPONENT_END_UPDATE
+	GTERRAIN_COMPONENT_END_UPDATE
+	RLAYER_COMPONENT_END_UPDATE
+	RSEA_COMPONENT_END_UPDATE
+	RTERRAIN_COMPONENT_END_UPDATE
+	SENSOR_COMPONENT_END_UPDATE
+	SYSTEM_COMPONENT_END_UPDATE
+	VIEW_COMPONENT_END_UPDATE
+	VIEWGROUP_COMPONENT_END_UPDATE
+
+- Improved the reliability of the FRAME and FRAME_WAIT script commands.
+
+- Fixed a bug in the driver preventing packet recording from working
+  after the first time.
+
+- Fixed problem with date/time not being updated correctly from
+  Sky and Global Atmosphere properties on Environment tab.
+
+- Fixed bug where view groups' pitch and roll values were not being set
+  correctly.
+
+- Fixed LINEAR_RATE and ANGULAR_RATE script keywords so that one does
+  not override (zero out) the other.
+
+- Fixed Big-Endian setting in Setup dialog not being saved in the Windows
+  registry.
+
+- Cleaned up driver thread shutdown events.  This should (hopefully) fix
+  situations where the driver does not terminate properly.
+
+
+Version 3.1.3
+-------------------------------------------------------------------------
+- Replaced 3.1.0/3.1.1 data-sharing mechanism. This should fix MANY bugs.
+
+- Fixed annoying problem where deleting the contents of an entity field
+  would cause an error window to pop up repeatedly.
+
+- Added VIEW_ATTACH and VIEWGROUP_ATTACH keywords as documented in the
+  help file. The commands were actually implemented as ATTACH_VIEW and
+  ATTACH_VIEWGROUP; those commands are still implemented but not
+  documented.
+
+- Fixed the PAUSE_MESSAGE and CLEAR_MESSAGES script commands.
+
+- Fixed Celestial Sphere Control and Weather Control CIGI packets not
+  being sent.
+
+- Fixed occurrence of two Entity Control packets when assigning a parent
+  to a child entity. This was a quick fix and is not guaranteed to stop
+  every occurrence; however, providing a proper fix will require more
+  effort than it is worth. This is related to a problem where an Entity
+  Control packet is sent when an entity's fly mode is changed.
+
+- Fixed problem where changing the Sky and Global Atmosphere properties
+  in the Environment tab did not cause packets to be sent or generated
+  erroneous packets. This applied to both celestial sphere and global
+  atmosphere properties.
+
+- Added a Fly Mode indicator to the Attributes area of the entity state
+  window. Rearranged some of the items to accommodate the addition.
+
+- Added multi-type combo boxes to Send Short Component Control Packet
+  dialog.
+
+- Fixed Short Component Control packets not being sent if two or fewer
+  user-data fields were needed.
+
+- Fixed ENTITY_PITCH_RELATIVE script command.
+
+- Fixed Entity Controls being sent when airspeed, fly mode, and other
+  non-cigi data were changed.
+
+- Added range circle labels to the situation display.
+
+- Message window now gives the coordinates of the next waypoint when a
+  script is running.
+
+- Decreased joystick's POV hat sensitivity for Magic Carpet mode.
+
+- Fixed playback loop mode.
+
+
+Version 3.1.2
+-------------------------------------------------------------------------
+- Fixed problem where the Frame Count value in the IG Control was
+  actually from the previous frame.
+
+- Fixed entities not being deleted when in Run mode.
+
+- Fixed child entity X and Y positions being limited to +/-90 meters.
+
+- Missiles now remember their targets after the Reset Scenario button is
+  clicked.
+
+- Fixed Component tabs' Component-Specific Data fields.
+
+- Changed edit boxes so they momentarily stop updating when they get focus
+  or when user clicks the mouse.  Previously it only paid attention to
+  keyboard events.
+
+- Removed nagging dialogs when the user enters out-of-range value for
+  latitude, longitude, heading, pitch, and roll.
+
+- Fixed problem with ENTITY_ATTACH script keyword not working if
+  parent ID was set to -1.
+
+
+Version 3.1.1
+-------------------------------------------------------------------------
+- New release

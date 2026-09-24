@@ -50,6 +50,13 @@ Per frame, in response to a SOF, it transmits a single UDP datagram to the IG
 | Rate Control           | 8     | motion rates                              |
 | Atmosphere Control     | 1     | first frames only (warm-up)               |
 
+On a bench there is no flight model: a **CIGI Host Emulator**
+(`external\HostEmulator_Win32_v3.3.3\`) runs instead, on the same PC as
+CigiStarter, to send the requests and watch the answers. It stands in for the
+HOST only as far as this program is concerned — it produces none of the flight
+data above — and `README.md`, [Bench testing](README.md#bench-testing), has its
+setup and the automated tests built on it.
+
 ### Master IG — `192.168.70.70`
 The original Image Generator that CigiStarter replaces. In the capture it is the
 frame-timing master: it emits a **SOF** at ~100 Hz (an 8/12 ms alternation) and,
@@ -130,6 +137,7 @@ looking to them exactly like the HOST's own.
 | Extra IG PCs      | `client.txt` beside the executable, `address[:port]`, read once at startup |
 | Fan-out           | one Npcap-injected copy per client, HOST source address/port spoofed |
 | Fan-out adapter   | found automatically: this IG's adapter, else the one the route to the HOST leaves by |
+| Bench HOST        | the CIGI Host Emulator in `external\`, on the IG PC, in place of the flight model; `tools\test-hathot-emulator.ps1` drives it |
 | Elevation         | none requested (`asInvoker`); the fan-out needs Npcap, not elevation |
 | Reference SOF rate | ~100 Hz (~10 ms, an 8/12 ms alternation) |
 | HOST frame rate   | ~53 Hz — its IG Control counter advances 0.54 per datagram, i.e. the HOST is asked for about twice the frames it has |

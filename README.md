@@ -169,7 +169,80 @@ Examples:
 CigiStarter.exe                        # 150 Hz, paced to the HOST, live on launch
 CigiStarter.exe --no-auto-start        # wait for START instead (old behaviour)
 CigiStarter.exe --no-flow-control --fps 100
+CigiStarter.exe --host-ip 127.0.0.1 --ig-ip 127.0.0.1   # bench test, local HOST
 ```
+
+## Bench testing
+
+The whole link can be exercised on one PC: the **CIGI Host Emulator** plays the
+HOST and CigiStarter plays the IG, over the loopback adapter, with the sim's own
+terrain still behind CigiStarter if one is running. That is how the HAT/HOT
+answering is tested, because neither program prints the exchange — the only
+honest witness is the wire.
+
+The emulator is vendored in `external\HostEmulator_Win32_v3.3.3\` (Boeing TSS's
+CIGI Host Emulator 3.3.3, GPLv2, `license.txt` as shipped). Run `Hemu3.exe` from
+that folder. It reads its link setup at startup from
+`HKCU\Software\Boeing TSS\CIGI Host Emulator 3`, which its **Setup** dialog
+writes, so point it at the IG there:
+
+| Key | Value |
+|-----|-------|
+| `Remote IP Addr` | `127.0.0.1` — the IG |
+| `Remote Port`    | CigiStarter's port (`8000`, or the bench's `--ig-port`) |
+| `Local Port`     | the HOST's port (`8001`, or the bench's `--host-port`) |
+| `CIGI Minor Version` / `Big Endian` | `3` / `0` — CIGI 3.3, little-endian |
+
+and start CigiStarter against it, overriding the deployed addresses (it binds
+and sends on this machine either way):
+
+```
+CigiStarter.exe --host-ip 127.0.0.1 --ig-ip 127.0.0.1
+```
+
+On this machine Prepar3D (Professional Plus) holds 8000 for its own CIGI, so the
+bench link runs on **8010/8011** instead — see
+[Terrain from the sim](#terrain-from-the-sim) for why. Only the four numbers
+change; everything else is the same.
+
+### The automated tests
+
+`tools\test-hathot-emulator.ps1` drives the emulator's *Send HAT/HOT Request*
+dialog through a set of requests, captures each exchange and checks the answers:
+
+```
+.\tools\test-hathot-emulator.ps1 -IgPort 8010 -HostPort 8011
+```
+
+It starts whatever is not already up — CigiStarter from `x64\Release`, the
+emulator from `external\`, writing its link setup to the registry first — and
+with `-NoLaunch` it requires a bench that is already up instead. Each check is
+one a wrong answer would break: that a request is answered, and answered exactly
+once (or every *n*-th frame when it carries an update period); that the request
+id and type pick the right response message; that `HAT = request altitude −
+HOT`, which is what catches the two doubles packed in the wrong place; that
+`Valid` is set only when a terrain source could answer; that an entity-relative
+request is answered at the aircraft's position; and, when the sim's terrain
+probe is loaded, that the height on the wire is the probe's own reading for the
+very point that was asked about. A check whose prerequisite is absent (no
+running sim, no loaded probe) is reported as **skipped** with the reason rather
+than passed. The exit code is 0 when nothing failed and 1 otherwise, and the
+captures are left in `%TEMP%\cigi-hathot-tests`.
+
+### Watching the wire by hand
+
+`tools\capture-hat-hot.ps1` is the same decode without the assertions. It
+captures the link with Wireshark's `dumpcap`, decodes it with `tshark`'s CIGI
+dissector, and prints every HAT/HOT request and every answer to it — pairing
+several answers in one datagram with the requests that asked for them:
+
+```
+.\tools\capture-hat-hot.ps1                      # take a capture, then decode it
+.\tools\capture-hat-hot.ps1 -Capture cap.pcapng  # decode one already taken
+```
+
+Both tools need Npcap (which the fan-out needs anyway) and Wireshark's
+`dumpcap`/`tshark`.
 
 ## SOF rate and flow control
 
@@ -674,9 +747,12 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
 | `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles the HAT/HOT fallback is answered from |
-| `external\`        | vendored build-time SDKs: FSUIPC, Npcap, and the Prepar3D PDK headers |
+| `external\`        | vendored third-party code: the build-time SDKs (FSUIPC, Npcap, Prepar3D PDK headers) and the CIGI Host Emulator the bench tests drive |
+| `external\HostEmulator_Win32_v3.3.3\` | the CIGI Host Emulator 3.3.3, the HOST side of a bench link (not linked by anything) |
 | `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source, and the sampler `TerrainBaker` uses) |
 | `tools\get_terrain.ps1` | option 1: downloads generic SRTM tiles for `terrain\` |
+| `tools\capture-hat-hot.ps1` | bench aid: captures the CIGI link and prints every HAT/HOT request and answer |
+| `tools\test-hathot-emulator.ps1` | bench aid: drives the Host Emulator through the HAT/HOT tests and checks the answers |
 | `tools\TerrainBaker\` | option 2: bakes Prepar3D's own ground heights over an SRTM base |
 | `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |
 | `agents.md`        | description of the HOST / IG / CigiStarter agents |

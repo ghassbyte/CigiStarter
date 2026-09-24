@@ -1,0 +1,18 @@
+component
+{
+	name		= "LEDamageSw";
+	id	= 0;
+    instance_id = 0;
+
+	state
+	{
+		name	= "LEGood";
+		value	= 0;
+	}
+
+	state
+	{
+		name	= "LEBad";
+		value	= 1;
+	}
+}

@@ -1,0 +1,336 @@
+entity
+{
+	name = "f18c";
+	type = 118;
+	class = fixedwing;
+
+	component
+	{
+		name = "PositionLights";
+		id = 0;
+		def_state = 0;
+		state
+		{
+			name = "off";
+			value = 0;
+		}
+		state
+		{
+			name = "on";
+			value = 1;
+		}
+	}
+	component
+	{
+		name = "AntiCollisionLights";
+		id = 1;
+		def_state = 0;
+		state
+		{
+			name = "off";
+			value = 0;
+		}
+		state
+		{
+			name = "on";
+			value = 1;
+		}
+	}
+}
+
+
+entity
+{
+	name = "f22a";
+	type = 122;
+	class = fixedwing;
+}
+
+
+entity
+{
+	name = "sr71";
+	type = 171;
+	class = fixedwing;
+}
+
+
+entity
+{
+	name = "su34";
+	type = 234;
+	class = fixedwing;
+}
+
+
+entity
+{
+	name = "uh-1n";
+	type = 301;
+	class = rotorcraft;
+}
+
+
+entity
+{
+	name = "mv22_osprey";
+	type = 322;
+	class = rotorcraft;
+}
+
+
+entity
+{
+	name = "ah64_apache";
+	type = 364;
+	class = rotorcraft;
+}
+
+
+entity
+{
+	name = "mi24_hind_ru";
+	type = 424;
+	class = rotorcraft;
+}
+
+
+entity
+{
+	name = "BRDM";
+	type = 501;
+	class = groundmil;
+}
+
+
+entity
+{
+	name = "m1126_stryker_us";
+	type = 526;
+	class = groundmil;
+}
+
+
+entity
+{
+	name = "t72m1_od";
+	type = 672;
+	class = groundmil;
+}
+
+
+entity
+{
+	name = "aim9";
+	type = 909;
+	class = missile;
+}
+
+
+entity
+{
+	name = "aim120";
+	type = 920;
+	class = missile;
+}
+
+
+/*
+A note on the animations: Many of the explosion special effects 
+are disabled.  This is because some of the artwork, specifically 
+the fireball animation images, could not be given away on this CD.
+While this does diminish some of the visual impact of some of the 
+explosions, I think that you'll find that the remaining special 
+effects are convincing enough.  
+
+Remember, you can always tweak these animations, or create new 
+ones!  See the MPV's entityVisuals.def and partsys.def.
+*/
+
+
+/*
+entity
+{
+	type = 1002;
+	class = animation;
+
+	name = "debug anim";
+}
+*/
+
+entity
+{
+	type = 1003;
+	class = animation;
+
+	name = "ground explosion with debris";
+}
+
+entity
+{
+	type = 1008;
+	class = animation;
+
+	name = "tracers";
+}
+
+entity
+{
+	type = 1009;
+	class = animation;
+
+	name = "chaff 1";
+}
+
+entity
+{
+	type = 1010;
+	class = animation;
+
+	name = "ground explosion with dust plumes and smoke";
+}
+
+/*
+entity
+{
+	type = 1011;
+	class = animation;
+
+	name = "groundFireball_long1";
+}
+*/
+
+entity
+{
+	type = 1012;
+	class = animation;
+
+	name = "ground explosion with dust puffs";
+}
+
+entity
+{
+	type = 1013;
+	class = animation;
+
+	name = "anti-personnel";
+}
+
+entity
+{
+	// huge detonation; mostly dust
+	type = 1014;
+	class = animation;
+
+	name = "huge ground explosion";
+}
+
+entity
+{
+	type = 1020;
+	class = animation;
+
+	name = "air explosion with burning debris";
+}
+
+entity
+{
+	type = 1021;
+	class = animation;
+
+	name = "air explosion, no debris";
+}
+
+/*
+entity
+{
+	type = 1022;
+	class = animation;
+
+	name = "airExplosion_wTrails2";
+}
+
+entity
+{
+	type = 1023;
+	class = animation;
+
+	name = "airExplosion_wTrails3";
+}
+
+entity
+{
+	type = 1024;
+	class = animation;
+
+	name = "airExplosion_wTrails4";
+}
+
+entity
+{
+	type = 1025;
+	class = animation;
+
+	name = "blast1";
+}
+*/
+
+entity
+{
+	type = 1030;
+	class = animation;
+
+	name = "SAM missile launch";
+}
+
+entity
+{
+	type = 1031;
+	class = animation;
+
+	name = "missile launch";
+}
+
+entity
+{
+	type = 1040;
+	class = animation;
+
+	name = "wingtip contrail thin";
+}
+
+entity
+{
+	type = 1041;
+	class = animation;
+
+	name = "missile trail thick";
+}
+
+entity
+{
+	type = 1042;
+	class = animation;
+
+	name = "aircraft generic dark trail";
+}
+
+/*
+entity
+{
+	type = 1050;
+	class = animation;
+
+	name = "airSmokePuff2";
+}
+*/
+
+/*
+entity
+{
+	type = 1051;
+	class = animation;
+
+	name = "debug fountain";
+}
+*/

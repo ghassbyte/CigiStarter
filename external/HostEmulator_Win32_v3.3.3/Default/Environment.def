@@ -1,0 +1,144 @@
+GLOBAL_ENVIRONMENT
+{
+	DATE			= 04/06/2004;		/* mm/dd/yyyy */
+	TIME			= 13:30;		/* hh:mm (24-hour clock)*/
+	EPHEMERIS_ENABLE	= TRUE;
+	ATMOSPHERE_MODEL_ENABLE	= FALSE;
+	SUN_ENABLE		= TRUE;
+	MOON_ENABLE		= TRUE;
+	STARFIELD_ENABLE	= TRUE;
+	STARFIELD_INTENSITY	= 100;			// percent
+	BAROMETRIC_PRESSURE	= 20;			// millibars
+	HUMIDITY		= 50;			/* 0 to 100 % */
+	TEMPERATURE		= 40;			/* degrees Celsius */
+	VISIBILITY		= 30000.0;		/* meters */
+	HORIZONTAL_WINDSPEED	= 10.5;			// m/s
+	VERTICAL_WINDSPEED	= 0.5;			// m/s
+	WIND_DIRECTION		= 30;			// degrees from North
+
+	COMPONENT
+	{
+		NAME        = "Celestial Sphere Component 1";
+		COMPONENT_CLASS = CELESTIAL_SPHERE;
+		ID          = 4000;
+		INSTANCE_ID = -1;
+		DEF_STATE   = 0;
+
+		STATE
+		{
+			NAME  = "Off";
+			VALUE = 0;
+		}
+
+		STATE
+		{
+			NAME  = "On";
+			VALUE = 1;
+		}
+	}
+
+
+	COMPONENT
+	{
+		NAME        = "Atmosphere Component 1";
+		COMPONENT_CLASS = ATMOSPHERE;
+		ID          = 4000;
+		INSTANCE_ID = -1;
+		DEF_STATE   = 0;
+
+		STATE
+		{
+			NAME  = "Off";
+			VALUE = 0;
+		}
+
+		STATE
+		{
+			NAME  = "On";
+			VALUE = 1;
+		}
+	}
+
+	WEATHER_LAYER
+	{
+		ID			= 1;
+		NAME			= "Cloud Layer 1";
+		ENABLE			= TRUE;
+		SCUD_ENABLE		= FALSE;
+		RANDOM_WIND_ENABLE	= TRUE;
+		RANDOM_LIGHTNING_ENABLE	= TRUE;
+		CLOUD_TYPE		= 1;		// See ICD for assignments
+		SEVERITY		= 3;		// 1 - 5
+		SCUD_FREQUENCY		= 20;		// percent
+		COVERAGE		= 65;		// percent
+		BASE_ELEVATION		= 5000;		// meters
+		THICKNESS		= 2000;		// meters
+		TRANSITION_BAND		= 150;		// meters
+		BAROMETRIC_PRESSURE	= 10;
+		HUMIDITY		= 80;
+		TEMPERATURE		= 32;
+		VISIBILITY		= 50;
+		HORIZONTAL_WINDSPEED	= 50;
+		VERTICAL_WINDSPEED	= -20;
+		WIND_DIRECTION		= 45;
+		AEROSOL_CONCENTRATION	= 90;
+
+		COMPONENT
+		{
+			NAME        = "Test Component 2";
+			ID          = 1000;
+			INSTANCE_ID = -1;
+			DEF_STATE   = 0;
+
+			STATE
+			{
+				NAME  = "Off";
+				VALUE = 0;
+			}
+
+			STATE
+			{
+				NAME  = "On";
+				VALUE = 1;
+			}
+		}
+	}
+
+
+	WEATHER_LAYER
+	{
+		ID			= 0;
+		NAME			= "Ground Fog";
+		ENABLE			= TRUE;
+		SCUD_ENABLE		= FALSE;
+		RANDOM_WIND_ENABLE	= FALSE;
+		RANDOM_LIGHTNING_ENABLE	= FALSE;
+		CLOUD_TYPE		= 1;		// See ICD for assignments
+		SEVERITY		= 1;		// 1 - 5
+		SCUD_FREQUENCY		= 0;		// percent
+		COVERAGE		= 100;		// percent
+		BASE_ELEVATION		= 0;		// meters
+		THICKNESS		= 0;		// meters
+		TRANSITION_BAND		= 50;		// meters
+		BAROMETRIC_PRESSURE	= 10;
+		HUMIDITY		= 80;
+		TEMPERATURE		= 40;
+		VISIBILITY		= 5;
+		HORIZONTAL_WINDSPEED	= 0;
+		VERTICAL_WINDSPEED	= 0;
+		WIND_DIRECTION		= 0;
+		AEROSOL_CONCENTRATION	= 80;
+	}
+}
+
+/*
+REGION
+{
+	ID		= 1;
+	
+	WEATHER_LAYER
+	{
+
+	}
+}
+*/
