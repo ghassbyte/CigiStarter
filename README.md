@@ -6,9 +6,10 @@ The HOST in a CIGI flight-simulator link stays silent until the IG transmits
 **Start-of-Frame (SOF)** messages. `CigiStarter` plays that IG role: it sends
 SOF at a configurable rate to wake up the HOST and begin the flight-data
 stream, and answers HAT/HOT requests with the terrain height under the aircraft
-from an offline **SRTM terrain database**, falling back to the local Prepar3D
-via FSUIPC where the database has no coverage — see
-[HAT/HOT answering](#hathot-answering).
+— from the Prepar3D the aircraft is flying in, through a small add-on DLL, so a
+runway's flattening and any added scenery are included without anything being
+pre-mapped, falling back to an offline **SRTM terrain database** and then to the
+sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
 
 ## What it does
 
@@ -24,10 +25,12 @@ via FSUIPC where the database has no coverage — see
    and achieved), SOF frames sent, the HOST frame counter and the terrain sample.
 4. Answers HAT/HOT requests, riding the responses along on the SOF stream as the
    reference IG did. This is on by default (the window's check box switches it
-   off, as does `--no-respond-hathot`), and the terrain height comes from an
-   offline **SRTM terrain database** — the same idea the original Master IG
-   used — falling back to the local Prepar3D via FSUIPC where the database has
-   no coverage — see [HAT/HOT answering](#hathot-answering).
+   off, as does `--no-respond-hathot`). The terrain height comes from the sim the
+   aircraft is actually flying in, through the `PdkTerrainProbe` add-on, so the
+   surface that will be flown onto is the one reported — and a new scenery
+   add-on needs no matching pass. An offline **SRTM terrain database**, and then
+   the sim again over FSUIPC, are the fallbacks — see
+   [HAT/HOT answering](#hathot-answering).
 5. Runs as a small window with **START** / **STOP** / **EXIT**. It starts
    transmitting on launch and the window minimises itself, so a deployment needs
    no click at all before the link is live; `--no-auto-start` restores the
@@ -51,6 +54,12 @@ via FSUIPC where the database has no coverage — see
   answering switched off the program never touches FSUIPC. The terrain
   database itself needs no library at all — just the `.hgt` tiles (see
   [Terrain database](#terrain-database)).
+- The preferred terrain source is a Prepar3D that is running the
+  **`PdkTerrainProbe`** add-on (`tools\PdkTerrainProbe`). That needs the
+  Prepar3D SDK to *build*, but not to *use*: the IG PC needs only the built DLL
+  and its `add-on.xml`. It is a separate project rather than part of
+  `CigiStarter.sln`, so a machine without the SDK still builds the IG. Without
+  it the HAT/HOT answer falls back to the database exactly as before.
 - **Npcap** is needed only for the [fan-out](#fan-out-to-the-other-ig-pcs). It is
   loaded at run time rather than linked, so the program still builds and runs
   without it. The Npcap *SDK* (headers) is needed to build; it is shared with
@@ -108,9 +117,11 @@ CigiStarter.exe [options]
                       rate above what the HOST manages costs nothing.
   --ig-mode <0..3>    IG mode reported until the HOST sends its first
                       IG Control (0=Standby 1=Operate)  (default 0)
-  --respond-hathot    answer HAT/HOT requests using the terrain database, or
-                      the local Prepar3D via FSUIPC where it has no coverage
-                                                                  (default on)
+  --respond-hathot    answer HAT/HOT requests, reporting the terrain height
+                      from the Prepar3D the aircraft is flying in (through the
+                      PdkTerrainProbe add-on), or from the local terrain
+                      database, or from Prepar3D directly over FSUIPC, in
+                      that order                                  (default on)
   --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC
                       untouched
   --flow-control      hold a SOF back while the HOST has not answered the
@@ -214,41 +225,49 @@ in the window, or start with `--no-respond-hathot`, if you must:
 | Type 0 (HAT) / 1 (HOT) | HAT/HOT Response (id 102, 16 bytes)           |
 | Type 2 (Extended)      | HAT/HOT Extended Response (id 103, 40 bytes)  |
 
-There are two terrain sources, in this order:
+There are three terrain sources, in this order:
 
-1. **The terrain database** ([below](#terrain-database)) — an offline SRTM
+1. **Prepar3D's own terrain**, through the `PdkTerrainProbe` add-on
+   ([below](#terrain-from-the-sim)) — the PDK's surface query service, asked for
+   the point the HOST is asking about. It is the same terrain the sim will
+   actually fly the aircraft onto, so a runway's flattening and any added
+   scenery are included, and nothing has to be pre-mapped or re-baked when the
+   scenery changes.
+2. **The terrain database** ([below](#terrain-database)) — an offline SRTM
    `.hgt` tile set. It answers a request from the latitude and longitude alone,
-   so it stays correct for the whole flight.
-2. **The local Prepar3D via FSUIPC** — the ground under the *player* aircraft
-   (`0x0020`). It stands in for any request the database cannot cover, and it
-   supplies the aircraft's own position and altitude either way.
+   so it stays correct for the whole flight too, but it is a copy of the world
+   and cannot know about a flattening or changed scenery.
+3. **The local Prepar3D via FSUIPC** — the ground under the *player* aircraft
+   (`0x0020`). It stands in for any request neither of the above can cover, and
+   it supplies the aircraft's own position and altitude either way.
 
-Why the database comes first: a program that drives the aircraft into Prepar3D
-by writing its position over FSUIPC (CigiP3dBridge, or the vendor program that
-replaces it) has to hold the sim in **slew mode**, and Prepar3D **freezes its
-ground model in slew**. The FSUIPC ground altitude then stops following the
-aircraft and stays at wherever the last reposition left it, so an IG answering
-from FSUIPC alone keeps reporting the same terrain however far the aircraft
-flies — and the HOST flies it on until it meets rising ground. The original
-Master IG answered from its own database for that same reason. A database answer
-is a property of the *position*, not of the sim, so it cannot freeze.
+Why a database exists here at all: a program that drives the aircraft into
+Prepar3D by writing its position over FSUIPC (CigiP3dBridge, or the vendor
+program that replaces it) has to hold the sim in **slew mode**, and Prepar3D
+**freezes its ground model in slew**. The FSUIPC ground altitude then stops
+following the aircraft and stays at wherever the last reposition left it, so an
+IG answering from FSUIPC alone keeps reporting the same terrain however far the
+aircraft flies — and the HOST flies it on until it meets rising ground. The
+original Master IG answered from its own database for that same reason. Both
+sources 1 and 2 are answers about the *world* rather than about where the
+aircraft is sitting, so neither can freeze.
 
 The fields themselves:
 
-- `HOT` = the database height at the request's point (bilinear between the four
-  surrounding samples), or, where the database has no tile, FSUIPC `0x0020` with
-  a geodetic request accepted only within 500 m of the aircraft.
+- `HOT` = the height from the first source that can answer: the sim's surface
+  query at the request's point, else the database height there (bilinear between
+  the four surrounding samples), else FSUIPC `0x0020` with a geodetic request
+  accepted only within 500 m of the aircraft.
 - `HAT` = test-point altitude − `HOT`. Entity-relative requests use the
-  aircraft's FSUIPC altitude minus the request's Z offset (CIGI entity axes are
-  local NED, so **+Z points down**); geodetic requests carry the altitude
-  themselves.
+  aircraft's altitude minus the request's Z offset (CIGI entity axes are local
+  NED, so **+Z points down**); geodetic requests carry the altitude themselves.
 - Entity-relative requests are answered at the **aircraft's** position: the
   HOST's probe points all sit within ~10 m of it (the reference capture's six
-  points reach 10.4 m back and 3 m forward), far below any terrain tile's
-  resolution.
-- `Valid` is set to 0 — never a fabricated 0 m — when no answer can be produced:
-  a request for an entity other than the ownship (entity 0), or a point neither
-  the database nor the near-aircraft FSUIPC fallback can cover.
+  points reach 10.4 m back and 3 m forward), far below any terrain source's
+  resolution. The sim's own query is asked for the exact point all the same.
+- `Valid` is set to 0 — never a fabricated 0 m — when no source can produce an
+  answer: a request for an entity other than the ownship (entity 0), or a point
+  no source can cover.
 - `updatePeriod = 0` (one-shot) requests are answered once; a non-zero period is
   honoured by re-answering every *n*-th frame.
 
@@ -260,11 +279,44 @@ database present a missing Prepar3D is no longer fatal to the answer: the
 database still answers, and `Valid = 0` is returned only for points it cannot
 cover.
 
+### Terrain from the sim
+
+`tools\PdkTerrainProbe` is a small **PDK add-on DLL** that runs *inside*
+Prepar3D. The PDK exposes a free-standing surface query
+(`ISurfaceQueryManagerV400`) — not tied to any object, so no probe object has to
+be created or teleported around the world — and the add-on asks it for each
+point CigiStarter wants, then publishes the answers through a block of shared
+memory (`TerrainProbeIpc.h`, `TerrainProbe.h`). No FSUIPC, no per-scenery
+mapping, and a newly added airport is answered the moment the sim can see it.
+
+It answers HAT/HOT whenever it is loaded, because it is the surface Prepar3D
+will actually place the aircraft on.
+
+- **Installing it** (on the IG PC): copy `PdkTerrainProbe.dll` and its
+  `add-on.xml` into a folder Prepar3D scans for add-ons — for instance
+  `C:\ProgramData\Lockheed Martin\Prepar3D v6\add-ons\PdkTerrainProbe\` — and
+  restart Prepar3D. `tasklist /m PdkTerrainProbe.dll` should then list
+  Prepar3D. See `tools\PdkTerrainProbe\README.md`.
+- **Not having it** is not an error: CigiStarter opens the shared region lazily
+  and re-tries every 2 s, so the two may be started in either order, and with no
+  add-on the answer simply comes from the database as before.
+- **Building it** needs the Prepar3D SDK (v5 or v6 — the interface has the same
+  name and GUID in v4, v5 and v6), but *running* it does not, which is why it is
+  a separate project rather than part of `CigiStarter.sln`.
+- **`--terrain-offset` is not applied to a height that came from the sim.** That
+  option calibrates the *database's* datum against the sim; a value from the sim
+  needs no calibration, and applying it would correct it twice.
+- An answer is only ever used for the point it was taken at: every reading
+  echoes the latitude and longitude it was measured for, so a request that has
+  moved in the meantime is refused and falls back rather than being answered
+  with the terrain of wherever the aircraft used to be.
+
 ### Terrain database
 
-The HAT/HOT answer prefers an offline **SRTM** (Shuttle Radar Topography Mission)
-tile set: public-domain radar terrain, 1 or 3 arc-second, one 1° × 1° cell per
-file, dropped in a folder next to the program.
+The first fallback, when the sim's own probe cannot answer, is an offline
+**SRTM** (Shuttle Radar Topography Mission) tile set: public-domain radar
+terrain, 1 or 3 arc-second, one 1° × 1° cell per file, dropped in a folder next
+to the program.
 
 ```
 CigiStarter.exe
@@ -282,19 +334,48 @@ client.txt
   metres, row 0 the northern edge, column 0 the western edge, `-32768` marking a
   void (interpolated around, or reported invalid when a point has nothing but
   voids).
-- **Getting them.** `tools\get_terrain.ps1` downloads the tiles you name, or
-  works them out from positions, from the public AWS *skadi* mirror and gunzips
-  them:
+- **Getting them — two options.**
+  1. **Plain SRTM.** `tools\get_terrain.ps1` downloads the tiles you name, or
+     works them out from positions, from the public AWS *skadi* mirror and
+     gunzips them:
 
-  ```powershell
-  .\tools\get_terrain.ps1 -Points "-6.13,106.66","-7.38,112.79"
-  .\tools\get_terrain.ps1 -Tiles S07E106,S08E112 -Out D:\ig\terrain
-  ```
+     ```powershell
+     .\tools\get_terrain.ps1 -Points "-6.13,106.66","-7.38,112.79"
+     .\tools\get_terrain.ps1 -Tiles S07E106,S08E112 -Out D:\ig\terrain
+     ```
 
-  Each 1 arc-second tile is about 25 MB uncompressed, so fetch only the box the
-  aircraft flies in. Tiles already present are left alone. A tile is read into
-  memory the first time it is asked about and kept; the window's `TerrainDB`
-  line shows how many are indexed and how many are held.
+     Each 1 arc-second tile is about 25 MB uncompressed, so fetch only the box
+     the aircraft flies in. Tiles already present are left alone. This is the
+     generic world model: quick, and nothing but a download — but SRTM predates
+     the scenery, so it knows nothing about a strip of ground Prepar3D levelled
+     for a runway.
+
+  2. **Sim-exact bake.** `tools\TerrainBaker` overlays the *simulator's own*
+     ground heights on the SRTM base, exactly where the aircraft flies. It walks
+     a grid over the chosen boxes, reads Prepar3D's ground altitude over FSUIPC
+     at each point, and writes the result back out as an ordinary `.hgt` tile:
+     SRTM everywhere, sim-exact at the fields, runway flattening and all. This
+     program reads the output unchanged.
+
+     ```powershell
+     .\TerrainBaker plan      # tiles, point counts, rough cost -- no sim needed
+     .\TerrainBaker probe     # with Prepar3D up: does the ground model track?
+     .\TerrainBaker survey    # the sweep; interruptible and resumable
+     .\TerrainBaker compose   # SRTM base + samples -> terrain-sim\*.hgt
+     ```
+
+     Run `probe` first: it proves the FSUIPC link and that the readings really
+     follow the reposition — Prepar3D can freeze its ground model while an
+     aircraft is held in slew, and position writes can go unapplied, so the tool
+     reads its own position back on every sample and only records a point once
+     the aircraft is verifiably there. `plan`, `compose` and `--help` need
+     no simulator, so they can be run anywhere. A bake builds on option 1 —
+     fetch the SRTM tiles first, since they are its base. See
+     `tools\TerrainBaker\README.md`.
+
+  Either way, a tile is read into memory the first time it is asked about and
+  kept; the window's `TerrainDB` line shows how many are indexed and how many
+  are held.
 - **Where.** `terrain\` next to the executable by default, or **`--terrain-dir
   <dir>`**. With no tiles at all the program simply falls back to FSUIPC, and
   the window says so.
@@ -332,7 +413,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  Relay NIC : Killer E2600 Gigabit Ethernet Controller                    |
 |                                                                          |
 |  TerrainDB : 2 tile(s), 1 in memory, 25 MB                               |
-|  HAT/HOT   : answering from the terrain database                         |
+|  HAT/HOT   : answering from the sim's own terrain                       |
 |  Terrain   : 27.0 m under the aircraft, 30.1 m aircraft                  |
 |                                                                          |
 |  [x] Answer HAT/HOT (terrain database)  SOF rate: [ 150 ] Hz [ Apply ]   |
@@ -379,13 +460,15 @@ with the window up instead, which is the behaviour the sketch below shows.
   since shutting down waits only for the [fan-out](#fan-out-to-the-other-ig-pcs)
   thread to finish the client-address lookup it is already in the middle of.
 - Since the process has no console, `Ctrl+C` cannot reach it either.
-- Terrain lines appear while answering is on. `TerrainDB` names the database:
-  `N tile(s), M in memory, X MB`, or `none` with the reason (for instance no
-  `terrain\` folder). `HAT/HOT` names the source in force — `answering from the
-  terrain database` when tiles are indexed, `answering from FSUIPC` when there
-  are none — and `Terrain` shows the live FSUIPC reading (ground and aircraft
-  heights) or, with no sim, `FSUIPC : no link to Prepar3D`. With answering off
-  the block collapses to `not answered (switched off)`.
+- Terrain lines appear while answering is on. `HAT/HOT` names the source in
+  force: `answering from the sim's own terrain` when the `PdkTerrainProbe`
+  add-on is loaded in the local Prepar3D, else `answering from the terrain
+  database` when tiles are indexed, else `answering from FSUIPC`. `TerrainDB`
+  names the database behind that fallback — `N tile(s), M in memory, X MB`, or
+  `none` with the reason (for instance no `terrain\` folder) — and `Terrain`
+  shows the live FSUIPC reading (ground and aircraft heights) or, with no sim,
+  `FSUIPC : no link to Prepar3D`. With answering off the block collapses to
+  `not answered (switched off)`.
 - `Relay` and `Relay NIC` report the [fan-out](#fan-out-to-the-other-ig-pcs):
   how many clients are listed, how many of them answer, how many datagrams have
   been copied, and which adapter the copies leave by. There is no button for it
@@ -534,13 +617,18 @@ the clients need no reconfiguration. See
 | `cigi.cpp`         | explicit little-endian message packing         |
 | `TerrainSource.h`  | FSUIPC-backed aircraft/terrain snapshot API (aircraft position + fallback terrain) |
 | `TerrainSource.cpp`| the FSUIPC poller thread (owns all FSUIPC use) |
-| `TerrainDb.h`      | offline SRTM `.hgt` terrain database API — the preferred HAT/HOT source |
+| `TerrainDb.h`      | offline SRTM `.hgt` terrain database API — the HAT/HOT fallback when the sim's own probe cannot answer |
 | `TerrainDb.cpp`    | the `.hgt` reader: tile index, lazy load, bilinear lookup |
+| `TerrainProbe.h`   | API to the sim's own terrain, through the `PdkTerrainProbe` add-on — the preferred HAT/HOT source |
+| `TerrainProbe.cpp` | CigiStarter's half of the shared-memory link to `PdkTerrainProbe.dll` |
+| `TerrainProbeIpc.h`| the shared-memory contract between CigiStarter and the add-on |
 | `Relay.h`          | fan-out API: start/stop, per-datagram copy, status snapshot |
 | `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
-| `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles HAT/HOT is answered from |
-| `tools\get_terrain.ps1` | downloads SRTM tiles for `terrain\` |
+| `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles the HAT/HOT fallback is answered from |
+| `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source) |
+| `tools\get_terrain.ps1` | option 1: downloads generic SRTM tiles for `terrain\` |
+| `tools\TerrainBaker\` | option 2: bakes Prepar3D's own ground heights over an SRTM base |
 | `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |
 | `agents.md`        | description of the HOST / IG / CigiStarter agents |
 | `CigiStarter.sln`  | Visual Studio solution (x64 only)              |

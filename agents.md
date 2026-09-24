@@ -83,17 +83,25 @@ that the HOST requires to start streaming:
   only seeds the mode used before the first IG Control arrives.
 - Answers HAT/HOT requests by default (the window's check box, or
   `--no-respond-hathot`, switches it off — which also stops the FSUIPC poller
-  with it). The terrain comes from an offline **SRTM `.hgt` tile set** in the
+  with it). The terrain comes from the sim the aircraft is actually flying in:
+  the `tools\PdkTerrainProbe` add-on asks Prepar3D's own terrain engine through
+  the PDK surface query service and publishes the heights in shared memory
+  (`TerrainProbe.cpp`, `TerrainProbeIpc.h`), so a runway's flattening and any
+  added scenery are included with nothing pre-mapped. Where the add-on is not
+  loaded the answer falls back to an offline **SRTM `.hgt` tile set** in the
   `terrain\` folder next to the program (`TerrainDb.cpp`) — the same idea the
-  Master IG used with its own database — falling back to the ground under the
+  Master IG used with its own database — and then to the ground under the
   aircraft as seen by the local Prepar3D over FSUIPC (`TerrainSource.cpp`,
-  offset `0x0020`) where the database has no coverage. The database is preferred
-  because the sim's ground model is **frozen while Prepar3D is held in slew**,
-  which is how CigiP3dBridge (or the vendor program that replaces it) drives the
-  aircraft: an FSUIPC-only answer would keep reporting the terrain of wherever
-  the last reposition left it. Keeping HOT correct is what keeps the HOST's
-  altitude loop honest — the HOST commands the aircraft to the HOT it is given,
-  so a missing or frozen HOT flies the aircraft into the ground.
+  offset `0x0020`). Something other than FSUIPC leads, because the sim's ground
+  model is **frozen while Prepar3D is held in slew**, which is how
+  CigiP3dBridge (or the vendor program that replaces it) drives the aircraft: an
+  FSUIPC-only answer would keep reporting the terrain of wherever the last
+  reposition left it. Keeping HOT correct is what keeps the HOST's altitude loop
+  honest — the HOST commands the aircraft to the HOT it is given, so a missing
+  or frozen HOT flies the aircraft into the ground. The `terrain\` folder is
+  filled either with generic SRTM tiles (`tools\get_terrain.ps1`) or with a
+  **sim-exact bake** that overlays Prepar3D's own ground heights on them
+  (`tools\TerrainBaker`), which is what captures a runway's flattening.
 - Parses inbound CIGI (IG Control, Entity Control, …) for the live status block
   in its operator window.
 - **Fans the downstream stream out** to the extra IG PCs listed in `client.txt`
@@ -129,10 +137,11 @@ that the HOST requires to start streaming:
 ```
 
 With HAT/HOT answering on (the default), there is one more edge to that
-picture: before answering a HAT/HOT request, CigiStarter looks the terrain
-height up at the request's point in the offline SRTM database (`TerrainDb.cpp`),
-falling back to reading the ground under the aircraft from the local Prepar3D
-over FSUIPC (`TerrainSource.cpp`) where the database has no tile. The FSUIPC
+picture: before answering a HAT/HOT request, CigiStarter asks the local
+Prepar3D's own terrain engine for the height at the request's point, through the
+`PdkTerrainProbe` add-on (`TerrainProbe.cpp`). Where that add-on is not loaded
+it falls back to the offline SRTM database (`TerrainDb.cpp`) and then to reading
+the ground under the aircraft over FSUIPC (`TerrainSource.cpp`). The FSUIPC
 poller exists only while answering is on; the database is indexed at startup
 either way and needs no sim at all.
 
@@ -159,8 +168,9 @@ point of view that edge looks exactly like the HOST's own, which is the point.
 | SOF message id    | 101 (`0x65`)                 |
 | IG mode           | commanded by the HOST via IG Control; the SOF echoes it back (Operate throughout the reference capture) |
 | HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
-| Terrain source    | offline SRTM `.hgt` tiles in `terrain\` beside the executable (1 or 3 arc-second), looked up bilinearly; FSUIPC `0x0020` (ground altitude under the player aircraft) is the fallback where there is no tile |
-| Terrain database  | `.hgt` tiles named by their integer-degree corner (`S08E112` covers -8..-7 / 112..113), `terrain\` by default or `--terrain-dir`; fetched with `tools\get_terrain.ps1`; `--terrain-offset <m>` calibrates a datum bias |
+| Terrain source    | Prepar3D's own terrain, through the `PdkTerrainProbe` PDK add-on in the local sim (the surface the aircraft will actually be put on, runway flattening and all); an offline SRTM `.hgt` tileset in `terrain\` beside the executable (1 or 3 arc-second, looked up bilinearly) is the first fallback; FSUIPC `0x0020` (ground altitude under the player aircraft) is the last |
+| Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D (`add-on.xml`, `<DLLType>PDK</DLLType>`) that answers `ISurfaceQueryManagerV400::QuerySurfaceElevation` and publishes the heights in shared memory (`Local\CigiStarter.TerrainProbe.v1`); free-standing query, no SimObject and nothing teleported; optional — with it absent the answer falls back to the database |
+| Terrain database  | `.hgt` tiles named by their integer-degree corner (`S08E112` covers -8..-7 / 112..113), `terrain\` by default or `--terrain-dir`; two ways to fill it — generic SRTM with `tools\get_terrain.ps1`, or a sim-exact bake of Prepar3D's own ground heights with `tools\TerrainBaker`; `--terrain-offset <m>` calibrates a datum bias, and is deliberately not applied to a height that came from the sim |
 | Extra IG PCs      | listed in `client.txt` next to the executable (`address[:port]`, `#` comments, optional, read once at startup) |
 | Fan-out           | one copy of each downstream datagram per listed client, injected with Npcap, source address/port spoofed as the HOST's |
 | Fan-out adapter   | found automatically: the adapter owning this IG's address, else the one the route to the HOST leaves by |

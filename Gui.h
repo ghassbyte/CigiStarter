@@ -61,13 +61,19 @@ struct Status {
     bool     terrainConnected  = false;  // FSUIPC link up?
     double   groundAltMeters   = 0.0;    // terrain under the aircraft
     double   aircraftAltMeters = 0.0;    // aircraft altitude
-    // The offline terrain database the HAT/HOT answer prefers (TerrainDb.h).
-    // Optional: no tiles means the answer falls back to the FSUIPC terrain.
+    // The offline terrain database the HAT/HOT answer falls back to (TerrainDb.h)
+    // when the sim's own terrain probe is not answering. Optional: no tiles means
+    // the answer goes to the FSUIPC terrain instead.
     int         terrainTiles  = 0;       // ".hgt" tiles indexed
     int         terrainLoaded = 0;       // tiles read into memory
     uint64_t    terrainBytes  = 0;       // sample data held
     std::string terrainDir;              // folder that was scanned
     std::string terrainError;            // why there is no database ("" = ok)
+
+    // The PDK add-on in the local Prepar3D (TerrainProbe.h). When it is live it
+    // is what answers HAT/HOT -- it is the surface the sim will actually put the
+    // aircraft on -- and the database above is only the fallback.
+    bool        terrainProbe = false;    // add-on loaded and ticking?
     // The fan-out to the extra IG PCs (Relay.h). The relay is read once, at
     // startup, so everything here is a fixed description of what it is doing
     // apart from the two counters and the `ready` count.

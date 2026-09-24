@@ -1,0 +1,120 @@
+# PdkTerrainProbe
+
+An add-on DLL for Prepar3D that lets CigiStarter answer the HOST's HAT/HOT
+terrain requests from the sim's **own terrain engine**, instead of from an
+offline copy of the world.
+
+## Why
+
+The HOST drives its aircraft altitude from the Height Of Terrain the IG reports,
+so a wrong or stale HOT flies the aircraft into the ground. CigiStarter had two
+ways to get it, and both are approximations:
+
+| Source | Problem |
+|---|---|
+| `TerrainDb` (offline SRTM `.hgt`) | Cannot know a runway's flattening or any changed scenery, and has to be re-baked whenever the scenery changes. At Atang Senjaya it reads ~175.5 m where the reference IG reported ~178 m. |
+| `TerrainSource` (FSUIPC `0x0020`) | Reports the ground under the local aircraft, which **freezes** while the aircraft is being slewed into position — which is exactly how CigiP3dBridge drives it. |
+
+Prepar3D will answer the question directly, from the terrain it is about to put
+the aircraft on. The PDK exposes that as `ISurfaceQueryManagerV400`, and it is a
+**free-standing query** — not tied to an object — so nothing has to be created,
+placed or teleported around the world. This DLL picks the service up and
+publishes the answers through a block of shared memory for CigiStarter to read.
+No scene needs pre-mapping; a newly added airport is answered live.
+
+## How the two halves talk
+
+`PdkTerrainProbe.dll` runs **inside** Prepar3D. CigiStarter runs **outside** it.
+They share one block of memory, described in `../../TerrainProbeIpc.h`:
+
+```
+   CigiStarter (IG)                    PdkTerrainProbe.dll (in Prepar3D)
+        |                                        |
+        |  writes queries[i]  --------------->   |  on its next sim tick:
+        |    lat, lon, alt, key                  |    asks ISurfaceQueryManagerV400
+        |                                        |    for each enabled point
+        |  <---------------  writes results[i]   |
+        |    hot, status, key, echo of lat/lon   |
+```
+
+* The IG's read is guarded by a seqlock, so a row being rewritten underneath it
+  is never believed.
+* Every result echoes the point it was taken at, so a reading is only ever used
+  for the point it was actually measured at. A request that has moved in the
+  meantime is refused, and the IG falls back to the database — it is never
+  answered with the terrain of wherever the aircraft used to be.
+
+## Building
+
+Needs the Prepar3D SDK (v5 or v6; the interface has the same name and GUID in
+v4, v5 and v6, so any of them builds the same DLL).
+
+```
+msbuild PdkTerrainProbe.vcxproj /p:Configuration=Release /p:Platform=x64
+```
+
+The SDK defaults to the v6 path baked into the `.vcxproj`. Point it elsewhere
+with `/p:P3DSdkDir=...`. Output lands in `bin\Release\PdkTerrainProbe.dll`.
+
+Note: this project is deliberately **not** in `CigiStarter.sln`. It needs the
+sim's SDK, and a machine that only builds the IG should not have its build
+broken by that. Build it where the SDK is, and ferry the DLL.
+
+## Installing on the IG PC
+
+1. Make a folder Prepar3D scans for add-ons — the usual place is
+
+   ```
+   C:\ProgramData\Lockheed Martin\Prepar3D v6\add-ons\PdkTerrainProbe\
+   ```
+
+   (use `...\Prepar3D v5\add-ons\` on v5).
+
+2. Copy `PdkTerrainProbe.dll` and `add-on.xml` into it. `add-on.xml` refers to
+   the DLL by relative path, so the two must sit together.
+
+3. Restart Prepar3D. Nothing is clicked or configured — the add-on registers
+   itself, and CigiStarter starts using it as soon as its tick is running.
+
+Check that it loaded:
+
+```
+tasklist /m PdkTerrainProbe.dll
+```
+
+Prepar3D should be listed. If it is not, Prepar3D is not loading the add-on —
+check the folder and `add-on.xml`, and look for loading errors in Prepar3D's
+own logging.
+
+No elevation is needed, and unlike the fan-out it needs no Npcap.
+
+## Behaviour when it is not there
+
+Everything degrades quietly, so an IG PC without the add-on still works exactly
+as before:
+
+* CigiStarter opens the shared region lazily and re-tries every 2 s, so the two
+  may be started in either order.
+* No add-on, or no tick yet, or a tick that has stopped (the sim exited and left
+  a mapping behind) → the probe reports itself unavailable and CigiStarter falls
+  back to `TerrainDb`, and then to FSUIPC.
+* `--terrain-offset` is **not** applied to a height that came from the sim. That
+  option exists to calibrate the *database's* datum against the sim; a value
+  from the sim needs no calibration, and applying it would correct it twice.
+
+## Testing without Prepar3D
+
+`test\PdkTerrainProbeTest` compiles CigiStarter's half of the protocol and
+drives it against a fake sim that stands in for this DLL. It covers the cases
+that matter for safety: that no height is ever invented, that a reading is
+refused once its point has moved, that a sim which stops ticking is dropped, and
+that a row caught mid-rewrite is not believed.
+
+```
+msbuild test\PdkTerrainProbeTest.vcxproj /p:Configuration=Release /p:Platform=x64
+test\x64\Release\PdkTerrainProbeTest.exe
+```
+
+What it cannot cover is Prepar3D's side: whether `QuerySurfaceElevation` returns
+what the reference IG returned at a given airport. That needs the sim, and is
+the first thing to check on the IG PC once v6 is up.

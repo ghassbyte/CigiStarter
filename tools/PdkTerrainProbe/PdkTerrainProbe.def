@@ -1,0 +1,4 @@
+LIBRARY PdkTerrainProbe
+EXPORTS
+    DLLStart
+    DLLStop

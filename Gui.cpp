@@ -8,7 +8,7 @@
 //     |   ... live status block (read-only edit): the link, the stream, the |
 //     |       client.txt fan-out and the terrain sample ...                 |
 //     |                                                                     |
-//     |  [x] Answer HAT/HOT (terrain database)  SOF rate: [ 150 ] Hz [Apply] |
+//     |  [x] Answer HAT/HOT  SOF rate: [ 150 ] Hz [Apply]                  |
 //     |  [x] Pace SOF to HOST replies (flow control)                        |
 //     |                                                                     |
 //     |  [ START ]  [ STOP ]                                        [ EXIT ] |
@@ -196,9 +196,12 @@ void Refresh() {
     }
 
     // The terrain lines have their own branches because they can be missing.
-    // The database is what answers HAT/HOT during a HOST-driven flight (the
-    // sim's ground model freezes in slew); FSUIPC supplies the aircraft's own
-    // position and altitude, and stands in for terrain the database lacks.
+    // The sim's own terrain probe answers HAT/HOT when it is loaded, because it
+    // reports the surface the sim will actually fly the aircraft onto; the
+    // offline database is the fallback (the sim's ground model freezes in slew,
+    // which is why a database existed at all), and FSUIPC supplies the
+    // aircraft's own position and altitude and stands in for terrain neither
+    // covers.
     wchar_t terrain[384];
     if (!s.respondingHatHot) {
         std::swprintf(terrain, ARRAYSIZE(terrain),
@@ -215,10 +218,10 @@ void Refresh() {
                           s.terrainError.c_str());
         }
         const wchar_t* source =
-            (s.terrainTiles > 0)
-                ? L"answering from the terrain database"
-                : (s.terrainConnected ? L"answering from FSUIPC"
-                                      : L"switched on, but nothing to answer from");
+            s.terrainProbe       ? L"answering from the sim's own terrain"
+          : (s.terrainTiles > 0) ? L"answering from the terrain database"
+          : (s.terrainConnected  ? L"answering from FSUIPC"
+                                 : L"switched on, but nothing to answer from");
         if (s.terrainConnected) {
             std::swprintf(terrain, ARRAYSIZE(terrain),
                           L"%s\r\n"
@@ -358,7 +361,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         // ---- Settings row ------------------------------------------------
         g_respond = CreateWindowExW(0, L"BUTTON",
-                                    L"Answer HAT/HOT (terrain database)",
+                                    L"Answer HAT/HOT",
                                     WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
                                     kMargin, kSettingsY, 320, kRowH,
                                     hwnd, ControlId(kRespondId), nullptr, nullptr);

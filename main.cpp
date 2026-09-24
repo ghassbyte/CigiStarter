@@ -63,6 +63,7 @@
 #include "Gui.h"
 #include "Relay.h"
 #include "TerrainDb.h"
+#include "TerrainProbe.h"
 #include "TerrainSource.h"
 
 #include <winsock2.h>
@@ -213,9 +214,10 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      its first IG Control (0=Standby 1=Operate)\n"
         "                                                         (default 0)\n"
         "  --respond-hathot    answer HAT/HOT requests, reporting the terrain\n"
-        "                      height from the local terrain database, or from\n"
-        "                      the local Prepar3D via FSUIPC where it has none\n"
-        "                      (this is the default)\n"
+        "                      height from the Prepar3D the aircraft is flying in\n"
+        "                      (through the PdkTerrainProbe add-on), or from the\n"
+        "                      local terrain database, or from Prepar3D directly\n"
+        "                      over FSUIPC, in that order   (this is the default)\n"
         "  --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC\n"
         "                      untouched\n"
         "  --flow-control      hold a SOF back while the HOST has not answered the\n"
@@ -387,12 +389,24 @@ static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
         simFallback = sim.connected && nearAircraft(lat, lon, sim);
     }
 
-    // The database first: unlike the sim, it stays live for the whole flight.
+    // The sim's own terrain engine first, through the PDK add-on: it reports
+    // the surface Prepar3D will actually put the aircraft on (a runway's
+    // flattening included), it stays live for the whole flight, and it answers
+    // a geodetic request anywhere rather than only under the aircraft. The
+    // offline database, and then the sim's ground height read over FSUIPC, are
+    // the fallbacks for when the add-on is not loaded. See TerrainProbe.h.
     bool   ok  = false;
-    double hot = terrain::db::elevation(lat, lon, ok);
-    if (!ok && simFallback) {
-        hot = sim.groundAltMeters;
-        ok  = true;
+    double hot = 0.0;
+
+    if (terrain::probe::elevation(static_cast<unsigned>(req.hatHotId),
+                                  lat, lon, testAlt, hot)) {
+        ok = true;
+    } else {
+        hot = terrain::db::elevation(lat, lon, ok);
+        if (!ok && simFallback) {
+            hot = sim.groundAltMeters;
+            ok  = true;
+        }
     }
     if (!ok) {
         // No terrain to report: leave Valid = 0 so the HOST ignores the packet
@@ -437,6 +451,10 @@ static gui::Status uiStatus() {
     s.terrainDir    = tdb.dir;
     s.terrainError  = tdb.error;
 
+    // The add-on in the local Prepar3D, when it is loaded and ticking: that is
+    // what answers HAT/HOT in preference to everything below it.
+    s.terrainProbe = terrain::probe::available();
+
     // The fan-out to the extra IG PCs. It is optional and never fatal, so its
     // state is reported here rather than gating anything.
     const relay::Status fan = relay::status();
@@ -470,7 +488,9 @@ static void uiSetRespondHatHot(bool on) {
     }
     if (on) {
         terrain::start();
+        terrain::probe::start();
     } else {
+        terrain::probe::stop();
         terrain::stop();
     }
 }
@@ -562,6 +582,7 @@ int main(int argc, char** argv) {
     // check box turns it on and off at runtime.
     if (g_respondHatHot.load()) {
         terrain::start();
+        terrain::probe::start();
     }
 
     // ---- The offline terrain database (SRTM tiles) ------------------------
@@ -852,6 +873,7 @@ int main(int argc, char** argv) {
 
     // ---- Shutdown ---------------------------------------------------------
     g_running.store(false);  // in case run() returned without EXIT
+    terrain::probe::stop();  // tells the add-on to stop querying for us
     terrain::stop();         // joins the poller before FSUIPC/the CRT goes away
     closesocket(rx);
     closesocket(tx);
