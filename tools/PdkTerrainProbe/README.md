@@ -54,6 +54,11 @@ They share one block of memory, described in `../../TerrainProbeIpc.h`:
   every slot after it, answering from the wrong row. A layout change therefore
   has to bump `kVersion` too, so a stale DLL is refused when it attaches instead
   of being misread.
+* The table is **metric**: CIGI defines HAT/HOT in metres, and that is what
+  CigiStarter puts on the wire. The DLL converts at the sim boundary — the
+  surface query takes its altitude in **feet** and returns a height in feet — so
+  the metres in `results[i]` are the query's feet value converted back. Nothing
+  metric reaches the PDK call, and nothing imperial reaches the wire.
 
 CigiStarter only ever wants about six points at a time, but the table holds 256
 and the add-on answers every enabled one on each tick. `tools\TerrainBaker` uses

@@ -596,7 +596,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |                                                                          |
 |  TerrainDB : 2 tile(s), 1 in memory, 25 MB                               |
 |  HAT/HOT   : answering from the sim's own terrain                       |
-|  Terrain   : 27.0 m under the aircraft, 30.1 m aircraft                  |
+|  Terrain   : 89 ft under the aircraft, 99 ft aircraft                    |
 |                                                                          |
 |  [x] Answer HAT/HOT                       SOF rate: [ 150 ] Hz [ Apply ]   |
 |  [x] Pace SOF to HOST replies (flow control)                             |
@@ -649,9 +649,10 @@ with the window up instead, which is the behaviour the sketch below shows.
   `answering from FSUIPC`, else `switched on, but nothing to answer from`.
   `TerrainDB` names the database behind that fallback — `N tile(s), M in
   memory, X MB`, or `none` with the reason (for instance no `terrain\` folder)
-  — and `Terrain` shows the live FSUIPC reading (ground and aircraft heights)
-  or, with no sim, `FSUIPC : no link to Prepar3D`. With answering off the block
-  collapses to `not answered (switched off)`.
+  — and `Terrain` shows the live FSUIPC reading (ground and aircraft heights,
+  in feet, the way Prepar3D displays them) or, with no sim, `FSUIPC : no link to
+  Prepar3D`. With answering off the block collapses to `not answered (switched
+  off)`.
 - `Relay` and `Relay NIC` report the [fan-out](#fan-out-to-the-other-ig-pcs):
   how many clients are listed, how many of them answer, how many datagrams have
   been copied, and which adapter the copies leave by. There is no button for it

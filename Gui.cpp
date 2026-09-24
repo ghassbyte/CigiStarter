@@ -54,6 +54,13 @@ constexpr int kButtonW   = 110;
 constexpr int kButtonH   = 32;
 constexpr int kClientH   = kButtonY + kButtonH + kMargin;
 
+// ---- Units ---------------------------------------------------------------
+// Prepar3D displays its own altitudes in feet, so the operator-facing terrain
+// line does too. Everything behind it stays metres: CIGI defines the HAT/HOT
+// altitudes in metres and the HOST's flight model consumes them that way, so
+// this is a conversion at the point of display only.
+constexpr double kFeetPerMetre = 3.280839895013123;
+
 // ---- Control identifiers -------------------------------------------------
 constexpr int kStatusId    = 1000;
 constexpr int kStartId     = 1001;
@@ -226,8 +233,10 @@ void Refresh() {
             std::swprintf(terrain, ARRAYSIZE(terrain),
                           L"%s\r\n"
                           L"  HAT/HOT   : %s\r\n"
-                          L"  Terrain   : %.1f m under the aircraft, %.1f m aircraft",
-                          dbline, source, s.groundAltMeters, s.aircraftAltMeters);
+                          L"  Terrain   : %.0f ft under the aircraft, %.0f ft aircraft",
+                          dbline, source,
+                          s.groundAltMeters * kFeetPerMetre,
+                          s.aircraftAltMeters * kFeetPerMetre);
         } else {
             std::swprintf(terrain, ARRAYSIZE(terrain),
                           L"%s\r\n"

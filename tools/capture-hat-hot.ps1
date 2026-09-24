@@ -9,7 +9,9 @@
     to look at the wire, so this script captures the traffic between a CIGI HOST
     and CigiStarter with Wireshark's dumpcap, decodes it with tshark's built-in
     CIGI dissector, and prints the HAT/HOT Request messages (HOST to IG) and the
-    answers (IG to HOST) with their terrain values.
+    answers (IG to HOST) with their terrain values. A height prints as the metres
+    the wire carries, with the equivalent feet beside it, because feet are what
+    Prepar3D's own displays use.
 
     It is meant for a bench link where HOST and IG are both on this machine --
     the CIGI Host Emulator pointed at 127.0.0.1 with CigiStarter started as
@@ -137,6 +139,25 @@ function Format-Metres([string]$Value) {
     [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:F2}', [double]$Value)
 }
 
+# The wire carries metres -- CIGI defines HAT/HOT that way and the HOST's flight
+# model consumes them so -- but Prepar3D's own displays are in feet, which is the
+# number an operator compares against. So the table shows both: the metres are
+# what is actually on the link, the feet are what the sim would say. The numeric
+# fields on the returned objects stay metres, so a script asserting on them does
+# not care how the table is rendered.
+function Format-Feet([string]$Value) {
+    if (-not $Value) { return '' }
+    [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:N0}',
+                     [double]$Value * 3.280839895013123)
+}
+
+# One height as "<metres> m (<feet> ft)", or '' when the message carries none.
+function Format-Height([string]$Value) {
+    $m = Format-Metres $Value
+    if (-not $m) { return '' }
+    return "$m m ($(Format-Feet $Value) ft)"
+}
+
 # The numeric value of one field occurrence, or $null when the message does not
 # carry that datum (a HAT-only response has no height at all, and so on).
 function To-Metres([string]$Value) {
@@ -207,8 +228,8 @@ foreach ($line in $answerLines) {
             valid      = $ev[$k]
             hat        = To-Metres $eh[$k]
             hot        = To-Metres $et[$k]
-            value      = "HAT " + (Format-Metres $eh[$k]) + " m / HOT " +
-                                     (Format-Metres $et[$k]) + " m"
+            value      = "HAT " + (Format-Height $eh[$k]) + " / HOT " +
+                                     (Format-Height $et[$k])
         }
     }
     $po = $f[1] -split ','
@@ -230,7 +251,7 @@ foreach ($line in $answerLines) {
             valid      = $pv[$k]
             hat        = $hat
             hot        = $hot
-            value      = (Format-Metres $pd[$k]) + " m $what"
+            value      = (Format-Height $pd[$k]) + " $what"
         }
     }
 }
