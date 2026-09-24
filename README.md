@@ -280,7 +280,8 @@ The fields themselves:
   answer: a request for an entity other than the ownship (entity 0), or a point
   no source can cover.
 - `updatePeriod = 0` (one-shot) requests are answered once; a non-zero period is
-  honoured by re-answering every *n*-th frame.
+  honoured by re-answering every *n*-th frame until a fresh request for the same
+  HAT/HOT ID replaces it — that one is answered at once and its count restarts.
 
 The FSUIPC link is polled by a background thread that owns every FSUIPC call, so
 the SOF pacing is never delayed by an FSUIPC round trip. The poller runs only

@@ -845,6 +845,11 @@ int main(int argc, char** argv) {
                         const bool due = a.req.updatePeriod == 0 ||
                                          a.framesSince % a.req.updatePeriod == 0;
                         if (!due) {
+                            // The period clock has to keep running while a
+                            // request waits its turn, or it never comes due a
+                            // second time and a HOST that leans on the update
+                            // period instead of re-sending gets one answer.
+                            ++a.framesSince;
                             ++i;
                             continue;
                         }
