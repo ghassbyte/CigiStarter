@@ -5,6 +5,8 @@ VisualStudioVersion = 17.14.37710.0 d17.14
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CigiStarter", "CigiStarter.vcxproj", "{28BB4E88-E043-497A-9C36-8EA6CB94AB40}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TerrainBaker", "tools\TerrainBaker\TerrainBaker.vcxproj", "{A3F1C0D2-7B64-4E8A-9C15-2D0F6E4B7A91}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -15,6 +17,10 @@ Global
 		{28BB4E88-E043-497A-9C36-8EA6CB94AB40}.Debug|x64.Build.0 = Debug|x64
 		{28BB4E88-E043-497A-9C36-8EA6CB94AB40}.Release|x64.ActiveCfg = Release|x64
 		{28BB4E88-E043-497A-9C36-8EA6CB94AB40}.Release|x64.Build.0 = Release|x64
+		{A3F1C0D2-7B64-4E8A-9C15-2D0F6E4B7A91}.Debug|x64.ActiveCfg = Debug|x64
+		{A3F1C0D2-7B64-4E8A-9C15-2D0F6E4B7A91}.Debug|x64.Build.0 = Debug|x64
+		{A3F1C0D2-7B64-4E8A-9C15-2D0F6E4B7A91}.Release|x64.ActiveCfg = Release|x64
+		{A3F1C0D2-7B64-4E8A-9C15-2D0F6E4B7A91}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
