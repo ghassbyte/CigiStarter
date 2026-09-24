@@ -5,9 +5,10 @@
 //    Plays the "Master IG" side of a CIGI link so the HOST begins streaming
 //    flight data. The HOST stays silent until the IG transmits Start-of-Frame
 //    (SOF) messages, so this program continuously sends SOF at a configurable
-//    rate and answers HAT/HOT requests with the terrain height read from the
-//    local Prepar3D (switched on by default; an unreachable sim just means the
-//    answers stay invalid until it appears).
+//    rate and answers HAT/HOT requests with the terrain height from an offline
+//    SRTM tile set (TerrainDb.h), falling back to the local Prepar3D via FSUIPC
+//    where it has no coverage (switched on by default; an unreachable sim just
+//    means the FSUIPC fallback stays invalid until it appears).
 //
 //  SOF rate and flow control
 //    The HOST answers each SOF with one datagram, and each answer carries a fresh
@@ -52,7 +53,8 @@
 //
 //  Usage
 //    CigiStarter.exe [--fps 150] [--ig-mode 0] [--no-respond-hathot]
-//                    [--no-flow-control] [--help]
+//                    [--no-flow-control] [--terrain-dir <dir>]
+//                    [--terrain-offset <m>] [--help]
 //    Being a windowed program there is no console, so --help and any startup
 //    error are reported in a message box.
 //=============================================================================
@@ -60,6 +62,7 @@
 #include "SofPacer.h"
 #include "Gui.h"
 #include "Relay.h"
+#include "TerrainDb.h"
 #include "TerrainSource.h"
 
 #include <winsock2.h>
@@ -108,6 +111,14 @@ struct Config {
     // the reference IG was free-running from the moment it started. The window
     // is still in the taskbar, and START / STOP / EXIT still work from it.
     bool    autoStart     = true;
+
+    // The HAT/HOT terrain source. An offline SRTM tile set answers the request
+    // regardless of the sim's state, which is what keeps the HOST's altitude
+    // loop honest while the aircraft is flown into Prepar3D with FSUIPC slew
+    // writes (the sim's own ground model is frozen in slew). Empty means the
+    // "terrain" folder next to this program (TerrainDb.h).
+    std::string terrainDir;       // "" = <exe folder>\terrain
+    double      terrainOffset = 0.0;  // metres added to database heights
 };
 
 // Most HOSTs send one HAT/HOT request per frame, so one response per SOF. The
@@ -202,7 +213,8 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      its first IG Control (0=Standby 1=Operate)\n"
         "                                                         (default 0)\n"
         "  --respond-hathot    answer HAT/HOT requests, reporting the terrain\n"
-        "                      height read from the local Prepar3D via FSUIPC\n"
+        "                      height from the local terrain database, or from\n"
+        "                      the local Prepar3D via FSUIPC where it has none\n"
         "                      (this is the default)\n"
         "  --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC\n"
         "                      untouched\n"
@@ -216,6 +228,11 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      (this is the default)\n"
         "  --no-auto-start     start with the stream stopped and the window up, so\n"
         "                      START has to be clicked\n"
+        "  --terrain-dir <dir> folder of SRTM \".hgt\" terrain tiles to answer\n"
+        "                      HAT/HOT from           (default: terrain\\ beside\n"
+        "                      this program; see README.md)\n"
+        "  --terrain-offset <m> constant added to every database height, for\n"
+        "                      calibrating against the sim          (default 0)\n"
         "  --help              show this help\n"
         "\n"
         "Extra (passive) IG PCs to copy the HOST's stream to are listed in\n"
@@ -224,7 +241,7 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
 }
 
 static void showUsage(const char* argv0) {
-    char msg[1024];
+    char msg[2048];
     buildUsage(msg, sizeof(msg), argv0);
     MessageBoxA(nullptr, msg, "CigiStarter", MB_OK);
 }
@@ -263,6 +280,12 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             cfg.autoStart = true;       // the default; kept for symmetry
         } else if (a == "--no-auto-start") {
             cfg.autoStart = false;
+        } else if (a == "--terrain-dir") {
+            const char* v = next("--terrain-dir"); if (!v) return false;
+            cfg.terrainDir = v;
+        } else if (a == "--terrain-offset") {
+            const char* v = next("--terrain-offset"); if (!v) return false;
+            cfg.terrainOffset = std::atof(v);
         } else {
             fail("error: unknown option '%s'\n\nRun with --help for the option list.",
                  a.c_str());
@@ -293,11 +316,14 @@ static bool resolveV4(const char* ip, uint16_t port, sockaddr_in& out) {
 //-----------------------------------------------------------------------------
 // HAT/HOT answering
 //-----------------------------------------------------------------------------
-// FSUIPC exposes the terrain height under the *player* aircraft and nothing
-// else, so that is the only test point we can answer for. An entity-relative
-// request must therefore be for entity 0 -- the aircraft CigiP3dBridge drives
-// into Prepar3D -- and a geodetic request must be close enough to the aircraft
-// that the ground underneath is the same terrain.
+// Two terrain sources are available. The offline SRTM database (TerrainDb.h)
+// is preferred: it is live for the whole flight, whereas the sim's own ground
+// altitude freezes while the aircraft is flown into Prepar3D with FSUIPC slew
+// writes. FSUIPC still supplies the aircraft's position and altitude (and the
+// fallback terrain, where the database has no coverage).
+//
+// The original Master IG answered from its own terrain database for the same
+// reason, so the database is the reference behaviour rather than a workaround.
 constexpr double kGeodeticToleranceMeters = 500.0;
 constexpr double kPi                      = 3.14159265358979323846;
 constexpr double kEarthRadiusMeters       = 6371000.0;
@@ -327,27 +353,55 @@ struct HatHotAnswer {
 static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
                                  const terrain::Sample& sim) {
     HatHotAnswer ans;
-    if (!sim.connected) {
-        return ans;
-    }
 
-    double testAlt;
+    // Work out the point whose terrain the HOST is asking about, and the
+    // altitude of the test point itself.
+    double testAlt     = 0.0;
+    double lat         = 0.0;
+    double lon         = 0.0;
+    bool   simFallback = false;  // may FSUIPC stand in if the database misses?
+
     if (req.coordSystem == cigi::kHatHotEntity) {
         if (req.entityId != 0) {
-            return ans;  // not the aircraft FSUIPC knows about
+            return ans;  // not the aircraft the sim is flying
+        }
+        if (!sim.connected) {
+            return ans;  // no aircraft position/altitude to anchor the request
         }
         // Entity axes are local NED: +Z points out of the bottom, so a
         // positive Z offset sits *below* the reference point.
         testAlt = sim.aircraftAltMeters - req.z;
+        // The HOST's entity-relative probes sit within ~10 m of the aircraft
+        // (the reference capture's six points reach 10.4 m back and 3 m
+        // forward). Terrain data is far coarser than that, so the terrain
+        // under the aircraft answers every one of them.
+        lat = sim.latDeg;
+        lon = sim.lonDeg;
+        simFallback = true;
     } else {
-        if (!nearAircraft(req.x, req.y, sim)) {
-            return ans;
-        }
         testAlt = req.z;  // geodetic requests carry the altitude directly
+        lat = req.x;
+        lon = req.y;
+        // FSUIPC only knows the terrain under the aircraft, so it can stand in
+        // for a geodetic request only when that request is close to it.
+        simFallback = sim.connected && nearAircraft(lat, lon, sim);
     }
 
-    ans.hot   = sim.groundAltMeters;
-    ans.hat   = testAlt - ans.hot;
+    // The database first: unlike the sim, it stays live for the whole flight.
+    bool   ok  = false;
+    double hot = terrain::db::elevation(lat, lon, ok);
+    if (!ok && simFallback) {
+        hot = sim.groundAltMeters;
+        ok  = true;
+    }
+    if (!ok) {
+        // No terrain to report: leave Valid = 0 so the HOST ignores the packet
+        // rather than following a fabricated HOT of 0 into the ground.
+        return ans;
+    }
+
+    ans.hot   = hot;
+    ans.hat   = testAlt - hot;
     ans.valid = true;
     return ans;
 }
@@ -375,6 +429,13 @@ static gui::Status uiStatus() {
     s.terrainConnected  = sim.connected;
     s.groundAltMeters   = sim.groundAltMeters;
     s.aircraftAltMeters = sim.aircraftAltMeters;
+
+    const terrain::db::Status tdb = terrain::db::status();
+    s.terrainTiles  = tdb.tiles;
+    s.terrainLoaded = tdb.loaded;
+    s.terrainBytes  = tdb.bytes;
+    s.terrainDir    = tdb.dir;
+    s.terrainError  = tdb.error;
 
     // The fan-out to the extra IG PCs. It is optional and never fatal, so its
     // state is reported here rather than gating anything.
@@ -501,6 +562,19 @@ int main(int argc, char** argv) {
     // check box turns it on and off at runtime.
     if (g_respondHatHot.load()) {
         terrain::start();
+    }
+
+    // ---- The offline terrain database (SRTM tiles) ------------------------
+    // The HAT/HOT answer is taken from here in preference to the sim, because
+    // the sim's ground model is frozen while the aircraft is driven into it
+    // with FSUIPC slew writes (see TerrainDb.h). Indexing the folder is cheap;
+    // each tile is read from disk the first time it is asked about. Optional
+    // and never fatal -- no tiles just means the FSUIPC fallback, as before.
+    terrain::db::setVerticalOffset(cfg.terrainOffset);
+    if (cfg.terrainDir.empty()) {
+        terrain::db::load();
+    } else {
+        terrain::db::loadFromDirectory(cfg.terrainDir);
     }
 
     // ---- Fan the HOST's stream out to the extra IG PCs (client.txt) ------

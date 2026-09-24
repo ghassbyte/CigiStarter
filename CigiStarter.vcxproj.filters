@@ -30,6 +30,9 @@
     <ClCompile Include="Relay.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="TerrainDb.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="TerrainSource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -45,6 +48,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SofPacer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TerrainDb.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TerrainSource.h">

@@ -5,8 +5,9 @@ A minimal **CIGI 3.3 Image Generator (IG)** for a new IG PC.
 The HOST in a CIGI flight-simulator link stays silent until the IG transmits
 **Start-of-Frame (SOF)** messages. `CigiStarter` plays that IG role: it sends
 SOF at a configurable rate to wake up the HOST and begin the flight-data
-stream, and answers HAT/HOT requests with the real terrain height under the
-aircraft, read from the local Prepar3D via FSUIPC — see
+stream, and answers HAT/HOT requests with the terrain height under the aircraft
+from an offline **SRTM terrain database**, falling back to the local Prepar3D
+via FSUIPC where the database has no coverage — see
 [HAT/HOT answering](#hathot-answering).
 
 ## What it does
@@ -23,8 +24,10 @@ aircraft, read from the local Prepar3D via FSUIPC — see
    and achieved), SOF frames sent, the HOST frame counter and the terrain sample.
 4. Answers HAT/HOT requests, riding the responses along on the SOF stream as the
    reference IG did. This is on by default (the window's check box switches it
-   off, as does `--no-respond-hathot`), and the terrain height is read from the
-   local Prepar3D via FSUIPC — see [HAT/HOT answering](#hathot-answering).
+   off, as does `--no-respond-hathot`), and the terrain height comes from an
+   offline **SRTM terrain database** — the same idea the original Master IG
+   used — falling back to the local Prepar3D via FSUIPC where the database has
+   no coverage — see [HAT/HOT answering](#hathot-answering).
 5. Runs as a small window with **START** / **STOP** / **EXIT**. It starts
    transmitting on launch and the window minimises itself, so a deployment needs
    no click at all before the link is live; `--no-auto-start` restores the
@@ -44,8 +47,10 @@ aircraft, read from the local Prepar3D via FSUIPC — see
 - Windows system libraries only, plus the **FSUIPC SDK** while HAT/HOT answering
   is switched on (`Ws2_32.lib` for sockets, `Winmm.lib` for timing,
   `User32.lib` for the window, `Iphlpapi.lib` for the client MAC lookups, and
-  `FSUIPCuser64.lib` for the terrain read). With answering switched off the
-  program never touches FSUIPC.
+  `FSUIPCuser64.lib` for the aircraft position and the terrain fallback). With
+  answering switched off the program never touches FSUIPC. The terrain
+  database itself needs no library at all — just the `.hgt` tiles (see
+  [Terrain database](#terrain-database)).
 - **Npcap** is needed only for the [fan-out](#fan-out-to-the-other-ig-pcs). It is
   loaded at run time rather than linked, so the program still builds and runs
   without it. The Npcap *SDK* (headers) is needed to build; it is shared with
@@ -103,8 +108,9 @@ CigiStarter.exe [options]
                       rate above what the HOST manages costs nothing.
   --ig-mode <0..3>    IG mode reported until the HOST sends its first
                       IG Control (0=Standby 1=Operate)  (default 0)
-  --respond-hathot    answer HAT/HOT requests using the terrain height read
-                      from the local Prepar3D via FSUIPC       (default on)
+  --respond-hathot    answer HAT/HOT requests using the terrain database, or
+                      the local Prepar3D via FSUIPC where it has no coverage
+                                                                  (default on)
   --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC
                       untouched
   --flow-control      hold a SOF back while the HOST has not answered the
@@ -114,6 +120,10 @@ CigiStarter.exe [options]
                       window                                  (default on)
   --no-auto-start     start with the stream stopped and the window up, so START
                       has to be clicked
+  --terrain-dir <dir> folder of SRTM ".hgt" terrain tiles to answer HAT/HOT
+                      from              (default: terrain\ beside the program)
+  --terrain-offset <m> constant added to every database height, for calibrating
+                      against the sim                             (default 0)
   --help              show this help (in a message box)
 ```
 
@@ -126,6 +136,10 @@ behaviour: a window that waits for the button.
 One input file matters too: **`client.txt`**, next to the executable, lists the
 other IG PCs to copy the downstream stream to. It is optional and is read once at
 startup — see [Fan-out](#fan-out-to-the-other-ig-pcs).
+
+A folder matters as well: **`terrain\`**, next to the executable, holds the SRTM
+`.hgt` tiles the HAT/HOT answer is taken from — see
+[Terrain database](#terrain-database).
 
 Examples:
 
@@ -192,34 +206,103 @@ the packet the reference Master sent.
 
 The HOST drives its aircraft altitude to the **Height Of Terrain (HOT)** that
 the IG reports, so an IG that answers `HOT = 0` flies the aircraft into the
-ground. CigiStarter therefore reports the *real* terrain **by default** — turn
-it off in the window, or start with `--no-respond-hathot`, if you must:
+ground. CigiStarter therefore reports the terrain **by default** — turn it off
+in the window, or start with `--no-respond-hathot`, if you must:
 
 | Request                | Response                                      |
 |------------------------|-----------------------------------------------|
 | Type 0 (HAT) / 1 (HOT) | HAT/HOT Response (id 102, 16 bytes)           |
 | Type 2 (Extended)      | HAT/HOT Extended Response (id 103, 40 bytes)  |
 
-- `HOT` = FSUIPC `0x0020`, the ground altitude under the player aircraft (m).
+There are two terrain sources, in this order:
+
+1. **The terrain database** ([below](#terrain-database)) — an offline SRTM
+   `.hgt` tile set. It answers a request from the latitude and longitude alone,
+   so it stays correct for the whole flight.
+2. **The local Prepar3D via FSUIPC** — the ground under the *player* aircraft
+   (`0x0020`). It stands in for any request the database cannot cover, and it
+   supplies the aircraft's own position and altitude either way.
+
+Why the database comes first: a program that drives the aircraft into Prepar3D
+by writing its position over FSUIPC (CigiP3dBridge, or the vendor program that
+replaces it) has to hold the sim in **slew mode**, and Prepar3D **freezes its
+ground model in slew**. The FSUIPC ground altitude then stops following the
+aircraft and stays at wherever the last reposition left it, so an IG answering
+from FSUIPC alone keeps reporting the same terrain however far the aircraft
+flies — and the HOST flies it on until it meets rising ground. The original
+Master IG answered from its own database for that same reason. A database answer
+is a property of the *position*, not of the sim, so it cannot freeze.
+
+The fields themselves:
+
+- `HOT` = the database height at the request's point (bilinear between the four
+  surrounding samples), or, where the database has no tile, FSUIPC `0x0020` with
+  a geodetic request accepted only within 500 m of the aircraft.
 - `HAT` = test-point altitude − `HOT`. Entity-relative requests use the
   aircraft's FSUIPC altitude minus the request's Z offset (CIGI entity axes are
   local NED, so **+Z points down**); geodetic requests carry the altitude
   themselves.
+- Entity-relative requests are answered at the **aircraft's** position: the
+  HOST's probe points all sit within ~10 m of it (the reference capture's six
+  points reach 10.4 m back and 3 m forward), far below any terrain tile's
+  resolution.
 - `Valid` is set to 0 — never a fabricated 0 m — when no answer can be produced:
-  no FSUIPC link, a request for an entity other than the ownship (entity 0), or
-  a geodetic point more than 500 m from the aircraft. FSUIPC only exposes the
-  terrain under the *player* aircraft, so that is the one test point this
-  program can answer for.
+  a request for an entity other than the ownship (entity 0), or a point neither
+  the database nor the near-aircraft FSUIPC fallback can cover.
 - `updatePeriod = 0` (one-shot) requests are answered once; a non-zero period is
   honoured by re-answering every *n*-th frame.
 
 The FSUIPC link is polled by a background thread that owns every FSUIPC call, so
 the SOF pacing is never delayed by an FSUIPC round trip. The poller runs only
 while answering is switched on — the window's check box starts and stops it, and
-while it is off this program makes no FSUIPC calls at all. If Prepar3D is not
-running, CigiStarter still starts: it keeps retrying, answers `Valid = 0` until
-the sim appears, and shows the current terrain height in the window's status
-block.
+while it is off this program makes no FSUIPC calls at all. With a terrain
+database present a missing Prepar3D is no longer fatal to the answer: the
+database still answers, and `Valid = 0` is returned only for points it cannot
+cover.
+
+### Terrain database
+
+The HAT/HOT answer prefers an offline **SRTM** (Shuttle Radar Topography Mission)
+tile set: public-domain radar terrain, 1 or 3 arc-second, one 1° × 1° cell per
+file, dropped in a folder next to the program.
+
+```
+CigiStarter.exe
+terrain\
+    S07E106.hgt     covers  7..6 S, 106..107 E   (Jakarta)
+    S08E112.hgt     covers  8..7 S, 112..113 E   (Surabaya)
+client.txt
+```
+
+- **Which files.** Raw SRTM `.hgt`, named by the integer-degree corner the tile
+  starts at: `N06E106` covers 6..7 N / 106..107 E, `S08E112` covers -8..-7 /
+  112..113 E. Both **SRTMGL1** (1 arc-second, ~30 m, `3601 × 3601`) and
+  **SRTMGL3** (3 arc-second, ~90 m, `1201 × 1201`) are accepted; the sample
+  count is taken from the file size. Samples are signed 16-bit big-endian
+  metres, row 0 the northern edge, column 0 the western edge, `-32768` marking a
+  void (interpolated around, or reported invalid when a point has nothing but
+  voids).
+- **Getting them.** `tools\get_terrain.ps1` downloads the tiles you name, or
+  works them out from positions, from the public AWS *skadi* mirror and gunzips
+  them:
+
+  ```powershell
+  .\tools\get_terrain.ps1 -Points "-6.13,106.66","-7.38,112.79"
+  .\tools\get_terrain.ps1 -Tiles S07E106,S08E112 -Out D:\ig\terrain
+  ```
+
+  Each 1 arc-second tile is about 25 MB uncompressed, so fetch only the box the
+  aircraft flies in. Tiles already present are left alone. A tile is read into
+  memory the first time it is asked about and kept; the window's `TerrainDB`
+  line shows how many are indexed and how many are held.
+- **Where.** `terrain\` next to the executable by default, or **`--terrain-dir
+  <dir>`**. With no tiles at all the program simply falls back to FSUIPC, and
+  the window says so.
+- **Calibration.** SRTM heights are orthometric (EGM96) and the sim's datum is
+  its own; the two matched to ~2 m at Juanda in testing. If a site shows a
+  constant bias, **`--terrain-offset <m>`** adds a fixed number of metres to
+  every database height. It affects the database only, never the FSUIPC
+  fallback.
 
 ## Operator window
 
@@ -248,10 +331,11 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  Relay     : 4 clients, 4 reachable, 1567 datagrams forwarded            |
 |  Relay NIC : Killer E2600 Gigabit Ethernet Controller                    |
 |                                                                          |
-|  HAT/HOT   : answering from FSUIPC                                       |
+|  TerrainDB : 2 tile(s), 1 in memory, 25 MB                               |
+|  HAT/HOT   : answering from the terrain database                         |
 |  Terrain   : 27.0 m under the aircraft, 30.1 m aircraft                  |
 |                                                                          |
-|  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 150 ] Hz [ Apply ]  |
+|  [x] Answer HAT/HOT (terrain database)  SOF rate: [ 150 ] Hz [ Apply ]   |
 |  [x] Pace SOF to HOST replies (flow control)                             |
 |                                                                          |
 |  [ START ]  [ STOP ]                                              [ EXIT ] |
@@ -271,7 +355,8 @@ with the window up instead, which is the behaviour the sketch below shows.
 - **Answer HAT/HOT** switches HAT/HOT answering on and off, and with it the
   FSUIPC poller — switching it off means this program makes no FSUIPC calls at
   all, switching it back on reconnects. It starts **on**, unless
-  `--no-respond-hathot` was given.
+  `--no-respond-hathot` was given. (The terrain database is indexed at startup
+  regardless, so the window can always report it.)
 - **Pace SOF to HOST replies** is the [flow
   control](#sof-rate-and-flow-control) switch. It starts **on**, unless
   `--no-flow-control` was given. Switch it off to transmit on the rate alone —
@@ -294,9 +379,13 @@ with the window up instead, which is the behaviour the sketch below shows.
   since shutting down waits only for the [fan-out](#fan-out-to-the-other-ig-pcs)
   thread to finish the client-address lookup it is already in the middle of.
 - Since the process has no console, `Ctrl+C` cannot reach it either.
-- Terrain lines appear while answering is on: `answering from FSUIPC` with the
-  ground/aircraft heights, or a warning that there is no FSUIPC link to
-  Prepar3D. With answering off they read `not answered (switched off)`.
+- Terrain lines appear while answering is on. `TerrainDB` names the database:
+  `N tile(s), M in memory, X MB`, or `none` with the reason (for instance no
+  `terrain\` folder). `HAT/HOT` names the source in force — `answering from the
+  terrain database` when tiles are indexed, `answering from FSUIPC` when there
+  are none — and `Terrain` shows the live FSUIPC reading (ground and aircraft
+  heights) or, with no sim, `FSUIPC : no link to Prepar3D`. With answering off
+  the block collapses to `not answered (switched off)`.
 - `Relay` and `Relay NIC` report the [fan-out](#fan-out-to-the-other-ig-pcs):
   how many clients are listed, how many of them answer, how many datagrams have
   been copied, and which adapter the copies leave by. There is no button for it
@@ -443,11 +532,15 @@ the clients need no reconfiguration. See
 | `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT + flow-control check boxes, SOF rate box) |
 | `cigi.h`           | CIGI 3.3 message IDs, sizes, pack/parse API    |
 | `cigi.cpp`         | explicit little-endian message packing         |
-| `TerrainSource.h`  | FSUIPC-backed terrain/aircraft snapshot API    |
+| `TerrainSource.h`  | FSUIPC-backed aircraft/terrain snapshot API (aircraft position + fallback terrain) |
 | `TerrainSource.cpp`| the FSUIPC poller thread (owns all FSUIPC use) |
+| `TerrainDb.h`      | offline SRTM `.hgt` terrain database API — the preferred HAT/HOT source |
+| `TerrainDb.cpp`    | the `.hgt` reader: tile index, lazy load, bilinear lookup |
 | `Relay.h`          | fan-out API: start/stop, per-datagram copy, status snapshot |
 | `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
+| `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles HAT/HOT is answered from |
+| `tools\get_terrain.ps1` | downloads SRTM tiles for `terrain\` |
 | `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |
 | `agents.md`        | description of the HOST / IG / CigiStarter agents |
 | `CigiStarter.sln`  | Visual Studio solution (x64 only)              |

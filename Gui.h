@@ -61,6 +61,13 @@ struct Status {
     bool     terrainConnected  = false;  // FSUIPC link up?
     double   groundAltMeters   = 0.0;    // terrain under the aircraft
     double   aircraftAltMeters = 0.0;    // aircraft altitude
+    // The offline terrain database the HAT/HOT answer prefers (TerrainDb.h).
+    // Optional: no tiles means the answer falls back to the FSUIPC terrain.
+    int         terrainTiles  = 0;       // ".hgt" tiles indexed
+    int         terrainLoaded = 0;       // tiles read into memory
+    uint64_t    terrainBytes  = 0;       // sample data held
+    std::string terrainDir;              // folder that was scanned
+    std::string terrainError;            // why there is no database ("" = ok)
     // The fan-out to the extra IG PCs (Relay.h). The relay is read once, at
     // startup, so everything here is a fixed description of what it is doing
     // apart from the two counters and the `ready` count.

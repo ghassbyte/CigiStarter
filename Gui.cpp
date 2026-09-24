@@ -8,7 +8,7 @@
 //     |   ... live status block (read-only edit): the link, the stream, the |
 //     |       client.txt fan-out and the terrain sample ...                 |
 //     |                                                                     |
-//     |  [x] Answer HAT/HOT (terrain from FSUIPC)  SOF rate: [ 150 ] Hz [Apply] |
+//     |  [x] Answer HAT/HOT (terrain database)  SOF rate: [ 150 ] Hz [Apply] |
 //     |  [x] Pace SOF to HOST replies (flow control)                        |
 //     |                                                                     |
 //     |  [ START ]  [ STOP ]                                        [ EXIT ] |
@@ -40,9 +40,9 @@ constexpr int kMargin    = 12;
 constexpr int kClientW   = 660;
 constexpr int kStatusW   = kClientW - 2 * kMargin;
 // Tall enough for the whole status block plus a couple of wrapped lines: the
-// relay line grows with the counters, and a line that wraps must not push the
-// terrain reading out of sight.
-constexpr int kStatusH   = 288;
+// relay line grows with the counters, and a line that wraps (the terrain
+// database summary carries a folder path) must not push a reading out of sight.
+constexpr int kStatusH   = 336;
 constexpr int kSettingsY = kMargin + kStatusH + kMargin;
 constexpr int kRowH      = 24;
 // The flow-control check box gets a row of its own under the HAT/HOT row: there
@@ -196,18 +196,42 @@ void Refresh() {
     }
 
     // The terrain lines have their own branches because they can be missing.
-    wchar_t terrain[192];
+    // The database is what answers HAT/HOT during a HOST-driven flight (the
+    // sim's ground model freezes in slew); FSUIPC supplies the aircraft's own
+    // position and altitude, and stands in for terrain the database lacks.
+    wchar_t terrain[384];
     if (!s.respondingHatHot) {
         std::swprintf(terrain, ARRAYSIZE(terrain),
                       L"  HAT/HOT   : not answered (switched off)");
-    } else if (s.terrainConnected) {
-        std::swprintf(terrain, ARRAYSIZE(terrain),
-                      L"  HAT/HOT   : answering from FSUIPC\r\n"
-                      L"  Terrain   : %.1f m under the aircraft, %.1f m aircraft",
-                      s.groundAltMeters, s.aircraftAltMeters);
     } else {
-        std::swprintf(terrain, ARRAYSIZE(terrain),
-                      L"  HAT/HOT   : switched on, but no FSUIPC link to Prepar3D");
+        wchar_t dbline[192];
+        if (s.terrainTiles > 0) {
+            std::swprintf(dbline, ARRAYSIZE(dbline),
+                          L"  TerrainDB : %d tile(s), %d in memory, %llu MB",
+                          s.terrainTiles, s.terrainLoaded,
+                          static_cast<unsigned long long>(s.terrainBytes >> 20));
+        } else {
+            std::swprintf(dbline, ARRAYSIZE(dbline), L"  TerrainDB : none -- %hs",
+                          s.terrainError.c_str());
+        }
+        const wchar_t* source =
+            (s.terrainTiles > 0)
+                ? L"answering from the terrain database"
+                : (s.terrainConnected ? L"answering from FSUIPC"
+                                      : L"switched on, but nothing to answer from");
+        if (s.terrainConnected) {
+            std::swprintf(terrain, ARRAYSIZE(terrain),
+                          L"%s\r\n"
+                          L"  HAT/HOT   : %s\r\n"
+                          L"  Terrain   : %.1f m under the aircraft, %.1f m aircraft",
+                          dbline, source, s.groundAltMeters, s.aircraftAltMeters);
+        } else {
+            std::swprintf(terrain, ARRAYSIZE(terrain),
+                          L"%s\r\n"
+                          L"  HAT/HOT   : %s\r\n"
+                          L"  FSUIPC    : no link to Prepar3D",
+                          dbline, source);
+        }
     }
 
     // The relay block, likewise: off is a normal state, and each way of being
@@ -334,7 +358,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         // ---- Settings row ------------------------------------------------
         g_respond = CreateWindowExW(0, L"BUTTON",
-                                    L"Answer HAT/HOT (terrain from FSUIPC)",
+                                    L"Answer HAT/HOT (terrain database)",
                                     WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
                                     kMargin, kSettingsY, 320, kRowH,
                                     hwnd, ControlId(kRespondId), nullptr, nullptr);

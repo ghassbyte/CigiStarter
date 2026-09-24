@@ -83,12 +83,17 @@ that the HOST requires to start streaming:
   only seeds the mode used before the first IG Control arrives.
 - Answers HAT/HOT requests by default (the window's check box, or
   `--no-respond-hathot`, switches it off — which also stops the FSUIPC poller
-  with it). The Master IG used to answer these from its own terrain database;
-  CigiStarter has no database, so it reports the terrain under the aircraft as
-  seen by the local Prepar3D, read over FSUIPC (`TerrainSource.cpp`, offset
-  `0x0020`). This is what keeps the HOST's altitude loop honest — the HOST
-  commands the aircraft to the aHOT it is given, so a missing/wrong HOT flies
-  the aircraft into the ground.
+  with it). The terrain comes from an offline **SRTM `.hgt` tile set** in the
+  `terrain\` folder next to the program (`TerrainDb.cpp`) — the same idea the
+  Master IG used with its own database — falling back to the ground under the
+  aircraft as seen by the local Prepar3D over FSUIPC (`TerrainSource.cpp`,
+  offset `0x0020`) where the database has no coverage. The database is preferred
+  because the sim's ground model is **frozen while Prepar3D is held in slew**,
+  which is how CigiP3dBridge (or the vendor program that replaces it) drives the
+  aircraft: an FSUIPC-only answer would keep reporting the terrain of wherever
+  the last reposition left it. Keeping HOT correct is what keeps the HOST's
+  altitude loop honest — the HOST commands the aircraft to the HOT it is given,
+  so a missing or frozen HOT flies the aircraft into the ground.
 - Parses inbound CIGI (IG Control, Entity Control, …) for the live status block
   in its operator window.
 - **Fans the downstream stream out** to the extra IG PCs listed in `client.txt`
@@ -124,10 +129,12 @@ that the HOST requires to start streaming:
 ```
 
 With HAT/HOT answering on (the default), there is one more edge to that
-picture: before answering a HAT/HOT request, CigiStarter reads the terrain
-height under the aircraft from the local Prepar3D over FSUIPC. The poller owning
-that link is described in `TerrainSource.cpp`; it exists only while answering is
-on.
+picture: before answering a HAT/HOT request, CigiStarter looks the terrain
+height up at the request's point in the offline SRTM database (`TerrainDb.cpp`),
+falling back to reading the ground under the aircraft from the local Prepar3D
+over FSUIPC (`TerrainSource.cpp`) where the database has no tile. The FSUIPC
+poller exists only while answering is on; the database is indexed at startup
+either way and needs no sim at all.
 
 [Flow control](#sof-rate-and-flow-control) — on by default — is what keeps that
 loop self-limiting. When the HOST cannot produce the next frame as fast as the
@@ -152,7 +159,8 @@ point of view that edge looks exactly like the HOST's own, which is the point.
 | SOF message id    | 101 (`0x65`)                 |
 | IG mode           | commanded by the HOST via IG Control; the SOF echoes it back (Operate throughout the reference capture) |
 | HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
-| Terrain source    | FSUIPC `0x0020` of the local Prepar3D (ground altitude under the player aircraft) |
+| Terrain source    | offline SRTM `.hgt` tiles in `terrain\` beside the executable (1 or 3 arc-second), looked up bilinearly; FSUIPC `0x0020` (ground altitude under the player aircraft) is the fallback where there is no tile |
+| Terrain database  | `.hgt` tiles named by their integer-degree corner (`S08E112` covers -8..-7 / 112..113), `terrain\` by default or `--terrain-dir`; fetched with `tools\get_terrain.ps1`; `--terrain-offset <m>` calibrates a datum bias |
 | Extra IG PCs      | listed in `client.txt` next to the executable (`address[:port]`, `#` comments, optional, read once at startup) |
 | Fan-out           | one copy of each downstream datagram per listed client, injected with Npcap, source address/port spoofed as the HOST's |
 | Fan-out adapter   | found automatically: the adapter owning this IG's address, else the one the route to the HOST leaves by |

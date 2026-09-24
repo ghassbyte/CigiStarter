@@ -24,3 +24,7 @@ Release/
 *.swp
 Thumbs.db
 Desktop.ini
+
+# Terrain database (large SRTM .hgt tiles; fetched per site, not committed).
+# See tools/get_terrain.ps1.
+terrain/

@@ -114,6 +114,7 @@
     <ClCompile Include="Gui.cpp" />
     <ClCompile Include="cigi.cpp" />
     <ClCompile Include="Relay.cpp" />
+    <ClCompile Include="TerrainDb.cpp" />
     <ClCompile Include="TerrainSource.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -121,6 +122,7 @@
     <ClInclude Include="Gui.h" />
     <ClInclude Include="Relay.h" />
     <ClInclude Include="SofPacer.h" />
+    <ClInclude Include="TerrainDb.h" />
     <ClInclude Include="TerrainSource.h" />
   </ItemGroup>
   <ItemGroup>
