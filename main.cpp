@@ -5,10 +5,12 @@
 //    Plays the "Master IG" side of a CIGI link so the HOST begins streaming
 //    flight data. The HOST stays silent until the IG transmits Start-of-Frame
 //    (SOF) messages, so this program continuously sends SOF at a configurable
-//    rate and answers HAT/HOT requests with the terrain height from an offline
-//    SRTM tile set (TerrainDb.h), falling back to the local Prepar3D via FSUIPC
-//    where it has no coverage (switched on by default; an unreachable sim just
-//    means the FSUIPC fallback stays invalid until it appears).
+//    rate and answers HAT/HOT requests with the terrain height from the local
+//    Prepar3D's own terrain engine, through the PdkTerrainProbe add-on
+//    (TerrainProbe.h). An offline SRTM tile set (TerrainDb.h) and then the sim
+//    over FSUIPC (TerrainSource.h) are the fallbacks. Answering is on by
+//    default; an unreachable sim just leaves those fallbacks unavailable until
+//    it appears.
 //
 //  SOF rate and flow control
 //    The HOST answers each SOF with one datagram, and each answer carries a fresh
@@ -113,11 +115,13 @@ struct Config {
     // is still in the taskbar, and START / STOP / EXIT still work from it.
     bool    autoStart     = true;
 
-    // The HAT/HOT terrain source. An offline SRTM tile set answers the request
-    // regardless of the sim's state, which is what keeps the HOST's altitude
-    // loop honest while the aircraft is flown into Prepar3D with FSUIPC slew
-    // writes (the sim's own ground model is frozen in slew). Empty means the
-    // "terrain" folder next to this program (TerrainDb.h).
+    // The offline HAT/HOT terrain source: the fallback for when the local
+    // Prepar3D's own terrain probe cannot answer. It is a copy of the world, so
+    // it keeps answering regardless of the sim's state, which is what keeps the
+    // HOST's altitude loop honest while the aircraft is flown into Prepar3D with
+    // FSUIPC slew writes (the sim's own ground model is frozen in slew). Empty
+    // means the "terrain" folder next to this program (TerrainDb.h); the probe
+    // is preferred and needs no configuration.
     std::string terrainDir;       // "" = <exe folder>\terrain
     double      terrainOffset = 0.0;  // metres added to database heights
 };
@@ -318,14 +322,18 @@ static bool resolveV4(const char* ip, uint16_t port, sockaddr_in& out) {
 //-----------------------------------------------------------------------------
 // HAT/HOT answering
 //-----------------------------------------------------------------------------
-// Two terrain sources are available. The offline SRTM database (TerrainDb.h)
-// is preferred: it is live for the whole flight, whereas the sim's own ground
-// altitude freezes while the aircraft is flown into Prepar3D with FSUIPC slew
-// writes. FSUIPC still supplies the aircraft's position and altitude (and the
-// fallback terrain, where the database has no coverage).
+// Three terrain sources are available, tried in this order: the local
+// Prepar3D's own terrain engine through the PdkTerrainProbe add-on
+// (TerrainProbe.h), which is the surface the sim will actually fly the aircraft
+// onto; an offline SRTM database (TerrainDb.h); and the sim's ground altitude
+// read over FSUIPC (terrain::Sample::groundAltMeters). FSUIPC also supplies the
+// aircraft's position and altitude, which the entity-relative requests are
+// anchored to.
 //
-// The original Master IG answered from its own terrain database for the same
-// reason, so the database is the reference behaviour rather than a workaround.
+// The probe and the database both answer about the *world* rather than about
+// where the aircraft is sitting, so neither freezes while the aircraft is flown
+// into Prepar3D with FSUIPC slew writes. The original Master IG answered from
+// its own terrain database for the same reason.
 constexpr double kGeodeticToleranceMeters = 500.0;
 constexpr double kPi                      = 3.14159265358979323846;
 constexpr double kEarthRadiusMeters       = 6371000.0;

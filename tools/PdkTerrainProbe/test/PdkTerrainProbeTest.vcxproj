@@ -4,8 +4,8 @@
   It compiles TerrainProbe.cpp (the module under test) directly, so it needs no
   Prepar3D at all - only the two headers at the repository root.
 
-    msbuild test\PdkTerrainProbeTest.vcxproj /p:Configuration=Release
-    test\bin\Release\PdkTerrainProbeTest.exe
+    msbuild test\PdkTerrainProbeTest.vcxproj /p:Configuration=Release /p:Platform=x64
+    test\x64\Release\PdkTerrainProbeTest.exe
 -->
 <Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">

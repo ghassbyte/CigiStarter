@@ -55,22 +55,18 @@ sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
   database itself needs no library at all — just the `.hgt` tiles (see
   [Terrain database](#terrain-database)).
 - The preferred terrain source is a Prepar3D that is running the
-  **`PdkTerrainProbe`** add-on (`tools\PdkTerrainProbe`). That needs the
-  Prepar3D SDK to *build*, but not to *use*: the IG PC needs only the built DLL
-  and its `add-on.xml`. It is a separate project rather than part of
-  `CigiStarter.sln`, so a machine without the SDK still builds the IG. Without
-  it the HAT/HOT answer falls back to the database exactly as before.
+  **`PdkTerrainProbe`** add-on (`tools\PdkTerrainProbe`). Building it needs the
+  Prepar3D PDK headers, vendored in `external\Prepar3D-SDK\inc\PDK\`; *using* it
+  needs only the built DLL and its `add-on.xml`. It is a separate project rather
+  than part of `CigiStarter.sln`, so a machine without the SDK still builds the
+  IG. Without it the HAT/HOT answer falls back to the database exactly as before.
 - **Npcap** is needed only for the [fan-out](#fan-out-to-the-other-ig-pcs). It is
   loaded at run time rather than linked, so the program still builds and runs
-  without it. The Npcap *SDK* (headers) is needed to build; it is shared with
-  `CigiP3dBridge`:
-  `..\CigiP3dBridge\external\npcap-sdk-1.16\`. Point the build elsewhere with
+  without it. The Npcap *SDK* (headers) is needed to build and is vendored in
+  `external\npcap-sdk-1.16\`; point the build elsewhere with
   `/p:NpcapSdkDir=<directory>`.
-- The FSUIPC header/library are the ones already in this repository, shared with
-  `CigiP3dBridge`:
-  `..\CigiP3dBridge\external\UIPC64_SDK_C_version2\`. If your checkout lays the
-  two projects out differently, point the build at another copy with
-  `/p:FsuipcSdkDir=<directory>`.
+- The FSUIPC header/library are vendored in `external\UIPC64_SDK_C_version2\`.
+  Point the build at another copy with `/p:FsuipcSdkDir=<directory>`.
 - `FSUIPCuser64.lib` was compiled with **MSVC v140** and is an LTCG library, so
   this project must **not** build with `/GL` — `WholeProgramOptimization` is
   therefore `false` for Release. Building with `/GL` fails at link with
@@ -98,6 +94,9 @@ msbuild CigiStarter.sln /p:Configuration=Release /p:Platform=x64
 
 Or open `CigiStarter.sln` in Visual Studio and build **Release | x64**.
 The output is `x64\Release\CigiStarter.exe`.
+
+The SDKs the solution links against are vendored in `external\`, so the build
+needs nothing installed beyond Visual Studio / Build Tools.
 
 ## Usage
 
@@ -370,8 +369,9 @@ client.txt
      query is answered about the world, so the whole sweep takes seconds — but
      `probe` and `survey` need Prepar3D running with the add-on loaded. `plan`,
      `compose` and `--help` need neither. A bake builds on option 1 — fetch the
-     SRTM tiles first, since they are its base. See
-     `tools\TerrainBaker\README.md`.
+     SRTM tiles first, since they are its base. `tools\TerrainBaker\README.md` is
+     the full procedure, with the expected output of each step and the failure
+     modes.
 
   Either way, a tile is read into memory the first time it is asked about and
   kept; the window's `TerrainDB` line shows how many are indexed and how many
@@ -416,7 +416,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  HAT/HOT   : answering from the sim's own terrain                       |
 |  Terrain   : 27.0 m under the aircraft, 30.1 m aircraft                  |
 |                                                                          |
-|  [x] Answer HAT/HOT (terrain database)  SOF rate: [ 150 ] Hz [ Apply ]   |
+|  [x] Answer HAT/HOT                       SOF rate: [ 150 ] Hz [ Apply ]   |
 |  [x] Pace SOF to HOST replies (flow control)                             |
 |                                                                          |
 |  [ START ]  [ STOP ]                                              [ EXIT ] |
@@ -461,14 +461,15 @@ with the window up instead, which is the behaviour the sketch below shows.
   thread to finish the client-address lookup it is already in the middle of.
 - Since the process has no console, `Ctrl+C` cannot reach it either.
 - Terrain lines appear while answering is on. `HAT/HOT` names the source in
-  force: `answering from the sim's own terrain` when the `PdkTerrainProbe`
-  add-on is loaded in the local Prepar3D, else `answering from the terrain
-  database` when tiles are indexed, else `answering from FSUIPC`. `TerrainDB`
-  names the database behind that fallback — `N tile(s), M in memory, X MB`, or
-  `none` with the reason (for instance no `terrain\` folder) — and `Terrain`
-  shows the live FSUIPC reading (ground and aircraft heights) or, with no sim,
-  `FSUIPC : no link to Prepar3D`. With answering off the block collapses to
-  `not answered (switched off)`.
+  force, in the order the answer is taken from: `answering from the sim's own
+  terrain` when the `PdkTerrainProbe` add-on is loaded in the local Prepar3D,
+  else `answering from the terrain database` when tiles are indexed, else
+  `answering from FSUIPC`, else `switched on, but nothing to answer from`.
+  `TerrainDB` names the database behind that fallback — `N tile(s), M in
+  memory, X MB`, or `none` with the reason (for instance no `terrain\` folder)
+  — and `Terrain` shows the live FSUIPC reading (ground and aircraft heights)
+  or, with no sim, `FSUIPC : no link to Prepar3D`. With answering off the block
+  collapses to `not answered (switched off)`.
 - `Relay` and `Relay NIC` report the [fan-out](#fan-out-to-the-other-ig-pcs):
   how many clients are listed, how many of them answer, how many datagrams have
   been copied, and which adapter the copies leave by. There is no button for it
@@ -496,11 +497,6 @@ is read once at startup — restart the program to pick up an edit:
 - The file is optional. Without it (or with nothing usable in it) nothing is
   relayed, the window says which of those it is, and the capture driver is never
   opened.
-- Writing the copies needs Npcap and nothing else — the program asks for no
-  elevation, and on a normal Npcap install (the *restrict driver access to
-  administrators* option left unchecked at install time) the adapter opens
-  unelevated. If it cannot be opened, the window reports why and nothing is
-  forwarded; the SOF link to the HOST is unaffected.
 
 Every datagram the HOST sends is copied **exactly as it arrived**, on the same
 UDP port, to each listed client — one Ethernet frame per client per datagram.
@@ -509,9 +505,13 @@ The copies carry the **HOST's address and port as their source**
 sees the same stream it would have seen if it were the IG on the link. Nothing
 is ever sent back up the link, and clients never talk to CigiStarter.
 
-Producing those copies needs **Npcap** (`wpcap.dll`), which is loaded at run
-time — deliberately *not* linked — so CigiStarter still builds and runs as a
-plain IG on a PC without it; the window then reports the relay as off, and why.
+Writing the copies needs **Npcap** (`wpcap.dll`) and nothing else. It is loaded
+at run time — deliberately *not* linked — so CigiStarter still builds and runs as
+a plain IG on a PC without it (the window then reports the relay as off, and
+why). The program asks for no elevation, and on a normal Npcap install (the
+*restrict driver access to administrators* option left unchecked at install
+time) the adapter opens unelevated; if it cannot be opened, the window reports
+why and nothing is forwarded, while the SOF link to the HOST is unaffected.
 Npcap has to be installed on the IG PC for the fan-out to work.
 
 How it works, and why:
@@ -555,6 +555,9 @@ client was reachable). Clients that have not answered yet are neither.
 
 ## Network layout
 
+The nodes and the full diagram are in `agents.md`; this is the traffic
+CigiStarter puts on the link:
+
 | Direction   | From                  | To                    | Port | Payload                         |
 |-------------|-----------------------|-----------------------|------|---------------------------------|
 | Downstream  | HOST `192.168.70.2`   | IG `192.168.70.70`    | 8000 | IGCtrl, EntityCtrl, HAT/HOT req |
@@ -586,9 +589,9 @@ the clients need no reconfiguration. See
   field matters.
 - The IG never picks its own mode: the HOST commands it with IG Control and the
   SOF reports it back. CigiStarter follows that, so byte 5 becomes `0x31`
-  (Operate) as soon as the HOST asks for Operate — which the reference HOST in
-  `hlm.bin` does in every one of its 1160 datagrams. `--ig-mode` only sets the
-  mode reported *before* the first IG Control arrives.
+  (Operate) as soon as the HOST asks for Operate — which the reference HOST
+  does in every one of its datagrams. `--ig-mode` only sets the mode reported
+  *before* the first IG Control arrives.
 - SOF pacing uses the 1 ms system timer resolution (`timeBeginPeriod(1)`).
   Windows' default granularity is 15.6 ms (~64 Hz), so without it any rate above
   ~60 Hz is really paced at ~64 Hz with an occasional burst. That is worth
@@ -626,6 +629,7 @@ the clients need no reconfiguration. See
 | `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
 | `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles the HAT/HOT fallback is answered from |
+| `external\`        | vendored build-time SDKs: FSUIPC, Npcap, and the Prepar3D PDK headers |
 | `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source, and the sampler `TerrainBaker` uses) |
 | `tools\get_terrain.ps1` | option 1: downloads generic SRTM tiles for `terrain\` |
 | `tools\TerrainBaker\` | option 2: bakes Prepar3D's own ground heights over an SRTM base |

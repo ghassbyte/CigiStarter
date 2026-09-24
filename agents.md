@@ -1,8 +1,11 @@
 # Agents
 
-This document describes the software/hardware **agents** (nodes) in the CIGI
-flight-simulator network and how they interact. The reference behaviour was
-reverse-engineered from `Host-Master.pcapng`.
+The **agents** (nodes) in the CIGI flight-simulator network and how they
+interact. The reference behaviour was reverse-engineered from
+`Host-Master.pcapng`.
+
+For how CigiStarter is built, configured and operated, see `README.md`; this
+document is the network view.
 
 ## Topology
 
@@ -48,80 +51,42 @@ Per frame, in response to a SOF, it transmits a single UDP datagram to the IG
 | Atmosphere Control     | 1     | first frames only (warm-up)               |
 
 ### Master IG — `192.168.70.70`
-The original Image Generator (the one being replaced). In the capture it acts
-as the frame-timing master: it emits a **Start-of-Frame (SOF)** at ~100 Hz (an
-8/12 ms alternation) and, after a ~100-frame warm-up, appends **HAT/HOT Extended
-Response** messages to its SOF stream. The SOF's frame-number field advances only
-~53 times a second, not ~100 — it carries the HOST's own counter rather than a
-count of SOFs (see CigiStarter below and the protocol notes in `README.md`).
+The original Image Generator that CigiStarter replaces. In the capture it is the
+frame-timing master: it emits a **SOF** at ~100 Hz (an 8/12 ms alternation) and,
+after a ~100-frame warm-up, appends **HAT/HOT Extended Response** messages. Its
+SOF frame-number field advances only ~53 times a second — it carries the HOST's
+own counter, not a count of SOFs.
 
 ### CigiStarter (this program) — the new IG PC
-A drop-in replacement for the Master IG. It replicates the upstream behaviour
-that the HOST requires to start streaming:
+A drop-in replacement for the Master IG. It plays the IG side of the link:
 
-- Binds `0.0.0.0:8000` (all interfaces) and sends SOF to `192.168.70.2:8001`;
-  the HOST addresses the IG as `192.168.70.70` (addresses/ports are hardcoded
-  in `main.cpp`).
-- Sends SOF at a configurable rate (`--fps`, default 150 Hz; the window's rate
-  box retunes the running stream), and **flow control is on by default**: the
-  transmit loop holds a SOF back while the HOST has not answered the previous
-  one, so the stream fits whatever frame rate the HOST can actually produce
-  instead of piling requests up on it. Each answer carries a fresh attitude (the
-  position comes on every other one), so the SOF rate is what keeps the aircraft's
-  motion smooth. `--no-flow-control` transmits on the rate alone, which is what
-  the original Master IG did.
-- The SOF's only live field is the **HOST's frame counter**, echoed out of the
-  IG Control it arrived in: that is what the reference Master put there, and it
-  advances with the HOST's frame rate (~53 Hz in the reference capture) rather
-  than with the SOF rate (~100 Hz). An IG-side count of transmitted SOFs in that
-  slot would drift away from the HOST by (rate − 53) frames every second, which
-  is what used to break the HOST above ~60 Hz. The unit tests in
-  `SofPacer.h`'s harness pin the outgoing SOF to the captured bytes.
-- Reports the IG mode the HOST commands. Every HOST datagram carries an IG
-  Control asking for Operate, and the SOF's mode byte (bits 0-1 of byte 5)
-  follows it to `0x31` instead of staying at the `--ig-mode` default. The flag
-  only seeds the mode used before the first IG Control arrives.
-- Answers HAT/HOT requests by default (the window's check box, or
-  `--no-respond-hathot`, switches it off — which also stops the FSUIPC poller
-  with it). The terrain comes from the sim the aircraft is actually flying in:
-  the `tools\PdkTerrainProbe` add-on asks Prepar3D's own terrain engine through
-  the PDK surface query service and publishes the heights in shared memory
-  (`TerrainProbe.cpp`, `TerrainProbeIpc.h`), so a runway's flattening and any
-  added scenery are included with nothing pre-mapped. Where the add-on is not
-  loaded the answer falls back to an offline **SRTM `.hgt` tile set** in the
-  `terrain\` folder next to the program (`TerrainDb.cpp`) — the same idea the
-  Master IG used with its own database — and then to the ground under the
-  aircraft as seen by the local Prepar3D over FSUIPC (`TerrainSource.cpp`,
-  offset `0x0020`). Something other than FSUIPC leads, because the sim's ground
-  model is **frozen while Prepar3D is held in slew**, which is how
-  CigiP3dBridge (or the vendor program that replaces it) drives the aircraft: an
-  FSUIPC-only answer would keep reporting the terrain of wherever the last
-  reposition left it. Keeping HOT correct is what keeps the HOST's altitude loop
-  honest — the HOST commands the aircraft to the HOT it is given, so a missing
-  or frozen HOT flies the aircraft into the ground. The `terrain\` folder is
-  filled either with generic SRTM tiles (`tools\get_terrain.ps1`) or with a
-  **sim-exact bake** that overlays Prepar3D's own ground heights on them
-  (`tools\TerrainBaker`), which is what captures a runway's flattening; the bake
-  asks the same add-on, so it is a fast batch sample and not a slew sweep.
-- Parses inbound CIGI (IG Control, Entity Control, …) for the live status block
-  in its operator window.
-- **Fans the downstream stream out** to the extra IG PCs listed in `client.txt`
-  (`Relay.cpp`): every datagram the HOST sends is copied, byte for byte, into one
-  injected Ethernet frame per client, labelled with the HOST's address and port
-  so that those clients need no reconfiguration. They are passive — they never
-  send anything back to CigiStarter, and nothing is sent up the link on their
-  behalf. The copy needs Npcap on the IG PC and nothing else — the program asks
-  for no elevation, and a normal Npcap install opens the adapter unelevated; it
-  is loaded at run time, so the program still runs as a plain IG without it. No
-  clients listed (or no `client.txt`) simply means the fan-out is off.
-- Starts transmitting as soon as it starts, and minimises its own window once it
-  is: a deployment site switches the IG PC on rather than operating it, so there
-  is nothing to click before the link is live. The window (`Gui.cpp`) has START /
-  STOP / EXIT plus the HAT/HOT check box, the flow-control check box and the SOF
-  rate box, and it waits in the taskbar while minimised; `--no-auto-start`
-  restores the old start-paused behaviour (stream stopped, window up) for
-  debugging. EXIT is the only way out — the title-bar X and Alt+F4 are swallowed,
-  so a stray click cannot take the IG off the link mid-run.
+- **Wakes the HOST and answers it** — binds `0.0.0.0:8000` for the flight data,
+  sends SOF to `192.168.70.2:8001` at a configurable rate, and rides its HAT/HOT
+  responses along on the SOF stream. The addresses are hardcoded in `main.cpp`.
+- **Answers HAT/HOT** from the terrain the aircraft will actually fly onto —
+  Prepar3D's own engine, through the `PdkTerrainProbe` add-on — falling back to
+  an offline SRTM database and then to FSUIPC. On by default.
+- **Fans the downstream stream out** to the extra IG PCs in `client.txt`, byte
+  for byte, source-labelled as the HOST. Optional, Npcap-backed, passive clients
+  only.
+- **Starts on its own** — streams from launch, minimises its window, and leaves
+  EXIT as the only way off the link. `--no-auto-start` restores the paused
+  window.
+
+Two design points are where it differs from a naive IG, and both matter to the
+HOST:
+
+- **Flow control (default on)** holds a SOF back while the HOST has not answered
+  the previous one, so the stream fits the frame rate the HOST can actually
+  produce instead of piling requests up on it. The rate box is a ceiling, not a
+  promise.
+- **The SOF echoes the HOST's frame counter** (offset 8), not an IG-side count of
+  SOFs. That is what the reference Master did; an IG-side count would drift away
+  from the HOST by (rate − 53) frames every second, which is what used to break
+  it above ~60 Hz.
+
+`README.md` has the mechanism behind all four: the operator window, every
+option, the terrain sources, the fan-out and the wire layout.
 
 ## Message flow
 
@@ -137,51 +102,39 @@ that the HOST requires to start streaming:
         │                ...                  │
 ```
 
-With HAT/HOT answering on (the default), there is one more edge to that
-picture: before answering a HAT/HOT request, CigiStarter asks the local
-Prepar3D's own terrain engine for the height at the request's point, through the
-`PdkTerrainProbe` add-on (`TerrainProbe.cpp`). Where that add-on is not loaded
-it falls back to the offline SRTM database (`TerrainDb.cpp`) and then to reading
-the ground under the aircraft over FSUIPC (`TerrainSource.cpp`). The FSUIPC
-poller exists only while answering is on; the database is indexed at startup
-either way and needs no sim at all.
-
-[Flow control](#sof-rate-and-flow-control) — on by default — is what keeps that
-loop self-limiting. When the HOST cannot produce the next frame as fast as the
-rate box asks for, the IG holds the next SOF back instead of sending it, so the
-loop settles at the HOST's pace rather than asking the HOST for frames it has not
-made. `SofPacer.h` owns that rule; switched off, the IG transmits on the schedule
-alone, as the original Master did.
-
-With the fan-out on, every downstream datagram in that picture also leaves the
-IG again — unaltered — towards each client in `client.txt`. From the clients'
-point of view that edge looks exactly like the HOST's own, which is the point.
+The loop is self-limiting: flow control stops the IG asking for a frame the HOST
+has not made. With HAT/HOT answering on, the IG asks the sim's own terrain engine
+for each request's height before it replies; with `client.txt` populated, every
+downstream datagram also leaves the IG again — unaltered — towards each client,
+looking to them exactly like the HOST's own.
 
 ## Key facts
 
 | Property          | Value                        |
 |-------------------|------------------------------|
 | Protocol          | CIGI 3.3, UDP, little-endian |
-| HOST address      | 192.168.70.2 (hardcoded)     |
-| IG address        | 192.168.70.70 (hardcoded)    |
+| HOST address      | `192.168.70.2` (hardcoded)   |
+| IG address        | `192.168.70.70` (hardcoded)  |
 | Downstream port   | 8000 (HOST → IG)             |
 | Upstream port     | 8001 (IG → HOST)             |
 | SOF message id    | 101 (`0x65`)                 |
-| IG mode           | commanded by the HOST via IG Control; the SOF echoes it back (Operate throughout the reference capture) |
+| IG mode           | commanded by the HOST via IG Control; the SOF echoes it back |
 | HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
-| Terrain source    | Prepar3D's own terrain, through the `PdkTerrainProbe` PDK add-on in the local sim (the surface the aircraft will actually be put on, runway flattening and all); an offline SRTM `.hgt` tileset in `terrain\` beside the executable (1 or 3 arc-second, looked up bilinearly) is the first fallback; FSUIPC `0x0020` (ground altitude under the player aircraft) is the last |
-| Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D (`add-on.xml`, `<DLLType>PDK</DLLType>`) that answers `ISurfaceQueryManagerV400::QuerySurfaceElevation` and publishes the heights in shared memory (`Local\CigiStarter.TerrainProbe.v1`); free-standing query, no SimObject and nothing teleported; optional — with it absent the answer falls back to the database |
-| Terrain database  | `.hgt` tiles named by their integer-degree corner (`S08E112` covers -8..-7 / 112..113), `terrain\` by default or `--terrain-dir`; two ways to fill it — generic SRTM with `tools\get_terrain.ps1`, or a sim-exact bake of Prepar3D's own ground heights with `tools\TerrainBaker`; `--terrain-offset <m>` calibrates a datum bias, and is deliberately not applied to a height that came from the sim |
-| Extra IG PCs      | listed in `client.txt` next to the executable (`address[:port]`, `#` comments, optional, read once at startup) |
-| Fan-out           | one copy of each downstream datagram per listed client, injected with Npcap, source address/port spoofed as the HOST's |
-| Fan-out adapter   | found automatically: the adapter owning this IG's address, else the one the route to the HOST leaves by |
-| Elevation         | none requested (`asInvoker`), so an unattended logon/startup path works; the fan-out needs Npcap, not elevation |
+| SOF live field    | the HOST's frame counter, echoed at offset 8; offsets 12/16 stay 0 |
+| Terrain source    | P3D's own terrain via the `PdkTerrainProbe` add-on; then an SRTM `.hgt` tileset; then FSUIPC `0x0020` |
+| Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D; free-standing query, no SimObject; optional |
+| Terrain database  | `.hgt` tiles in `terrain\` by default or `--terrain-dir`; from `tools\get_terrain.ps1` or a `tools\TerrainBaker` bake |
+| Extra IG PCs      | `client.txt` beside the executable, `address[:port]`, read once at startup |
+| Fan-out           | one Npcap-injected copy per client, HOST source address/port spoofed |
+| Fan-out adapter   | found automatically: this IG's adapter, else the one the route to the HOST leaves by |
+| Elevation         | none requested (`asInvoker`); the fan-out needs Npcap, not elevation |
 | Reference SOF rate | ~100 Hz (~10 ms, an 8/12 ms alternation) |
-| HOST frame rate   | ~53 Hz — its IG Control counter advances 0.54 per datagram while a datagram arrives every ~10.2 ms, so the HOST is asked for about twice the frames it has |
-| SOF live field    | the HOST's frame counter (out of IG Control), echoed at offset 8; offsets 12/16 stay 0, as in the capture |
-| SOF rate here     | 150 Hz default (1..100000 Hz from the window), paced to the HOST's replies unless flow control is off |
-| Operator UI       | plain Win32 window (`Gui.cpp`): START / STOP / EXIT, a HAT/HOT check box, a flow-control check box and a SOF rate box |
-| Start-up          | streams from launch and minimises its own window (no click needed); `--no-auto-start` starts paused with the window up, as before |
-| Runtime settings  | SOF rate, HAT/HOT answering (drives the FSUIPC poller) and flow control, all applied on the next frame; `--fps` / `--respond-hathot` / `--flow-control` only seed them |
-| Exit path         | EXIT button only — the title-bar X / Alt+F4 / `WM_CLOSE` are swallowed |
+| HOST frame rate   | ~53 Hz — its IG Control counter advances 0.54 per datagram, i.e. the HOST is asked for about twice the frames it has |
+| SOF rate here     | 150 Hz default (1..100000 Hz), paced to the HOST unless flow control is off |
+| Operator UI       | plain Win32 window: START / STOP / EXIT, a HAT/HOT check box, a flow-control check box, a SOF rate box |
+| Start-up          | streams from launch, window minimised; `--no-auto-start` starts paused |
+| Exit path         | EXIT button only — the title-bar X / Alt+F4 are swallowed |
 | Process type      | GUI subsystem: no console; `--help` and startup errors use a message box |
+
+`README.md`, [Protocol notes](README.md#protocol-notes), has the byte layout
+behind the ids and ports.

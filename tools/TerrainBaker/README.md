@@ -15,11 +15,7 @@ The sim's readings come through **`PdkTerrainProbe.dll`**, the same in-process
 add-on CigiStarter answers HAT/HOT from at run time (see
 `tools\PdkTerrainProbe\README.md`). It does not use FSUIPC, slew mode or
 repositioning: the surface query is answered about the world at the coordinate
-asked for, so a whole tile is sampled in seconds rather than the hours the old
-one-cell-at-a-time FSUIPC sweep took.
-
-This file is the design and the reference. **`RUNBOOK.md`** is the step-by-step
-procedure for running a real bake on the IG PC.
+asked for, so a whole tile is sampled in seconds.
 
 ## Why
 
@@ -52,34 +48,35 @@ builds without the Prepar3D SDK installed).
 | `survey` | yes | walks every grid point in the boxes, appending to `<out>\<tile>.samples.csv` |
 | `compose` | no | folds the SRTM base and that CSV into `<out>\<tile>.hgt` |
 
-`probe` and `survey` need Prepar3D running with the add-on loaded; everything
-else is offline.
-
 `plan`, `survey` and `compose` take the same `--site` / `--box` / `--res`
 options, so the survey and the compose agree on the area. `--tile` selects tiles
 for `compose` explicitly.
 
-## Procedure
+## Running a bake
 
-Run it on the **IG PC**, with Prepar3D up and running (not paused) and the
+Do it on the **IG PC**, with Prepar3D up and running (not paused) and the
 `PdkTerrainProbe` add-on loaded. Nothing else has to be held still: the bake
 reads the world rather than steering the aircraft, so the vendor program or
 `CigiP3dBridge` may be running, and the aircraft is never touched.
 
+The IG PC needs `TerrainBaker.exe` and the SRTM base in `<exeDir>\terrain\` —
+either the 1″ set or the 90 m set. A bake of the default boxes consults only
+`S07E106` and `S07E107`; `plan` says when a tile's base is missing.
+
 ```powershell
-# 0. the add-on, once per IG PC
+# 0. the add-on, once per IG PC (see tools\PdkTerrainProbe\README.md)
 copy tools\PdkTerrainProbe\bin\Release\PdkTerrainProbe.dll <add-ons folder>
 copy tools\PdkTerrainProbe\add-on.xml                     <add-ons folder>
-#    ...and restart Prepar3D. See tools\PdkTerrainProbe\README.md.
+#    ...and restart Prepar3D.
 
 # 1. the SRTM base (option 1)
 .\tools\get_terrain.ps1 -Points "-6.54,106.76","-6.27,106.89","-6.13,106.66","-6.90,107.58" `
                         -Out x64\Release\terrain
 
-# 2. what would be baked
+# 2. what would be baked -- both tiles must say "base ok"
 .\x64\Release\TerrainBaker.exe plan
 
-# 3. prove the add-on is answering -- seconds
+# 3. prove the add-on is answering -- seconds; this is the gate
 .\x64\Release\TerrainBaker.exe probe
 
 # 4. the sweep. Ctrl+C is safe: it stops between batches
@@ -90,53 +87,89 @@ copy tools\PdkTerrainProbe\add-on.xml                     <add-ons folder>
 copy x64\Release\terrain-sim\*.hgt x64\Release\terrain\
 ```
 
-`compose` prints how far the sim disagreed with SRTM over the sampled cells.
-On a flattened field expect a handful of metres; over open country expect ~0.
+Restart CigiStarter after deploying so it indexes the new tiles (they are read
+at startup), and confirm the `TerrainDB` line in its window picked them up.
+CigiStarter's own lookup at the fields — the SRTM heights, before the bake's
+correction — should read Atang ~175 m, Halim ~25 m, Soekarno-Hatta ~8 m,
+Husein ~745 m.
 
-That is the short version. `RUNBOOK.md`, in this folder, is the full procedure
-for a real bake: preconditions, what to check at each step, what good output
-looks like, and the failure modes.
+### `plan`
 
-### Probe first, and read what it says
+```
+plan: 3 arc-sec (1201x1201, ~93 m)
+  S07E106  base ok              points 172800  already    0  todo 172800
+  S07E107  base ok              points  57600  already    0  todo  57600
+total points to sample: 230400
+```
 
-`probe` asks about the centre and corners of each box, far enough apart that one
-invented number could not pass for five, then asks about the same points again.
-It exits non-zero if the add-on answers nothing (Prepar3D paused, or scenery not
-loaded) or if the repeat disagrees with the first answer, which would mean the
-answers are not tied to the points asked. It also prints the SRTM height and the
-difference, so the size of the correction is visible before anything is baked.
+### `probe` — the gate
 
-The query is **altitude dependent** — Prepar3D decides which surface is meant
-from the height it is asked about — which is why `--altitude` exists and defaults
-to 3500 m: high enough to be above the ground everywhere in these boxes, so the
-answer is the surface an aircraft would land on. It is the same field
-CigiStarter fills in at run time with the HAT point's altitude, so a baked tile
-and a live answer describe the same surface.
+`probe` asks about the centre and the corners of each box (four boxes × five
+points = twenty), far enough apart that one invented number could not pass for
+five, prints sim against SRTM, then asks about the same points a second time.
+Read **four** things:
 
-Measured on Prepar3D v5 (dev box, 2026-09), the retired FSUIPC path: `--slew on`
-made the position writes land and repeat to 0.05 m, while `--slew off` mostly did
-not apply them. That whole question is gone with the surface query, which never
-moves the aircraft — and it is why CigiStarter's own live answer moved to the
-same source.
+| line | must show | meaning |
+|---|---|---|
+| `sim  NNN m` | a number, not `no surface` | the add-on is loaded, ticking and answering |
+| the `d` column | usually nonzero | the sim really does disagree with SRTM where it matters |
+| `worst repeat \|d\|` | `0.00 m` | the answer is tied to the point asked, not invented |
+| final `VERDICT` | `answering per point and repeating` | safe to survey |
 
-### Cost
+It exits non-zero (2) if the add-on answers nothing — Prepar3D paused, scenery
+not loaded, or the DLL not installed — or if the repeat disagrees, in which case
+the answers are not tied to the points asked and the bake must not run. The
+message names which case it is; `tasklist /m PdkTerrainProbe.dll` is the direct
+check that the DLL is loaded.
 
-With the built-in site boxes (±0.10°, ~22 km across) at the default 3
-arc-seconds (~90 m), the four fields are about **230 000 points** — S07E106
-(172 800) plus S07E107 (57 600), the only two tiles involved.
+**Record the probe output** with the bake (screenshot or pasted), together with
+the `compose` residual. They are the evidence the run was sound, and a property
+of the installed scenery, so re-run `probe` if the scenery changes.
 
-The probe answers every enabled slot of its table on each simulation tick, and
-`survey` keeps all 256 of them full, so the ceiling is 60 ticks/s × 256 ≈
-**15 000 points/s** and the full sweep is **well under a minute** — measured at
+### `survey` — the sweep
+
+A smoke test first, ten full batches, to exercise the multi-batch path:
+
+```powershell
+.\x64\Release\TerrainBaker.exe survey --limit 2560
+```
+
+`limit reached` (exit 0) means go, then run the sweep proper. The pace is set by
+the sim's tick, not by the tool: the probe answers all 256 slots of its table on
+each tick (60/s), so the full sweep is **well under a minute** — measured at
 about 9 400 points/s against a stand-in sim, i.e. ~25 s for the 230 400 points.
-In practice the pace is set by the sim's tick, not by the tool.
 
-The sweep is resumable, `--limit N` caps a run for a smoke test, and a point the
-sim has no surface for (open water, or no data) is simply not recorded, so that
-cell keeps its SRTM height.
+- **Ctrl+C is safe** — it stops between batches and keeps the CSV.
+- Re-running **resumes**: it skips everything already in
+  `terrain-sim\<tile>.samples.csv`. `--no-resume` starts the tile over — do not
+  use it casually.
+- `--limit N` caps a run, for a smoke test.
+- Points the sim has no surface for (open water, no data) are **not recorded**,
+  so those cells keep their SRTM height; the summary line counts them.
+- Keep the CSV afterwards. **That file is the bake**; the tile can always be
+  rebuilt from it without the sim (that is what `compose` does).
 
-Widen a field's box with `--box lat0,lon0,lat1,lon1` if the HOST's approaches
-start further out; the cost rises with the square of the box.
+Ends with `survey done (230400 samples this run). Now run: TerrainBaker compose`
+(exit 0). `FAILED --` with exit 1 means the `--out` folder could not be written,
+or the sim stopped answering mid-run — the message says which; `interrupted --`
+is a Ctrl+C, and a re-run continues.
+
+### `compose` — assemble
+
+```
+S07E106: 172800 sample(s) applied -> <exeDir>\terrain-sim\S07E106.hgt
+   sim vs SRTM: mean -1.6 m, |max| 18 m over 172800 sampled cell(s)
+   coverage: 11.98% of the tile is sim-exact
+S07E107: 57600 sample(s) applied -> ...
+```
+
+A few metres mean over a **flattened field** is expected and is the point of the
+bake — that is the runway levelling SRTM cannot know about; large values over
+open country would mean the wrong terrain was answered. `coverage` is the share
+of the **whole tile** that came from the sim: the default boxes cover a fraction
+of a 1° cell, so a fully sampled run reports about 12% for S07E106 and the rest
+keeps its SRTM height. Re-run `compose` after any extra survey; new samples do
+not reach the tile by themselves.
 
 ### Choosing the resolution
 
@@ -149,18 +182,45 @@ A 1 arc-second SRTM base is stepped down to 3 arc-seconds exactly 3:1, so the
 bake still builds on option 1's tiles with no second download. Stepping *up* is
 refused: it would invent detail the base never had.
 
+### The query is altitude dependent
+
+Prepar3D decides which surface is meant from the height it is asked about, which
+is why `--altitude` exists and defaults to 3500 m: high enough to be above the
+ground everywhere in these boxes, so the answer is the surface an aircraft would
+land on. It is the same field CigiStarter fills in at run time with the HAT
+point's altitude, so a baked tile and a live answer describe the same surface.
+
 ## Notes and limits
 
 - The bake does not touch the aircraft: no slew mode, no position writes, so the
-  sim is left exactly as it was found.
+  sim is left exactly as it was found and nothing has to be re-flown.
 - The tool writes `<out>\<tile>.samples.csv` alongside the tiles. That file is
-  the bake — keep it, and re-running `survey` resumes from it. `--no-resume`
-  starts a tile over. `survey` creates `<out>` if needed and stops with a clear
-  error if it cannot write: a survey that cannot record its samples must not look
-  like it succeeded.
+  the bake — keep it, and re-running `survey` resumes from it. `survey` creates
+  `<out>` if needed and stops with a clear error if it cannot write: a survey
+  that cannot record its samples must not look like it succeeded.
 - Only the two `.hgt` shapes `TerrainDb` accepts are written (1 or 3
   arc-second), so a baked tile is a drop-in replacement. Keep the original SRTM
   tiles somewhere for a re-bake.
 - The bake reflects the **installed scenery** at the time it runs. Change an
   airport's add-on scenery and that area wants a re-bake. (An IG PC with the
-  add-on loaded does not: it answers the same question live.)
+  add-on loaded does not: it answers the same question live, and the bake is only
+  for a PC that cannot run the add-on.)
+- Widen a field with `--box lat0,lon0,lat1,lon1` if the HOST's approaches start
+  further out; the cost rises with the square of the box, so re-run `plan` first.
+- **Not covered yet:** the oil rig and the military ship. Land was done first;
+  those two are still to come.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `PdkTerrainProbe.dll is not loaded in Prepar3D` | add-on not installed for this Prepar3D version, or the sim has not been restarted since it was |
+| `the probe is loaded but has no surface service` | the DLL could not get the service; check `lastError` in the shared region |
+| `the probe is loaded but its simulation tick is not running` | Prepar3D is paused, on a menu, or still loading |
+| `the sim stopped answering` mid-run | Prepar3D was paused, closed or hung; re-run and it resumes |
+| `cannot append to ...` + `FAILED`, exit 1 | `--out` (or its parent) not writable, or is a file |
+| probe says `no surface` for every point | scenery not loaded yet, or the sim is at a different location |
+| probe says `repeat queries disagree` | answers are not tied to the points asked; do not bake with this |
+| a tile does not say `base ok` | the `.hgt` files are not where the exe expects them (`--terrain-dir`) |
+| tile is a surprising size | `--res`: 3 → 2,884,802 B, 1 → 25,934,402 B |
+| `survey` finishes suspiciously fast | it is supposed to: the sweep is seconds, not hours |

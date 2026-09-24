@@ -46,8 +46,8 @@ constexpr int kMinFps = 1;
 constexpr int kMaxFps = 100000;
 
 // A snapshot of everything the window displays. The caller fills this in from
-// its own statistics and the FSUIPC terrain poller. Counters are passed
-// cumulative; the window works out the per-second rates itself.
+// its own statistics and the terrain sources. Counters are passed cumulative;
+// the window works out the per-second rates itself.
 struct Status {
     bool     sending           = false;  // SOF stream running?
     bool     respondingHatHot  = false;  // answering HAT/HOT requests?

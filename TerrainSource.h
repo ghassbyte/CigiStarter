@@ -4,8 +4,10 @@
 //  Why this exists
 //    The HOST drives its aircraft altitude from the Height Of Terrain (HOT)
 //    that the IG reports. If the IG answers HOT = 0 the aircraft is flown into
-//    the ground. CigiStarter therefore has to report the *real* terrain height
-//    under the aircraft, which only the simulator knows.
+//    the ground. The sim's own terrain engine answers the HOT itself, through
+//    the PdkTerrainProbe add-on (TerrainProbe.h); this module is the last
+//    fallback, and the source of the aircraft's own position and altitude that
+//    the entity-relative requests are anchored to.
 //
 //  What it does
 //    Opens FSUIPC against the local Prepar3D and polls the player-aircraft

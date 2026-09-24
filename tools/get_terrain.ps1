@@ -3,11 +3,13 @@
     Fetch SRTM terrain tiles for CigiStarter's HAT/HOT terrain database.
 
 .DESCRIPTION
-    CigiStarter answers HAT/HOT requests from an offline SRTM tile set in the
-    "terrain" folder beside the program, so the terrain stays live while the
-    local Prepar3D is held in slew mode by whatever drives it (TerrainDb.h
-    explains why). This script fetches the raw 1 arc-second ".hgt" tiles that
-    folder needs, from the public AWS "skadi" mirror (SRTMGL1, public domain).
+    CigiStarter answers HAT/HOT requests from the local Prepar3D's own terrain
+    through the PdkTerrainProbe add-on when it is installed, and from an offline
+    SRTM tile set in the "terrain" folder beside the program otherwise. The
+    offline copy stays live while the local Prepar3D is held in slew mode by
+    whatever drives it (TerrainDb.h explains why). This script fetches the raw
+    1 arc-second ".hgt" tiles that folder needs, from the public AWS "skadi"
+    mirror (SRTMGL1, public domain).
 
     Each 1-degree by 1-degree tile is about 25 MB uncompressed. Name the tiles
     you want directly, or give one or more lat,lon points and let the script
