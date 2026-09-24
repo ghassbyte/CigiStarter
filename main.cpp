@@ -25,7 +25,8 @@
 //    for a HOST that turns out to tolerate more. The SOF itself echoes the HOST's
 //    own frame counter (cigi.cpp); that field is what ties the two rates together.
 //
-//  Transport (fixed by the deployment; hardcoded below)
+//  Transport (the deployment's link below is the default; the four endpoints
+//  can be overridden on the command line for a bench test, without touching it)
 //    HOST 192.168.70.2  -> IG 192.168.70.70 : 8000   (downstream data)
 //    IG   192.168.70.70 -> HOST 192.168.70.2 : 8001  (upstream SOF / responses)
 //
@@ -83,6 +84,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -90,7 +92,11 @@
 #include <vector>
 
 //-----------------------------------------------------------------------------
-// Fixed link configuration (deployment-specific, hardcoded)
+// Default link configuration (the deployment's addresses)
+//
+// These are what the program uses unless --host-ip / --host-port / --ig-ip /
+// --ig-port are given, which is only ever for a bench test. The deployment
+// itself passes none of them.
 //-----------------------------------------------------------------------------
 constexpr char     kHostIp[] = "192.168.70.2";   // HOST address (upstream SOF)
 constexpr uint16_t kHostPort = 8001;             // HOST port (IG -> HOST)
@@ -114,6 +120,14 @@ struct Config {
     // the reference IG was free-running from the moment it started. The window
     // is still in the taskbar, and START / STOP / EXIT still work from it.
     bool    autoStart     = true;
+
+    // The link endpoints. The deployment's are the defaults; they are only ever
+    // changed for a bench test that runs the HOST somewhere other than
+    // 192.168.70.2.
+    std::string hostIp   = kHostIp;
+    uint16_t    hostPort = kHostPort;
+    std::string igIp     = kIgIp;
+    uint16_t    igPort   = kIgPort;
 
     // The offline HAT/HOT terrain source: the fallback for when the local
     // Prepar3D's own terrain probe cannot answer. It is a copy of the world, so
@@ -205,7 +219,7 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
     std::snprintf(
         buf, n,
         "CigiStarter - minimal CIGI 3.3 Image Generator\n\n"
-        "Link (fixed): HOST %s:%u  <->  IG %s:%u\n\n"
+        "Link (defaults): HOST %s:%u  <->  IG %s:%u\n\n"
         "Usage: %s [options]\n\n"
         "Options (these only set the starting state -- the SOF rate, HAT/HOT\n"
         "answering and flow control can also be changed from the window while it\n"
@@ -239,6 +253,14 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      this program; see README.md)\n"
         "  --terrain-offset <m> constant added to every database height, for\n"
         "                      calibrating against the sim          (default 0)\n"
+        "  --host-ip <addr>    HOST address SOFs and responses go to, for a\n"
+        "                      bench test            (default 192.168.70.2)\n"
+        "  --host-port <port>  HOST port SOFs and responses go to\n"
+        "                                                  (default 8001)\n"
+        "  --ig-ip <addr>      this IG's address, as the extra IG PCs see it\n"
+        "                                             (default 192.168.70.70)\n"
+        "  --ig-port <port>    port the HOST streams flight data to\n"
+        "                                                  (default 8000)\n"
         "  --help              show this help\n"
         "\n"
         "Extra (passive) IG PCs to copy the HOST's stream to are listed in\n"
@@ -255,6 +277,17 @@ static void showUsage(const char* argv0) {
 //-----------------------------------------------------------------------------
 // Minimal command-line parser
 //-----------------------------------------------------------------------------
+// Parse a UDP port number, rejecting anything outside 1..65535.
+static bool parsePort(const char* s, uint16_t& out) {
+    char* end = nullptr;
+    const unsigned long v = std::strtoul(s, &end, 10);
+    if (end == s || *end != '\0' || v == 0 || v > 65535) {
+        return false;
+    }
+    out = static_cast<uint16_t>(v);
+    return true;
+}
+
 static bool parseArgs(int argc, char** argv, Config& cfg) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -292,6 +325,24 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
         } else if (a == "--terrain-offset") {
             const char* v = next("--terrain-offset"); if (!v) return false;
             cfg.terrainOffset = std::atof(v);
+        } else if (a == "--host-ip") {
+            const char* v = next("--host-ip"); if (!v) return false;
+            cfg.hostIp = v;
+        } else if (a == "--host-port") {
+            const char* v = next("--host-port"); if (!v) return false;
+            if (!parsePort(v, cfg.hostPort)) {
+                fail("error: --host-port must be a port number (1..65535)");
+                return false;
+            }
+        } else if (a == "--ig-ip") {
+            const char* v = next("--ig-ip"); if (!v) return false;
+            cfg.igIp = v;
+        } else if (a == "--ig-port") {
+            const char* v = next("--ig-port"); if (!v) return false;
+            if (!parsePort(v, cfg.igPort)) {
+                fail("error: --ig-port must be a port number (1..65535)");
+                return false;
+            }
         } else {
             fail("error: unknown option '%s'\n\nRun with --help for the option list.",
                  a.c_str());
@@ -544,14 +595,14 @@ int main(int argc, char** argv) {
     }
     sockaddr_in bindAddr{};
     bindAddr.sin_family      = AF_INET;
-    bindAddr.sin_port        = htons(kIgPort);
+    bindAddr.sin_port        = htons(cfg.igPort);
     bindAddr.sin_addr.s_addr = INADDR_ANY;
     if (bind(rx, reinterpret_cast<sockaddr*>(&bindAddr), sizeof(bindAddr)) == SOCKET_ERROR) {
         const int err = WSAGetLastError();
         closesocket(rx); WSACleanup();
         return fail("error: bind(0.0.0.0:%u) failed (%d)\n"
                     "  (is another program already using UDP port %u?)\n",
-                    kIgPort, err, kIgPort);
+                    cfg.igPort, err, cfg.igPort);
     }
     // Short receive timeout so the loop can observe g_running on shutdown.
     DWORD rxTimeout = 500;
@@ -565,9 +616,9 @@ int main(int argc, char** argv) {
         return fail("error: socket() failed (%d)\n", WSAGetLastError());
     }
     sockaddr_in hostAddr;
-    if (!resolveV4(kHostIp, kHostPort, hostAddr)) {
+    if (!resolveV4(cfg.hostIp.c_str(), cfg.hostPort, hostAddr)) {
         closesocket(rx); closesocket(tx); WSACleanup();
-        return fail("error: invalid host address '%s'\n", kHostIp);
+        return fail("error: invalid host address '%s'\n", cfg.hostIp.c_str());
     }
 
     // Seed the live state; from here on the window owns it. HAT/HOT answering,
@@ -609,7 +660,7 @@ int main(int argc, char** argv) {
     // ---- Fan the HOST's stream out to the extra IG PCs (client.txt) ------
     // Optional and never fatal: the client list lives next to the executable,
     // and with no client.txt this does nothing at all. See Relay.h.
-    relay::start(kHostIp, kHostPort, kIgIp, kIgPort);
+    relay::start(cfg.hostIp.c_str(), cfg.hostPort, cfg.igIp.c_str(), cfg.igPort);
 
     HatHotRequestQueue hatHot;
 
@@ -872,10 +923,10 @@ int main(int argc, char** argv) {
     hooks.requestQuit      = uiRequestQuit;
 
     gui::Link link;
-    link.hostIp   = kHostIp;
-    link.hostPort = kHostPort;
-    link.igIp     = kIgIp;
-    link.igPort   = kIgPort;
+    link.hostIp   = cfg.hostIp.c_str();
+    link.hostPort = cfg.hostPort;
+    link.igIp     = cfg.igIp.c_str();
+    link.igPort   = cfg.igPort;
 
     const int exitCode = gui::run(hooks, link);
 

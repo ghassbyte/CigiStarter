@@ -100,12 +100,16 @@ needs nothing installed beyond Visual Studio / Build Tools.
 
 ## Usage
 
-The link addresses and ports are **fixed by the deployment** and hardcoded:
+The deployment's link addresses and ports are the defaults, hardcoded in
+`main.cpp`:
 
 | Role | Address          | Port |
 |------|------------------|------|
 | HOST | `192.168.70.2`   | 8001 (upstream SOF destination) |
 | IG   | `192.168.70.70`  | 8000 (downstream RX bind)       |
+
+They are overridable for a bench test with `--host-ip` / `--host-port` /
+`--ig-ip` / `--ig-port` (below); the deployment passes none of them.
 
 ```
 CigiStarter.exe [options]
@@ -134,14 +138,22 @@ CigiStarter.exe [options]
                       from              (default: terrain\ beside the program)
   --terrain-offset <m> constant added to every database height, for calibrating
                       against the sim                             (default 0)
+  --host-ip <addr>    HOST address SOFs and responses go to
+                                                         (default 192.168.70.2)
+  --host-port <port>  HOST port SOFs and responses go to        (default 8001)
+  --ig-ip <addr>      this IG's address, as the extra IG PCs see it
+                                                        (default 192.168.70.70)
+  --ig-port <port>    port the HOST streams flight data to      (default 8000)
   --help              show this help (in a message box)
 ```
 
-The options only set the *starting* state. The SOF rate, HAT/HOT answering and
-flow control can all be changed from the window while the program runs — see
-[Operator window](#operator-window). Whether the stream starts on launch is a
-start-up decision only, so `--no-auto-start` is the single way back to the old
-behaviour: a window that waits for the button.
+The options only set the *starting* state, with one exception: the four link
+options (`--host-ip`, `--host-port`, `--ig-ip`, `--ig-port`) are read once and
+have no window control, because the deployed link never changes. The SOF rate,
+HAT/HOT answering and flow control can all be changed from the window while the
+program runs — see [Operator window](#operator-window). Whether the stream starts
+on launch is a start-up decision only, so `--no-auto-start` is the single way back
+to the old behaviour: a window that waits for the button.
 
 One input file matters too: **`client.txt`**, next to the executable, lists the
 other IG PCs to copy the downstream stream to. It is optional and is read once at
@@ -598,7 +610,8 @@ CigiStarter puts on the link:
 The fan-out row is the only traffic this program puts on the link labelled with
 somebody else's address: the copies claim to come from the HOST on purpose, so
 the clients need no reconfiguration. See
-[Fan-out](#fan-out-to-the-other-ig-pcs).
+[Fan-out](#fan-out-to-the-other-ig-pcs). The addresses shown are the deployment's
+defaults; see [Usage](#usage) for the bench-test overrides.
 
 ## Protocol notes
 
