@@ -1,0 +1,478 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3368" height="3218" viewBox="36.00 6.00 3368.00 3218.00">
+<defs><marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#1e1e1e"/></marker><mask id="m0" maskUnits="userSpaceOnUse" x="36.00" y="6.00" width="3368.00" height="3218.00"><rect x="36.00" y="6.00" width="3368.00" height="3218.00" fill="#fff"/><rect x="629.15" y="223.45" width="333.05" height="26.25" fill="#000"/></mask><mask id="m1" maskUnits="userSpaceOnUse" x="36.00" y="6.00" width="3368.00" height="3218.00"><rect x="36.00" y="6.00" width="3368.00" height="3218.00" fill="#fff"/><rect x="538.85" y="465.92" width="513.64" height="25.00" fill="#000"/></mask><mask id="m2" maskUnits="userSpaceOnUse" x="36.00" y="6.00" width="3368.00" height="3218.00"><rect x="36.00" y="6.00" width="3368.00" height="3218.00" fill="#fff"/><rect x="1546.42" y="339.56" width="147.15" height="26.25" fill="#000"/></mask><mask id="m3" maskUnits="userSpaceOnUse" x="36.00" y="6.00" width="3368.00" height="3218.00"><rect x="36.00" y="6.00" width="3368.00" height="3218.00" fill="#fff"/><rect x="2742.49" y="206.93" width="91.25" height="26.25" fill="#000"/></mask><mask id="m4" maskUnits="userSpaceOnUse" x="36.00" y="6.00" width="3368.00" height="3218.00"><rect x="36.00" y="6.00" width="3368.00" height="3218.00" fill="#fff"/><rect x="2717.00" y="389.73" width="144.55" height="26.25" fill="#000"/></mask></defs>
+<rect x="36.00" y="6.00" width="3368.00" height="3218.00" fill="#ffffff"/>
+<rect x="60.00" y="150.00" width="2200.00" height="560.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="160.00" y="310.00" width="420.00" height="95.00" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="1000.00" y="310.00" width="460.00" height="95.00" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<rect x="1780.00" y="310.00" width="420.00" height="76.25" rx="8" fill="#e9ecef" stroke="#868e96" stroke-width="2" stroke-dasharray="8 8"/>
+<g mask="url(#m0)"><polyline points="1053.61,308.39 790.00,235.00 538.62,308.32" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/></g>
+<g mask="url(#m1)"><polyline points="538.62,406.68 790.00,480.00 1053.61,406.61" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/></g>
+<g mask="url(#m2)"><polyline points="1466.00,354.59 1774.00,350.79" fill="none" stroke="#1e1e1e" stroke-width="2" stroke-dasharray="8 8" marker-end="url(#head)"/></g>
+<rect x="2300.00" y="150.00" width="1080.00" height="560.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="2360.00" y="270.00" width="340.00" height="57.50" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<rect x="2880.00" y="270.00" width="380.00" height="57.50" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<g mask="url(#m3)"><polyline points="2618.05,268.02 2770.00,215.00 2961.24,268.39" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/></g>
+<g mask="url(#m4)"><polyline points="2986.85,329.59 2770.00,410.00 2597.47,330.02" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/></g>
+<rect x="60.00" y="760.00" width="1080.00" height="840.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="1180.00" y="760.00" width="1080.00" height="840.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="1240.00" y="820.00" width="960.00" height="72.50" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<rect x="1240.00" y="925.00" width="960.00" height="72.50" rx="8" fill="#ffec99" stroke="#f08c00" stroke-width="2"/>
+<rect x="1240.00" y="1030.00" width="960.00" height="55.00" rx="8" fill="#ffd8a8" stroke="#e8590c" stroke-width="2"/>
+<polyline points="1720.00,898.50 1720.00,919.00" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/>
+<polyline points="1720.00,1003.50 1720.00,1024.00" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/>
+<rect x="2300.00" y="760.00" width="1080.00" height="840.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="2360.00" y="878.00" width="900.00" height="70.62" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
+<rect x="2360.00" y="975.00" width="900.00" height="70.62" rx="8" fill="#a5d8ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="2360.00" y="1078.00" width="900.00" height="70.62" rx="8" fill="#d0bfff" stroke="#6741d9" stroke-width="2"/>
+<polyline points="2810.00,954.62 2810.00,969.00" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/>
+<polyline points="2810.00,1051.62 2810.00,1072.00" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/>
+<rect x="60.00" y="1650.00" width="1080.00" height="800.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="1180.00" y="1650.00" width="1080.00" height="800.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="2300.00" y="1650.00" width="1080.00" height="800.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="60.00" y="2500.00" width="1080.00" height="700.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="1180.00" y="2500.00" width="1080.00" height="700.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<rect x="2300.00" y="2500.00" width="1080.00" height="700.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
+<text x="60.00" y="30.00" fill="#1e1e1e" font-family="'Comic Sans MS', 'Segoe Print', cursive" font-size="34" text-anchor="start" dominant-baseline="hanging">
+<tspan x="60.00" dy="4.25">CigiStarter - a CIGI 3.3 Image Generator</tspan>
+</text>
+<text x="60.00" y="86.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" text-anchor="start" dominant-baseline="hanging">
+<tspan x="60.00" dy="2.00">A minimal replacement for the Master IG PC: wakes the HOST with SOF, answers its HAT/HOT requests from the terrain Prepar3D will actually fly the aircraft onto (the PdkTerrainProbe add-on), falls back to an offline SRTM database and then to the sim over FSUIPC, and fans the HOST's downstream stream out to the extra IG PCs. CIGI 3.3, UDP, little-endian. Single Win32 binary, runs unelevated, streams from launch with the</tspan>
+<tspan x="60.00" dy="20.00">window minimised.</tspan>
+</text>
+<text x="74.00" y="160.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="74.00" dy="2.38">1 - The link: HOST, IG, extra IG PCs</tspan>
+</text>
+<text x="120.00" y="212.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.56">Deployment defaults: hardcoded in main.cpp</tspan>
+<tspan x="120.00" dy="15.62">  HOST 192.168.70.2    IG 192.168.70.70</tspan>
+<tspan x="120.00" dy="15.62">  --host-ip / --host-port / --ig-ip / --ig-port</tspan>
+<tspan x="120.00" dy="15.62">  exist for a bench test only; the deployment</tspan>
+<tspan x="120.00" dy="15.62">  passes none of them</tspan>
+</text>
+<text x="370.00" y="320.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="370.00" dy="1.88">HOST  192.168.70.2</tspan>
+<tspan x="370.00" dy="18.75">flight model, owns the frame rate</tspan>
+<tspan x="370.00" dy="18.75">receives SOF on :8001</tspan>
+<tspan x="370.00" dy="18.75">sends flight data from :8000</tspan>
+</text>
+<text x="1230.00" y="320.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="1230.00" dy="1.88">IG - CigiStarter  192.168.70.70</tspan>
+<tspan x="1230.00" dy="18.75">binds 0.0.0.0:8000 for flight data</tspan>
+<tspan x="1230.00" dy="18.75">sends SOF to 192.168.70.2:8001</tspan>
+<tspan x="1230.00" dy="18.75">rides HAT/HOT responses on the SOF stream</tspan>
+</text>
+<text x="1990.00" y="320.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="1990.00" dy="1.88">Extra IG PCs  192.168.70.102 ... .106</tspan>
+<tspan x="1990.00" dy="18.75">UDP 8000, passive:</tspan>
+<tspan x="1990.00" dy="18.75">nothing ever comes back</tspan>
+</text>
+<text x="795.67" y="228.45" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="795.67" dy="1.62">SOF - id 101, 24 B - the request that wakes the HOST</tspan>
+</text>
+<text x="795.67" y="470.92" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="795.67" dy="1.50">flight data: IGCtrl - EntityCtrl x3 - HAT/HOT Request - ViewCtrl - ArticPart x5 - RateCtrl x8</tspan>
+</text>
+<text x="1620.00" y="344.56" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="1620.00" dy="1.62">one copy per datagram</tspan>
+</text>
+<text x="1780.00" y="430.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1780.00" dy="1.56">The copies keep the HOST's own address and port as</tspan>
+<tspan x="1780.00" dy="15.62">their source (192.168.70.2:8001), so a client's</tspan>
+<tspan x="1780.00" dy="15.62">bridge needs no reconfiguration: it sees exactly</tspan>
+<tspan x="1780.00" dy="15.62">the stream it would have seen as the IG.</tspan>
+</text>
+<text x="120.00" y="540.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.56">Downstream   HOST -&gt; IG :8000      IGCtrl - EntityCtrl x3 - HAT/HOT Request - ViewCtrl - ArticPart x5 - RateCtrl x8 - Atmosphere (warm-up)</tspan>
+<tspan x="120.00" dy="15.62">Upstream     IG -&gt; HOST :8001      SOF id 101 (+ the HAT/HOT responses, ids 102/103, when answering)</tspan>
+<tspan x="120.00" dy="15.62">Fan-out      HOST -&gt; each client   one copy of every downstream datagram, labelled with the HOST's source</tspan>
+</text>
+<text x="2314.00" y="160.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2314.00" dy="2.38">2 - The per-frame loop</tspan>
+</text>
+<text x="2530.00" y="280.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="2530.00" dy="1.88">IG (CigiStarter)</tspan>
+<tspan x="2530.00" dy="18.75">192.168.70.70</tspan>
+</text>
+<text x="3070.00" y="280.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="3070.00" dy="1.88">HOST</tspan>
+<tspan x="3070.00" dy="18.75">192.168.70.2</tspan>
+</text>
+<text x="2788.12" y="211.93" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="2788.12" dy="1.62">SOF, frame N</tspan>
+</text>
+<text x="2789.27" y="394.73" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="2789.27" dy="1.62">one datagram per SOF</tspan>
+</text>
+<text x="2360.00" y="450.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.75">The HOST is a request/response slave: it sends nothing until the IG sends a Start-of-Frame. Each SOF is answered with one datagram</tspan>
+<tspan x="2360.00" dy="17.50">carrying:</tspan>
+</text>
+<text x="2360.00" y="505.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.56">IG Control x1 - Entity Control x3 - HAT/HOT Request x1 - View Control x1</tspan>
+<tspan x="2360.00" dy="15.62">Articulated Part Control x5 - Rate Control x8</tspan>
+<tspan x="2360.00" dy="15.62">Atmosphere Control x1 (first frames only, warm-up)</tspan>
+</text>
+<text x="2360.00" y="580.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.75">The SOF echoes the HOST's own frame counter at offset 8 - never a count of the SOFs the IG sent - so the outgoing SOF stays</tspan>
+<tspan x="2360.00" dy="17.50">byte-identical to the reference Master's.</tspan>
+</text>
+<text x="74.00" y="770.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="74.00" dy="2.38">3 - Protocol and wire layout (CIGI 3.3, little-endian)</tspan>
+</text>
+<text x="120.00" y="820.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.56">framing: [id 1B][size 1B][payload]    size = total bytes incl. header</tspan>
+<tspan x="120.00" dy="15.62"></tspan>
+<tspan x="120.00" dy="15.62">SOF   id 101 (0x65), 24 bytes</tspan>
+<tspan x="120.00" dy="15.62">  65 18 03 00 00 b5 00 80 &lt;frame counter&gt; 00 00 00 00 00 .. 00   the reference</tspan>
+<tspan x="120.00" dy="15.62">  65 18 03 00 00 30 00 80 &lt;frame counter&gt; 00 00 00 00 00 .. 00   this IG</tspan>
+<tspan x="120.00" dy="15.62">     |        |  |</tspan>
+<tspan x="120.00" dy="15.62">     |        |  +-- 0x00 0x80 at bytes 6-7: the byte-swap flag (little-endian)</tspan>
+<tspan x="120.00" dy="15.62">     |        +----- byte 5: IG mode (bits 0-1), timestamp-valid (2), earth</tspan>
+<tspan x="120.00" dy="15.62">     |                 model (3), CIGI minor version (4-7); 3.3 =&gt; 0x30</tspan>
+<tspan x="120.00" dy="15.62">     +-------------- byte 0: id (0x65), byte 1: size (0x18 = 24 bytes)</tspan>
+<tspan x="120.00" dy="15.62">  offset 8: the HOST's frame counter, echoed out of the IG Control it arrived in</tspan>
+<tspan x="120.00" dy="15.62">  offsets 12 / 16: timestamp and last-host-frame - left at 0 by the reference</tspan>
+<tspan x="120.00" dy="15.62">  Master, still 0 here, which is what keeps the SOF byte-identical</tspan>
+<tspan x="120.00" dy="15.62">  the IG never picks its own mode: byte 5 becomes 0x31 (Operate) as soon as the</tspan>
+<tspan x="120.00" dy="15.62">  HOST commands Operate; --ig-mode only seeds it before the first IG Control</tspan>
+</text>
+<text x="120.00" y="1090.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.56">HAT/HOT Request  -&gt;  Response            id 102, 16 B: Height double @ 8</tspan>
+<tspan x="120.00" dy="15.62">  types 0 (HAT) / 1 (HOT)</tspan>
+<tspan x="120.00" dy="15.62">                 -&gt;  Extended Response   id 103, 40 B: HAT @ 8, HOT @ 16</tspan>
+<tspan x="120.00" dy="15.62">  type 2 (extended)</tspan>
+<tspan x="120.00" dy="15.62">both carry a 3-byte reserved gap after the flags byte, which is what aligns</tspan>
+<tspan x="120.00" dy="15.62">the first double to an 8-byte boundary. CIGI 3.2 packed them straight after</tspan>
+<tspan x="120.00" dy="15.62">the flags: the HOST then read HOT out of the material-code bytes - zero -</tspan>
+<tspan x="120.00" dy="15.62">and flew the aircraft down to the terrain.</tspan>
+</text>
+<text x="120.00" y="1265.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.69">HAT = request altitude - HOT, which is what catches the two doubles packed in the wrong place. Valid is set only when a terrain source could</tspan>
+<tspan x="120.00" dy="16.88">answer.</tspan>
+</text>
+<text x="120.00" y="1330.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.69">Pacing uses timeBeginPeriod(1): Windows' default 15.6 ms (~64 Hz) timer granularity otherwise caps any rate above ~60 Hz at ~64 with an</tspan>
+<tspan x="120.00" dy="16.88">occasional burst - worth knowing when comparing rates with another tool.</tspan>
+</text>
+<text x="120.00" y="1410.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.69">In Host-Master.pcapng the counter advances ~0.52 per SOF (~53 Hz) while the SOF rate was ~100 Hz (an 8/12 ms alternation): the Master asked for</tspan>
+<tspan x="120.00" dy="16.88">about twice the replies the HOST had frames to give.</tspan>
+</text>
+<text x="1194.00" y="770.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1194.00" dy="2.38">4 - HAT/HOT answering: three sources, one anchor</tspan>
+</text>
+<text x="1720.00" y="830.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="1720.00" dy="1.75">1 - Prepar3D's own terrain, through PdkTerrainProbe.dll</tspan>
+<tspan x="1720.00" dy="17.50">ISurfaceQueryManagerV400, a free-standing query: the surface the sim will place the aircraft on, so runway flattening and any added scenery</tspan>
+<tspan x="1720.00" dy="17.50">are included and nothing has to be pre-mapped</tspan>
+</text>
+<text x="1720.00" y="935.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="1720.00" dy="1.75">2 - the SRTM terrain database, offline .hgt tiles</tspan>
+<tspan x="1720.00" dy="17.50">answered from latitude and longitude alone, so it stays correct for the whole flight, but it is a copy of the world: no flattening, no changed</tspan>
+<tspan x="1720.00" dy="17.50">scenery</tspan>
+</text>
+<text x="1720.00" y="1040.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="1720.00" dy="1.75">3 - the local Prepar3D via FSUIPC 0x0020</tspan>
+<tspan x="1720.00" dy="17.50">the ground under the sim's own aircraft: one point only, so it can stand in only for a request where that aircraft is</tspan>
+</text>
+<text x="1240.00" y="1150.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.56">HOT   = the height from the first source that can answer</tspan>
+<tspan x="1240.00" dy="15.62">HAT   = test-point altitude - HOT</tspan>
+<tspan x="1240.00" dy="15.62">        entity-relative: the HOST aircraft's altitude (Entity Control) - the</tspan>
+<tspan x="1240.00" dy="15.62">                         request's Z offset   (+Z points down; entity axes are NED)</tspan>
+<tspan x="1240.00" dy="15.62">        geodetic:        the request carries its own altitude</tspan>
+<tspan x="1240.00" dy="15.62">Valid = 0 - never a fabricated 0 m - when no source can cover the point: an</tspan>
+<tspan x="1240.00" dy="15.62">        entity other than the ownship (0), an entity-relative request with no</tspan>
+<tspan x="1240.00" dy="15.62">        anchor, or a point no source can reach</tspan>
+<tspan x="1240.00" dy="15.62">updatePeriod = 0 -&gt; answered once;  n -&gt; re-answered every n-th frame until a</tspan>
+<tspan x="1240.00" dy="15.62">        fresh request with the same HAT/HOT ID replaces it (answered at once)</tspan>
+<tspan x="1240.00" dy="15.62">the geodetic FSUIPC fallback is accepted only within 500 m of the aircraft</tspan>
+</text>
+<text x="1240.00" y="1330.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.56">ANCHOR   entity-relative answers are anchored to the HOST's own Entity Control</tspan>
+<tspan x="1240.00" dy="15.62">         (entity 0) - the pose its flight model is commanding - not to the sim's</tspan>
+<tspan x="1240.00" dy="15.62">         FSUIPC read-back. All-zero and off-globe poses are refused, not adopted.</tspan>
+<tspan x="1240.00" dy="15.62">         The six probe offsets are identical wherever the aircraft is, so a stuck</tspan>
+<tspan x="1240.00" dy="15.62">         anchor is invisible on the wire: on the rig it parked the aircraft on the</tspan>
+<tspan x="1240.00" dy="15.62">         departure ground, a ~550 ft step at the destination.</tspan>
+</text>
+<text x="1240.00" y="1465.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.69">--terrain-offset applies to the database only: a height from the sim needs no calibration, and applying it would correct it twice. Entity-relative</tspan>
+<tspan x="1240.00" dy="16.88">answers are given at the HOST's aircraft position - the reference capture's six points sit within 10.4 m of it, far below any terrain source's resolution</tspan>
+<tspan x="1240.00" dy="16.88">- and the sim is still asked for the exact point.</tspan>
+</text>
+<text x="2314.00" y="770.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2314.00" dy="2.38">5 - The probe tick ladder</tspan>
+</text>
+<text x="2360.00" y="820.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.75">Something has to call the free-standing surface query, and it has to keep</tspan>
+<tspan x="2360.00" dy="17.50">running while the aircraft is being positioned. Three ticks, tried in order:</tspan>
+</text>
+<text x="2810.00" y="888.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="2810.00" dy="1.69">1 - EVENTID_Frame, Prepar3D's per-frame event (IEventServiceV510/V600)</tspan>
+<tspan x="2810.00" dy="16.88">once per rendered frame: the tick of a running sim. v5 keeps signalling it while paused; the rig's v6 does not - pausing stops the frame loop</tspan>
+<tspan x="2810.00" dy="16.88">too.</tspan>
+</text>
+<text x="2810.00" y="985.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="2810.00" dy="1.69">2 - the object's ISimulation::Update</tspan>
+<tspan x="2810.00" dy="16.88">used until a frame event has been seen, and again if one stops arriving; Update() defers while the frame event is live, so the two never both</tspan>
+<tspan x="2810.00" dy="16.88">service the table</tspan>
+</text>
+<text x="2810.00" y="1088.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="middle" dominant-baseline="hanging">
+<tspan x="2810.00" dy="1.69">3 - a thread of the add-on's own - the last resort</tspan>
+<tspan x="2810.00" dy="16.88">started at DLLStart, stopped and waited for at DLLStop; steps in only after both ticks above have been silent for kWatchGraceMs = 1000 ms.</tspan>
+<tspan x="2810.00" dy="16.88">It calls QuerySurfaceElevation and nothing else of Prepar3D's.</tspan>
+</text>
+<text x="2360.00" y="1200.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.69">A running sim never reaches the thread, so the one call made outside Prepar3D's thread can only happen while Prepar3D's own loop has</tspan>
+<tspan x="2360.00" dy="16.88">stopped - which is what the rig does for the whole session. The object-tick lifecycle fault (a reposition stranding the tick) is gone with it.</tspan>
+</text>
+<text x="2360.00" y="1265.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.56">diag word   (bit 31 kPresent must be set; a 0 means "no diagnosis")</tspan>
+<tspan x="2360.00" dy="15.62">  0..7    user-object create callbacks      (saturate at 255)</tspan>
+<tspan x="2360.00" dy="15.62">  8..15   removals of the tick's object</tspan>
+<tspan x="2360.00" dy="15.62"> 16..23   RegisterSimulation failures</tspan>
+<tspan x="2360.00" dy="15.62"> 24       a simulation is bound</tspan>
+<tspan x="2360.00" dy="15.62"> 25       the bound object was the user object then</tspan>
+<tspan x="2360.00" dy="15.62"> 26       a user-object create was ignored (already bound)</tspan>
+<tspan x="2360.00" dy="15.62"> 27       the newest pass came from the ADD-ON'S OWN THREAD</tspan>
+<tspan x="2360.00" dy="15.62"> 31       the word is filled</tspan>
+<tspan x="2360.00" dy="15.62">tail        frameTicks  frame-event callbacks seen</tspan>
+<tspan x="2360.00" dy="15.62">            simEvents   bit 0 paused now; sticky pause/unpause, sim</tspan>
+<tspan x="2360.00" dy="15.62">                        stop/start, scenario load, vehicle change, frozen</tspan>
+<tspan x="2360.00" dy="15.62">            simMode     GetMode() at the last object tick</tspan>
+<tspan x="2360.00" dy="15.62">            frameFails  frame-event registration failures</tspan>
+</text>
+<text x="2360.00" y="1505.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.56">ticks advancing + bit 27      normal for a paused sim, not a fault</tspan>
+<tspan x="2360.00" dy="15.62">ticks frozen, frameTicks &gt; 0  the whole add-on has stopped running</tspan>
+<tspan x="2360.00" dy="15.62">ticks frozen, frameTicks = 0  no frame event was ever delivered</tspan>
+<tspan x="2360.00" dy="15.62">alive clear                   no surface service at all</tspan>
+</text>
+<text x="74.00" y="1660.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="74.00" dy="2.38">6 - Shared-memory contract (TerrainProbeIpc.h)</tspan>
+</text>
+<text x="120.00" y="1710.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.56">mapping  Local\CigiStarter.TerrainProbe.v1   (session-local: both sides run in</tspan>
+<tspan x="120.00" dy="15.62">         the logged-on user's session, so Global\ would need elevation)</tspan>
+<tspan x="120.00" dy="15.62">magic 'PTBP' (0x50425450)    version 2    capacity 256 slots</tspan>
+<tspan x="120.00" dy="15.62"></tspan>
+<tspan x="120.00" dy="15.62">header (48 B)</tspan>
+<tspan x="120.00" dy="15.62">  magic - version - capacity - tickRateHz</tspan>
+<tspan x="120.00" dy="15.62">  alive       1 while a service and a tick exist</tspan>
+<tspan x="120.00" dy="15.62">  lastError   the last HRESULT the probe saw</tspan>
+<tspan x="120.00" dy="15.62">  probePid    Prepar3D's pid (what tasklist /m finds)</tspan>
+<tspan x="120.00" dy="15.62">  ticks       heartbeat: advances while the probe runs</tspan>
+<tspan x="120.00" dy="15.62">  reqSeq      bumped by the IG once it has written queries[]</tspan>
+<tspan x="120.00" dy="15.62">  rspSeq      seqlock over results[]: odd while rows are rewritten</tspan>
+<tspan x="120.00" dy="15.62">  queryFails  points Prepar3D has refused</tspan>
+<tspan x="120.00" dy="15.62">  diag        the diagnostic word (0 = an older add-on)</tspan>
+<tspan x="120.00" dy="15.62">queries[256] x 32 B   the IG writes:  latDeg lonDeg altMeters key enabled</tspan>
+<tspan x="120.00" dy="15.62">results[256] x 48 B   the probe writes: latDeg lonDeg hotMeters key status</tspan>
+<tspan x="120.00" dy="15.62">                      materialCode nrmAzimuthDeg nrmElevationDeg</tspan>
+<tspan x="120.00" dy="15.62">tail (16 B)           frameTicks simEvents simMode frameFails</tspan>
+<tspan x="120.00" dy="15.62">sizeof(Shared) = 48 + 256*(32+48) + 16 = 20528 B</tspan>
+</text>
+<text x="120.00" y="2075.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.56">1  the IG writes queries[i] (enabled, with its own key), then bumps reqSeq</tspan>
+<tspan x="120.00" dy="15.62">2  the probe walks the table on its next tick, asks the surface query for every</tspan>
+<tspan x="120.00" dy="15.62">   enabled point and writes results[], the batch guarded by rspSeq</tspan>
+<tspan x="120.00" dy="15.62">3  the IG accepts a row when status = Ok, the key matches and the echoed lat/lon</tspan>
+<tspan x="120.00" dy="15.62">   still match the point it asked about</tspan>
+<tspan x="120.00" dy="15.62">   -&gt; a one-tick-old answer is safe; a request that has moved is refused and</tspan>
+<tspan x="120.00" dy="15.62">      falls back, never answered with somebody else's terrain</tspan>
+</text>
+<text x="120.00" y="2205.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.69">pack(8) plus a static_assert on every size and offset: a differently packed build would agree on slot 0 and misread every slot after it, so a layout</tspan>
+<tspan x="120.00" dy="16.88">change must bump kVersion. The table is metric - the wire is metres and only the probe converts to the PDK's radians and feet. 256 slots because</tspan>
+<tspan x="120.00" dy="16.88">TerrainBaker fills the whole table to bake a tile in seconds.</tspan>
+</text>
+<text x="120.00" y="2310.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.69">The contract test overrides the mapping name on purpose: sharing it would make its first memset wipe a live add-on's header, which then reads as a</tspan>
+<tspan x="120.00" dy="16.88">probe that is loaded but has stopped answering.</tspan>
+</text>
+<text x="1194.00" y="1660.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1194.00" dy="2.38">7 - Operator window</tspan>
+</text>
+<text x="1240.00" y="1710.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.50">+----------------------------------------------------------------+</tspan>
+<tspan x="1240.00" dy="15.00">| HOST 192.168.70.2:8001  -&gt;  SOF destination                    |</tspan>
+<tspan x="1240.00" dy="15.00">| IG   :8000   (this IG is 192.168.70.70)                        |</tspan>
+<tspan x="1240.00" dy="15.00">|                                                                |</tspan>
+<tspan x="1240.00" dy="15.00">| Stream    : RUNNING (paced to the HOST)                        |</tspan>
+<tspan x="1240.00" dy="15.00">| SOF rate  : 150 Hz requested, 150/s measured                   |</tspan>
+<tspan x="1240.00" dy="15.00">| SOF frames: 101                                                |</tspan>
+<tspan x="1240.00" dy="15.00">| Received  : 0 datagrams (0/s), 0 entity updates                |</tspan>
+<tspan x="1240.00" dy="15.00">| IG mode   : 0 (Standby)  &lt;- commanded by the HOST              |</tspan>
+<tspan x="1240.00" dy="15.00">| HOST frame: 0                                                  |</tspan>
+<tspan x="1240.00" dy="15.00">|                                                                |</tspan>
+<tspan x="1240.00" dy="15.00">| Relay     : 4 clients, 4 reachable, 1567 datagrams forwarded   |</tspan>
+<tspan x="1240.00" dy="15.00">| Relay NIC : Killer E2600 Gigabit Ethernet Controller           |</tspan>
+<tspan x="1240.00" dy="15.00">|                                                                |</tspan>
+<tspan x="1240.00" dy="15.00">| TerrainDB : 2 tile(s), 1 in memory, 25 MB                      |</tspan>
+<tspan x="1240.00" dy="15.00">| HAT/HOT   : answering from the sim's own terrain               |</tspan>
+<tspan x="1240.00" dy="15.00">| Probe     : sim paused; the probe is answering from its own    |</tspan>
+<tspan x="1240.00" dy="15.00">|             thread                                             |</tspan>
+<tspan x="1240.00" dy="15.00">| Anchor    : HOST Entity Control -6.53973, 106.75963, 576 ft    |</tspan>
+<tspan x="1240.00" dy="15.00">| Terrain   : 89 ft ground under the sim aircraft, 99 ft sim     |</tspan>
+<tspan x="1240.00" dy="15.00">|             aircraft                                           |</tspan>
+<tspan x="1240.00" dy="15.00">|                                                                |</tspan>
+<tspan x="1240.00" dy="15.00">| [x] Answer HAT/HOT              SOF rate: [ 150 ] Hz [ Apply ] |</tspan>
+<tspan x="1240.00" dy="15.00">| [x] Pace SOF to HOST replies (flow control)                    |</tspan>
+<tspan x="1240.00" dy="15.00">|                                                                |</tspan>
+<tspan x="1240.00" dy="15.00">| [ START ]  [ STOP ]                                   [ EXIT ] |</tspan>
+<tspan x="1240.00" dy="15.00">+----------------------------------------------------------------+</tspan>
+</text>
+<text x="1240.00" y="2120.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.62">Refreshes 4x/s. START / STOP start and stop the SOF stream (the button that would be a no-op is the disabled one). Answer HAT/HOT also starts and</tspan>
+<tspan x="1240.00" dy="16.25">stops the FSUIPC poller: off means no FSUIPC calls at all. Pace SOF to HOST replies is the flow-control switch. SOF rate is 1..100000 Hz, applied to</tspan>
+<tspan x="1240.00" dy="16.25">the transmit loop on the next frame with Apply or Enter, so the stream retunes while it runs; --fps only seeds it.</tspan>
+</text>
+<text x="1240.00" y="2215.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.62">EXIT is the only way out: SC_CLOSE is deleted from the system menu (the X is drawn greyed out), WM_CLOSE is ignored, and with no console Ctrl+C</tspan>
+<tspan x="1240.00" dy="16.25">cannot reach it. The stream is already running when the window appears and the window minimises itself; --no-auto-start is the single way back to a</tspan>
+<tspan x="1240.00" dy="16.25">window that waits for the button.</tspan>
+</text>
+<text x="1240.00" y="2310.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.62">Terrain lines: HAT/HOT names the source in force; TerrainDB the fallback behind it and its size; Probe the tick that is answering; Anchor the HOST's</tspan>
+<tspan x="1240.00" dy="16.25">pose; Terrain the sim's own aircraft over FSUIPC - the ground under it and its altitude in feet, the way Prepar3D shows them.</tspan>
+</text>
+<text x="2314.00" y="1660.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2314.00" dy="2.38">8 - Fan-out to the extra IG PCs</tspan>
+</text>
+<text x="2360.00" y="1710.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.56"># one address per line, optional port (default: the IG port, 8000)</tspan>
+<tspan x="2360.00" dy="15.62">192.168.70.102:8000</tspan>
+<tspan x="2360.00" dy="15.62">192.168.70.103</tspan>
+<tspan x="2360.00" dy="15.62">192.168.70.104:8000   # left visual</tspan>
+</text>
+<text x="2360.00" y="1795.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.62">client.txt sits beside the executable and is read once at startup. Blank lines, # comments and a Notepad BOM are tolerated; IPv4 only. Junk, a</tspan>
+<tspan x="2360.00" dy="16.25">port of 0 or above 65535, duplicates and this PC's own addresses are skipped and counted. Capped at 32 clients; with no usable line nothing is</tspan>
+<tspan x="2360.00" dy="16.25">relayed and the capture driver is never opened.</tspan>
+</text>
+<text x="2360.00" y="1895.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.56">per datagram   only datagrams whose source is the HOST, copied before</tspan>
+<tspan x="2360.00" dy="15.62">               anything is parsed, so a copy is exact</tspan>
+<tspan x="2360.00" dy="15.62"></tspan>
+<tspan x="2360.00" dy="15.62">one hand-built Ethernet + IPv4 + UDP frame per client, injected with</tspan>
+<tspan x="2360.00" dy="15.62">pcap_sendpacket; both checksums are computed, the UDP one over the IP</tspan>
+<tspan x="2360.00" dy="15.62">pseudo-header, so a copy is a complete valid datagram</tspan>
+<tspan x="2360.00" dy="15.62">  Ethernet dst = the client's MAC   src = THIS adapter's own MAC</tspan>
+<tspan x="2360.00" dy="15.62">               (spoofing that as well would teach every switch on the</tspan>
+<tspan x="2360.00" dy="15.62">                way that the HOST lives on this port)</tspan>
+<tspan x="2360.00" dy="15.62">  IP   src = the HOST, dst = the client</tspan>
+<tspan x="2360.00" dy="15.62">  UDP  src = the HOST's port, dst = the client's port</tspan>
+<tspan x="2360.00" dy="15.62">unicast: one frame per client, never broadcast</tspan>
+<tspan x="2360.00" dy="15.62"></tspan>
+<tspan x="2360.00" dy="15.62">client MACs are resolved with SendARP on a background thread and</tspan>
+<tspan x="2360.00" dy="15.62">re-resolved every few seconds, so a client switched on or replaced later</tspan>
+<tspan x="2360.00" dy="15.62">is picked up on its own; one that stops answering drops out and the</tspan>
+<tspan x="2360.00" dy="15.62">window counts how many are reachable</tspan>
+<tspan x="2360.00" dy="15.62">datagrams over 1472 B of payload are dropped and counted: a client's</tspan>
+<tspan x="2360.00" dy="15.62">capture filter matches one datagram, not a fragment chain</tspan>
+<tspan x="2360.00" dy="15.62">the adapter is found automatically - the one that owns the IG address,</tspan>
+<tspan x="2360.00" dy="15.62">else whichever the route to the HOST leaves by - and the window names it</tspan>
+<tspan x="2360.00" dy="15.62">relay counts: forwarded = reached at least one client, dropped = reached</tspan>
+<tspan x="2360.00" dy="15.62">none; clients that have not answered yet are neither</tspan>
+</text>
+<text x="2360.00" y="2280.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.62">Needs Npcap (wpcap.dll), loaded at run time rather than linked, so a PC without it still builds and runs as a plain IG; nothing here needs elevation.</tspan>
+<tspan x="2360.00" dy="16.25">The SOF link to the HOST is unaffected when the adapter cannot be opened.</tspan>
+</text>
+<text x="74.00" y="2510.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="74.00" dy="2.38">9 - SOF rate and flow control</tspan>
+</text>
+<text x="120.00" y="2560.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.69">The HOST owns the frame rate: one datagram per SOF, and its own frame counter advances about 53 times a second while the reference Master's</tspan>
+<tspan x="120.00" dy="16.88">SOF ran at ~100 Hz (an 8/12 ms alternation) - the Master asked for roughly twice the replies the HOST had frames to give.</tspan>
+</text>
+<text x="120.00" y="2610.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.56">SOF rate default 150 Hz: every answer carries a fresh attitude (the position</tspan>
+<tspan x="120.00" dy="15.62">comes on every other one), so how often the IG asks is how smoothly the</tspan>
+<tspan x="120.00" dy="15.62">aircraft moves.</tspan>
+<tspan x="120.00" dy="15.62"></tspan>
+<tspan x="120.00" dy="15.62">FLOW CONTROL (default on, SofPacer.h): a SOF is held back while the previous</tspan>
+<tspan x="120.00" dy="15.62">one is still unanswered, so the stream fits whatever the HOST on site can</tspan>
+<tspan x="120.00" dy="15.62">absorb, whatever number is typed in the rate box. A held-back frame is</tspan>
+<tspan x="120.00" dy="15.62">dropped, never replayed, so no mode of operation can turn the stream into a</tspan>
+<tspan x="120.00" dy="15.62">burst.</tspan>
+<tspan x="120.00" dy="15.62">  - a HOST that has never answered (startup, not yet woken) is transmitted</tspan>
+<tspan x="120.00" dy="15.62">    to at the full rate</tspan>
+<tspan x="120.00" dy="15.62">  - a SOF unanswered for 100 ms is followed by another anyway, so a HOST that</tspan>
+<tspan x="120.00" dy="15.62">    has dropped out still receives something to wake up on</tspan>
+<tspan x="120.00" dy="15.62">  - the limit is wall-clock, not a count of frames: a HOST answering less than</tspan>
+<tspan x="120.00" dy="15.62">    once per 100 ms sees at most ~10 requests a second whether the box says</tspan>
+<tspan x="120.00" dy="15.62">    150 or 6000. Counting frames would scale the retries with the rate -</tspan>
+<tspan x="120.00" dy="15.62">    exactly the runaway this exists to prevent</tspan>
+</text>
+<text x="120.00" y="2905.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="120.00" dy="1.69">The SOF's only live field is the HOST's frame counter echoed at offset 8. An IG-side count would drift from the HOST by (rate - 53) frames a second,</tspan>
+<tspan x="120.00" dy="16.88">which is what broke it above ~60 Hz. The window's Stream line names the mode - paced to the HOST or free-running - and adds "which is the limit"</tspan>
+<tspan x="120.00" dy="16.88">when it is the HOST setting the pace; --no-flow-control transmits on the rate alone, as the reference Master did.</tspan>
+</text>
+<text x="1194.00" y="2510.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1194.00" dy="2.38">10 - Terrain database (SRTM fallback)</tspan>
+</text>
+<text x="1240.00" y="2560.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.56">terrain\ beside the executable, or --terrain-dir.  Raw SRTM .hgt, one</tspan>
+<tspan x="1240.00" dy="15.62">1 x 1 degree cell per file, named by the corner it starts at:</tspan>
+<tspan x="1240.00" dy="15.62">  S07E106.hgt   covers 7..6 S, 106..107 E   (Jakarta)</tspan>
+<tspan x="1240.00" dy="15.62">  S08E112.hgt   covers 8..7 S, 112..113 E   (Surabaya)</tspan>
+<tspan x="1240.00" dy="15.62">SRTMGL1 (1 arc-sec, ~30 m, 3601x3601) and SRTMGL3 (3 arc-sec, ~90 m,</tspan>
+<tspan x="1240.00" dy="15.62">1201x1201) are both accepted; the sample count comes from the file size</tspan>
+<tspan x="1240.00" dy="15.62">samples are signed 16-bit big-endian metres; row 0 is the northern edge</tspan>
+<tspan x="1240.00" dy="15.62">and column 0 the western edge; -32768 is a void (interpolated around, or</tspan>
+<tspan x="1240.00" dy="15.62">reported invalid when a point has nothing but voids)</tspan>
+<tspan x="1240.00" dy="15.62">bilinear between the four surrounding samples; a tile is read in on first</tspan>
+<tspan x="1240.00" dy="15.62">use and kept - the window's TerrainDB line shows indexed / in memory / MB</tspan>
+</text>
+<text x="1240.00" y="2775.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.62">Two ways to get them.  tools\get_terrain.ps1 downloads from the public AWS skadi mirror (-Points "-6.13,106.66" or -Tiles S07E106,S08E112), about 25</tspan>
+<tspan x="1240.00" dy="16.25">MB per 1 arc-sec tile, so fetch only the box the aircraft flies in: the generic world model, quick, but SRTM predates the scenery.  tools\TerrainBaker</tspan>
+<tspan x="1240.00" dy="16.25">overlays the simulator's own ground heights on that base - plan -&gt; probe -&gt; survey -&gt; compose -&gt; terrain-sim\*.hgt - sim-exact at the fields, runway</tspan>
+<tspan x="1240.00" dy="16.25">flattening and all (probe/survey need Prepar3D with the add-on loaded; plan and compose need neither).</tspan>
+</text>
+<text x="1240.00" y="2890.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
+<tspan x="1240.00" dy="1.62">Calibration: SRTM heights are orthometric (EGM96) and the sim's datum is its own; the two matched to ~2 m at Juanda in testing. --terrain-offset &lt;m&gt;</tspan>
+<tspan x="1240.00" dy="16.25">shifts every database height if a site shows a constant bias - the database only, never FSUIPC and never a sim height.</tspan>
+</text>
+<text x="2314.00" y="2510.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2314.00" dy="2.38">11 - Build, files and bench tooling</tspan>
+</text>
+<text x="2360.00" y="2560.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.50">BUILD</tspan>
+<tspan x="2360.00" dy="15.00">  msbuild CigiStarter.sln /p:Configuration=Release /p:Platform=x64</tspan>
+<tspan x="2360.00" dy="15.00">  -&gt; x64\Release\CigiStarter.exe      (x64 only)</tspan>
+<tspan x="2360.00" dy="15.00">  GUI subsystem (SubSystem=Windows + EntryPointSymbol=mainCRTStartup)</tspan>
+<tspan x="2360.00" dy="15.00">  with a plain int main(): no console, so --help and startup errors use</tspan>
+<tspan x="2360.00" dy="15.00">  a message box</tspan>
+<tspan x="2360.00" dy="15.00">  static CRT (/MT): a fresh IG PC needs no Visual C++ redistributable</tspan>
+<tspan x="2360.00" dy="15.00">  no /GL: FSUIPCuser64.lib is an LTCG library built with MSVC v140</tspan>
+<tspan x="2360.00" dy="15.00">  (WholeProgramOptimization=false; expect a benign LNK4098)</tspan>
+<tspan x="2360.00" dy="15.00">  runs unelevated (asInvoker) - it starts from a logon path, where a</tspan>
+<tspan x="2360.00" dy="15.00">  UAC prompt would block an unattended IG</tspan>
+<tspan x="2360.00" dy="15.00">  vendored SDKs: external\UIPC64_SDK_C_version2,</tspan>
+<tspan x="2360.00" dy="15.00">  external\npcap-sdk-1.16, external\Prepar3D-SDK\inc\PDK</tspan>
+<tspan x="2360.00" dy="15.00">  (/p:FsuipcSdkDir, /p:NpcapSdkDir, /p:P3DSdkDir)</tspan>
+</text>
+<text x="2360.00" y="2790.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.50">FILES   main.cpp  SofPacer.h  Gui.h/.cpp  cigi.h/.cpp</tspan>
+<tspan x="2360.00" dy="15.00">        TerrainSource.h/.cpp   the FSUIPC poller thread</tspan>
+<tspan x="2360.00" dy="15.00">        TerrainDb.h/.cpp       the SRTM .hgt reader</tspan>
+<tspan x="2360.00" dy="15.00">        TerrainProbe.h/.cpp    this side of the shared-memory link</tspan>
+<tspan x="2360.00" dy="15.00">        TerrainProbeIpc.h      the pinned contract</tspan>
+<tspan x="2360.00" dy="15.00">        Relay.h/.cpp           client.txt, frames, Npcap, SendARP</tspan>
+<tspan x="2360.00" dy="15.00">        client.txt / terrain\  optional inputs beside the exe</tspan>
+<tspan x="2360.00" dy="15.00">BENCH   tools\test-hathot-emulator.ps1 -Local [-Stop] -&gt; PASS/FAIL</tspan>
+<tspan x="2360.00" dy="15.00">        tools\capture-hat-hot.ps1 [-Summary]</tspan>
+<tspan x="2360.00" dy="15.00">        external\HostEmulator_Win32_v3.3.3\Hemu3.exe (Boeing TSS)</tspan>
+<tspan x="2360.00" dy="15.00">        tools\PdkTerrainProbe\test\PdkTerrainProbeTest.exe</tspan>
+<tspan x="2360.00" dy="15.00">        tools\TerrainBaker   plan / probe / survey / compose</tspan>
+<tspan x="2360.00" dy="15.00">        captures need Npcap + Wireshark's dumpcap and tshark</tspan>
+</text>
+<text x="2360.00" y="3010.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
+<tspan x="2360.00" dy="1.62">PdkTerrainProbe is deliberately not in the solution: it needs the sim's SDK, and a machine that only builds the IG should not be broken by that. The</tspan>
+<tspan x="2360.00" dy="16.25">v5 and v6 DLLs are built separately and kept side by side in bin\Release-v5 and bin\Release-v6.</tspan>
+</text>
+</svg>
