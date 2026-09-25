@@ -13,7 +13,7 @@ ways to get it, and both are approximations:
 | Source | Problem |
 |---|---|
 | `TerrainDb` (offline SRTM `.hgt`) | Cannot know a runway's flattening or any changed scenery, and has to be re-baked whenever the scenery changes. At Atang Senjaya it reads ~175.5 m where the reference IG reported ~178 m. |
-| `TerrainSource` (FSUIPC `0x0020`) | Reports the ground under the local aircraft, which **freezes** while the aircraft is being slewed into position — which is exactly how CigiP3dBridge drives it. |
+| `TerrainSource` (FSUIPC `0x0020`) | Reports the ground under the local aircraft and nothing else, so it can stand in only when the request is where the sim's own aircraft is. It **froze** while the program that drives the aircraft held the sim in slew — the rig now runs that program paused, with slew off, so it follows again. |
 
 Prepar3D will answer the question directly, from the terrain it is about to put
 the aircraft on. The PDK exposes that as `ISurfaceQueryManagerV400`, and it is a
@@ -30,7 +30,7 @@ They share one block of memory, described in `../../TerrainProbeIpc.h`:
 ```
    CigiStarter (IG)                    PdkTerrainProbe.dll (in Prepar3D)
         |                                        |
-        |  writes queries[i]  --------------->   |  on its next sim tick:
+        |  writes queries[i]  --------------->   |  on its next tick:
         |    lat, lon, alt, key                  |    asks ISurfaceQueryManagerV400
         |                                        |    for each enabled point
         |  <---------------  writes results[i]   |
@@ -53,7 +53,10 @@ They share one block of memory, described in `../../TerrainProbeIpc.h`:
   different packings they would agree on the first slot and silently misread
   every slot after it, answering from the wrong row. A layout change therefore
   has to bump `kVersion` too, so a stale DLL is refused when it attaches instead
-  of being misread.
+  of being misread. That applies to the diagnostic word `diag` as well: it was
+  the header's reserved word given a meaning, so it moved no offset, but the
+  diagnostic **tail** added in `kVersion` 2 comes after the tables and made the
+  mapping larger, so the version was bumped with it.
 * The table is **metric**: CIGI defines HAT/HOT in metres, and that is what
   CigiStarter puts on the wire. The DLL converts at the sim boundary — the
   surface query takes its altitude in **feet** and returns a height in feet — so
@@ -63,7 +66,7 @@ They share one block of memory, described in `../../TerrainProbeIpc.h`:
 CigiStarter only ever wants about six points at a time, but the table holds 256
 and the add-on answers every enabled one on each tick. `tools\TerrainBaker` uses
 that: it fills the whole table to sample a tile in seconds, which is why a bake
-no longer needs FSUIPC, slew mode or a reposition per cell.
+no longer needs FSUIPC, a reposition per cell, or any particular sim mode.
 
 ## Building
 
@@ -74,11 +77,12 @@ project defaults to — the add-on links only system libraries, so a full SDK
 installation is not needed.
 
 The surface query (`ISurfaceQueryManagerV400`) is the same in v5 and v6, but the
-tick that drives it hangs off the object manager, and that interface grew a
-method: **v5 tops out at `V520`, v6 at `V540`**, and the two do not share a GUID.
-The project takes the interface from the SDK path — `v5 SDK` in it selects
-`V520` — so point `/p:P3DSdkDir` at the SDK for the simulator you are building
-for:
+services around it grew between the SDKs and the versions do not share a GUID:
+the frame-event service (`IEventServiceV510` on v5, `IEventServiceV600` on v6)
+and the object manager, used only for the fallback tick (`V520` on v5, `V540` on
+v6). The project takes the interfaces from the SDK path — `v5 SDK` in it selects
+the v5 ones — so point `/p:P3DSdkDir` at the SDK for the simulator you are
+building for:
 
 ```
 # for Prepar3D v6, against the vendored v6 headers (the default)
@@ -154,10 +158,113 @@ as before:
   may be started in either order.
 * No add-on, or no tick yet, or a tick that has stopped (the sim exited and left
   a mapping behind) → the probe reports itself unavailable and CigiStarter falls
-  back to `TerrainDb`, and then to FSUIPC.
+  back to `TerrainDb`, and then to FSUIPC. A **paused** sim is not one of those
+  cases: Prepar3D's own ticks stop while it is paused, and the add-on's own
+  thread keeps the table answering underneath them.
 * `--terrain-offset` is **not** applied to a height that came from the sim. That
   option exists to calibrate the *database's* datum against the sim; a value
   from the sim needs no calibration, and applying it would correct it twice.
+
+## How the tick survives a pause — the diagnostics
+
+The surface query is free-standing, but something has to *call* it, and that
+something has to keep running while the IG's aircraft is being positioned. The
+program that drives the aircraft holds Prepar3D **paused** — the rig's vendor
+program does so throughout, with slew off — and a paused sim stops calling an
+object's `ISimulation::Update` altogether. A tick hung off the user object
+therefore goes silent exactly when the HOST is asking for terrain, and with the
+sim paused throughout it never runs at all. From outside it looked present but
+silent: `alive` stayed 1 (nothing had detached it) while `ticks` froze.
+
+The first answer was Prepar3D's global **`EVENTID_Frame`** event
+(`IEventServiceV400`), signalled once per rendered frame, which is taken to keep
+being signalled while the sim is paused. **On v5 it does. On the rig's v6 it does
+not**: pausing stops the frame loop as well, so the frame tick dies with the
+pause, and the probe went quiet for as long as the sim was paused. The object
+`ISimulation` cannot cover that either (a pause stops it too) and neither can any
+other PDK callback.
+
+So the probe now has a tick of its own, and Prepar3D's ticks are the fast path:
+the table is serviced by, in order,
+
+1. the per-frame event, once per rendered frame — the tick of a running sim;
+2. the object's `ISimulation`, until a frame event has been seen and again if one
+   stops arriving (`Update()` defers while the frame event is live, so the two
+   never both service the table);
+3. a **thread of the add-on's own**, started at load and stopped at unload, which
+   steps in only after both of the above have been silent for a full second
+   (`kWatchGraceMs`). A running sim never reaches it, so the one call made off
+   Prepar3D's thread can only happen while Prepar3D's own loop has stopped —
+   which is when the terrain engine is not being driven by a frame.
+
+Because the frame event needs no object at all, the object-lifecycle failure mode
+— a reposition handing the user role to a fresh object and stranding the tick —
+is gone; the old object counters are still published for comparison.
+
+What the sim is doing is recorded as well, from Prepar3D's message events
+(`EVENTID_Message`): pause/unpause, SimConnect "simulating" start/stop, a
+scenario load, a user-vehicle change. That is what tells a paused sim apart from
+a genuine loss of the terrain service.
+
+The report is the last word of the shared header (`Shared::diag`) plus a
+four-word **diagnostic tail appended after the two tables**, so no slot offset
+moves. Both are diagnostic only; nothing decides anything from them. Bit 31
+(`diag::kPresent`) is set once the word is filled, so a reader treats a 0 as "no
+diagnosis available" rather than as fact.
+
+| `diag` bits | Meaning |
+|---|---|
+| 0..7 | user-object create callbacks seen (saturating at 255) |
+| 8..15 | removals of the object the tick is on, or of a user object (saturating at 255) |
+| 16..23 | `RegisterSimulation` failures (saturating at 255) |
+| 24 | a simulation is bound (the fallback) |
+| 25 | the bound object **was** the sim's user object at the last tick |
+| 26 | a user-object create was ignored because a simulation was already bound |
+| 27 | the newest pass was serviced by the add-on's **own thread** (Prepar3D's ticks have stopped) |
+| 31 | the word is filled (a build that publishes diagnostics) |
+
+| Tail field | Meaning |
+|---|---|
+| `frameTicks` | `EVENTID_Frame` callbacks seen; > 0 means the frame tick is being delivered |
+| `simEvents` | simulator messages: bit 0 is live "paused", bits 8..16 are sticky "seen pause / unpause / sim-stop / sim-start / scenario-load / vehicle-change / frozen" |
+| `simMode` | `GetMode()` at the last object tick |
+| `frameFails` | failures to obtain or register the frame event |
+
+How to read a stopped tick:
+
+* **`ticks` advancing, bit 27 set** — Prepar3D's own ticks have stopped and the
+  add-on's thread is servicing the table. This is the *normal* state of a paused
+  sim, not a fault: the answers keep coming, they are just not coming from
+  Prepar3D's frame loop.
+* **`ticks` frozen, `frameTicks` > 0** — the frame event was delivered at some
+  point but is no longer arriving, and neither the object tick nor the add-on's
+  own thread has stepped in. The thread is started at load and only stops with
+  the DLL, so this means the whole add-on has stopped running, not just the frame
+  loop.
+* **`ticks` frozen, `frameTicks` == 0** — no frame event was ever delivered and
+  the object tick never ran either. Deploy the current DLL; `frameFails` says
+  whether set-up failed.
+* **`alive` clear** — there is no surface service at all, which is a different
+  fault.
+
+Three places report it, and they all read the same layout:
+
+* CigiStarter's window grows a `Probe :` line under `HAT/HOT` whenever there is
+  something to say — when the probe is not the source (naming the reason and the
+  counters), and also when it *is* the source but answering from its own thread
+  because Prepar3D has stopped ticking (the pause). Previously the window only
+  ever said the answer had fallen back to FSUIPC.
+* `TerrainBaker probe` (and `requireProbe`, the gate the other modes pass) turns
+  the old one-line `the probe is loaded but its simulation tick is not running`
+  into the evidence behind it, and prints a healthy baseline on a good run.
+* `tools\test-hathot-emulator.ps1` decodes the word and the tail in its preflight
+  and watches the tick counter move, so a bench run says `TICK STOPPED` instead
+  of a tick-rate that looks healthy. It skips the "sim is the terrain source"
+  test when the tick has stopped, rather than blaming the add-on for not being
+  loaded.
+
+`tools\TerrainBaker` reads the same layout through `../../TerrainProbeIpc.h`, so
+the two never drift.
 
 ## Testing without Prepar3D
 

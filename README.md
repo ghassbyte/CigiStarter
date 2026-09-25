@@ -387,19 +387,44 @@ There are three terrain sources, in this order:
    so it stays correct for the whole flight too, but it is a copy of the world
    and cannot know about a flattening or changed scenery.
 3. **The local Prepar3D via FSUIPC** — the ground under the *player* aircraft
-   (`0x0020`). It stands in for any request neither of the above can cover, and
-   it supplies the aircraft's own position and altitude either way.
+   (`0x0020`). It stands in for any request neither of the above can cover.
 
-Why a database exists here at all: a program that drives the aircraft into
-Prepar3D by writing its position over FSUIPC (CigiP3dBridge, or the vendor
-program that replaces it) has to hold the sim in **slew mode**, and Prepar3D
-**freezes its ground model in slew**. The FSUIPC ground altitude then stops
-following the aircraft and stays at wherever the last reposition left it, so an
-IG answering from FSUIPC alone keeps reporting the same terrain however far the
-aircraft flies — and the HOST flies it on until it meets rising ground. The
-original Master IG answered from its own database for that same reason. Both
-sources 1 and 2 are answers about the *world* rather than about where the
-aircraft is sitting, so neither can freeze.
+Why a database exists here at all: the FSUIPC reading is the ground under the
+**player** aircraft and nothing else, so it can stand in only for a request that
+is where the sim's own aircraft is. It used to be worse — the program that drives
+the aircraft into Prepar3D by writing its position over FSUIPC (CigiP3dBridge,
+or the vendor program that replaces it) held the sim in **slew mode**, and
+Prepar3D **freezes its ground model in slew**: the reading stopped following the
+aircraft and stayed wherever the last reposition left it, so an IG answering from
+FSUIPC alone kept reporting the same terrain however far the aircraft flew, and
+the HOST flew it on until it met rising ground. (The rig's vendor program now
+holds the sim **paused** with slew off, so the ground reading follows again — but
+it is still a single point, and the sim's own altitude is not following anything
+at all: the position is written and the altitude is not.) The original Master IG
+answered from its own database for that same reason. Both sources 1 and 2 are
+answers about the *world* rather than about where the aircraft is sitting, so
+neither can go stale.
+
+### Which aircraft the request is about
+
+The three sources say *where the terrain is*; they do not say *where the
+aircraft is*, and an entity-relative request needs both — it names six fixed
+offsets from the aircraft, identical wherever the aircraft happens to be. That
+anchor is the HOST's own **Entity Control** for entity 0: the pose the HOST's
+flight model is commanding, and the aircraft it is asking about. It is kept from
+each Entity Control the HOST sends and used for every entity-relative answer;
+the request's Z offset is applied to that altitude, and its latitude/longitude
+locate the terrain query.
+
+FSUIPC is only the fallback for a HOST that has not sent an Entity Control yet,
+and a pose outside the globe — or the all-zero placeholder a HOST emits for
+entities it is not driving — is refused rather than adopted. The window's
+`Anchor` line names whichever of the two is in use and where it points, because
+this failure is invisible on the wire: the requests look identical whether the
+anchor is right or stuck over the departure airfield. On the rig the sim link
+froze at the departure field while the HOST flew the aircraft to its
+destination, and every answer went on describing the departure terrain until the
+HOST levelled the aircraft onto it — a ~550 ft step at the destination.
 
 The fields themselves:
 
@@ -407,16 +432,18 @@ The fields themselves:
   query at the request's point, else the database height there (bilinear between
   the four surrounding samples), else FSUIPC `0x0020` with a geodetic request
   accepted only within 500 m of the aircraft.
-- `HAT` = test-point altitude − `HOT`. Entity-relative requests use the
-  aircraft's altitude minus the request's Z offset (CIGI entity axes are local
-  NED, so **+Z points down**); geodetic requests carry the altitude themselves.
-- Entity-relative requests are answered at the **aircraft's** position: the
-  HOST's probe points all sit within ~10 m of it (the reference capture's six
-  points reach 10.4 m back and 3 m forward), far below any terrain source's
+- `HAT` = test-point altitude − `HOT`. Entity-relative requests use the HOST
+  aircraft's altitude (its Entity Control, or FSUIPC when none has been seen)
+  minus the request's Z offset (CIGI entity axes are local NED, so **+Z points
+  down**); geodetic requests carry the altitude themselves.
+- Entity-relative requests are answered at the **HOST's** aircraft position:
+  the HOST's probe points all sit within ~10 m of it (the reference capture's
+  six points reach 10.4 m back and 3 m forward), far below any terrain source's
   resolution. The sim's own query is asked for the exact point all the same.
 - `Valid` is set to 0 — never a fabricated 0 m — when no source can produce an
-  answer: a request for an entity other than the ownship (entity 0), or a point
-  no source can cover.
+  answer: a request for an entity other than the ownship (entity 0), an
+  entity-relative request with no anchor (no Entity Control seen and the FSUIPC
+  link down), or a point no source can cover.
 - `updatePeriod = 0` (one-shot) requests are answered once; a non-zero period is
   honoured by re-answering every *n*-th frame until a fresh request for the same
   HAT/HOT ID replaces it — that one is answered at once and its count restarts.
@@ -465,19 +492,33 @@ will actually place the aircraft on.
   (`netstat -ano -p udp | findstr :8000` shows it). Point the sim's CIGI
   elsewhere in that file, or leave the sim alone and run the bench on other ports
   (`--ig-port` / `--host-port`, see [Usage](#usage)).
-- **It has only ever run on the bench's sim.** The add-on is a PDK add-on, and
-  the only sim it has been loaded into is the bench's Professional Plus v5. The
-  deployment's Prepar3D Professional has not been tried yet, so whether that
+- **It has been loaded on v5 and v6.** The bench's Professional Plus v5 was the
+  first, then the rig's **v6**. Whether the deployment's Prepar3D Professional
   edition accepts it is still open; if it is refused, the answers come from the
   database ([below](#terrain-database)) and nothing else changes.
 - **Not having it** is not an error: CigiStarter opens the shared region lazily
   and re-tries every 2 s, so the two may be started in either order, and with no
   add-on the answer simply comes from the database as before.
+- **Its tick is Prepar3D's per-frame event, with a clock of the add-on's own
+  behind it.** That matters because the sim is held **paused** while the aircraft
+  is positioned into it. An object's own simulation stops when the sim is paused,
+  so a tick registered on the user object went silent exactly when the HOST was
+  asking; the per-frame event was the answer, and on v5 it does keep running while
+  the sim is paused. **On the rig's v6 it does not** — pausing stops the frame loop
+  as well — so the add-on also starts a thread of its own at load and hands it the
+  table once every Prepar3D tick has been silent for a second. A running sim never
+  reaches that thread; the rig runs paused throughout, so in practice that thread
+  is the tick that answers there. Either way the answers come from the sim's own
+  terrain engine rather than from a one-point reading under its aircraft. The
+  window's `Probe` line says which tick is answering — including when Prepar3D has
+  stopped and the add-on's own thread has taken over — `tools\PdkTerrainProbe\README.md`
+  has the layout, and the operator window's terrain lines
+  ([below](#operator-window)) the readout.
 - **Building it** needs the Prepar3D SDK (v5 or v6 — the surface query is the
-  same in both, but the object manager it ticks from is `V520` on v5 and `V540`
-  on v6, and the project picks the right one from the SDK path), but *running*
-  it does not, which is why it is a separate project rather than part of
-  `CigiStarter.sln`.
+  same in both, but the frame-event service and the fallback object manager are
+  `V510`/`V520` on v5 and `V600`/`V540` on v6, and the project picks the right
+  ones from the SDK path), but *running* it does not, which is why it is a
+  separate project rather than part of `CigiStarter.sln`.
 - **`--terrain-offset` is not applied to a height that came from the sim.** That
   option calibrates the *database's* datum against the sim; a value from the sim
   needs no calibration, and applying it would correct it twice.
@@ -486,7 +527,7 @@ will actually place the aircraft on.
   moved in the meantime is refused and falls back rather than being answered
   with the terrain of wherever the aircraft used to be.
 - **A point the sim has not answered yet is waited for, briefly.** The add-on
-  answers on its own tick, so the first request for a point lands 30–60 ms
+  answers on each tick, so the first request for a point lands 30–60 ms
   behind the query (79 ms worst seen on v5). Rather than drop that one reply
   onto the database, CigiStarter waits up to 120 ms for it and stops the moment
   it arrives. It is paid once per point — every later reply for that point is
@@ -595,8 +636,10 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  Relay NIC : Killer E2600 Gigabit Ethernet Controller                    |
 |                                                                          |
 |  TerrainDB : 2 tile(s), 1 in memory, 25 MB                               |
-|  HAT/HOT   : answering from the sim's own terrain                       |
-|  Terrain   : 89 ft under the aircraft, 99 ft aircraft                    |
+|  HAT/HOT   : answering from the sim's own terrain                        |
+|  Probe     : sim paused; the probe is answering from its own thread      |
+|  Anchor    : HOST Entity Control -6.53973, 106.75963, 576 ft             |
+|  Terrain   : 89 ft ground under the sim aircraft, 99 ft sim aircraft     |
 |                                                                          |
 |  [x] Answer HAT/HOT                       SOF rate: [ 150 ] Hz [ Apply ]   |
 |  [x] Pace SOF to HOST replies (flow control)                             |
@@ -649,10 +692,29 @@ with the window up instead, which is the behaviour the sketch below shows.
   `answering from FSUIPC`, else `switched on, but nothing to answer from`.
   `TerrainDB` names the database behind that fallback — `N tile(s), M in
   memory, X MB`, or `none` with the reason (for instance no `terrain\` folder)
-  — and `Terrain` shows the live FSUIPC reading (ground and aircraft heights,
-  in feet, the way Prepar3D displays them) or, with no sim, `FSUIPC : no link to
-  Prepar3D`. With answering off the block collapses to `not answered (switched
-  off)`.
+  — and `Terrain` shows the live FSUIPC reading of the **sim's own** aircraft:
+  the ground under it and its altitude, in feet, the way Prepar3D displays them.
+  It is not the HOST's aircraft — that is the `Anchor` line — and the two can be
+  at different places and altitudes, because an external program positions the
+  sim's aircraft. On the rig that program leaves the sim's altitude at the value
+  Prepar3D started with — the position follows what it writes, the altitude does
+  not — so that second number is not a live aircraft altitude there; it reaches
+  no answer either, because an entity-relative request is anchored to the HOST's
+  Entity Control. With no sim the line reads `FSUIPC : no link to Prepar3D`; with
+  answering off the block collapses to `not answered (switched off)`.
+- A `Probe` line appears under `HAT/HOT` when there is something to say about the
+  add-on: `add-on not loaded`, `loaded, but it has no terrain service`, a stopped
+  tick with the reason behind it, or — while Prepar3D has stopped ticking, which
+  is what a pause does — `sim paused; the probe is answering from its own
+  thread`. Prepar3D's per-frame event
+  ([above](#terrain-from-the-sim)) is the fast path; when it stops arriving the
+  add-on's own thread takes the table over, so a paused sim no longer stops the
+  probe — and the rig holds the sim paused throughout, so there that line is the
+  normal state, not a fault. (It blinks away for the one brief unpause the vendor
+  program does while it brings Prepar3D up, and comes back when the sim pauses
+  again.) The counters come from `Shared::diag` and the
+  diagnostic tail;
+  `tools\PdkTerrainProbe\README.md` has the layout.
 - `Relay` and `Relay NIC` report the [fan-out](#fan-out-to-the-other-ig-pcs):
   how many clients are listed, how many of them answer, how many datagrams have
   been copied, and which adapter the copies leave by. There is no button for it

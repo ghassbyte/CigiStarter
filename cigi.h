@@ -37,6 +37,7 @@ enum MsgId : uint8_t {
 // Message sizes (total, including the 2-byte [id][size] header)
 //-----------------------------------------------------------------------------
 constexpr uint8_t kSofSize            = 24;  // Start of Frame
+constexpr uint8_t kEntityControlSize  = 48;  // Entity Control
 constexpr uint8_t kHatHotReqSize      = 32;  // HAT/HOT Request
 constexpr uint8_t kHatHotRespSize     = 16;  // HAT/HOT Response
 constexpr uint8_t kHatHotExtRespSize  = 40;  // HAT/HOT Extended Response
@@ -171,6 +172,26 @@ struct HatHotRequest {
 // Decode a HAT/HOT Request message. Returns false when `msg` is not a
 // well-formed HAT/HOT Request (wrong id, or shorter than the 32-byte form).
 bool parseHatHotRequest(const uint8_t* msg, size_t size, HatHotRequest& out);
+
+//-----------------------------------------------------------------------------
+// Entity Control (message id 2) decoding
+//-----------------------------------------------------------------------------
+// The pose the HOST is commanding for one entity, as carried by its Entity
+// Control message. Entity 0 is the aircraft the HOST's own flight model flies,
+// and the entity every entity-relative HAT/HOT request is anchored to, so this
+// pose -- not the sim's own position -- is what those answers must be computed
+// from: the HOST asks about points around the aircraft it believes it is
+// flying, and it judges the answer against that same aircraft's altitude.
+struct EntityControl {
+    uint16_t entityId  = 0;
+    double   latDeg    = 0.0;  // degrees
+    double   lonDeg    = 0.0;  // degrees
+    double   altMeters = 0.0;  // metres MSL
+};
+
+// Decode an Entity Control message. Returns false when `msg` is not a
+// well-formed one (wrong id, or shorter than the 48-byte form).
+bool parseEntityControl(const uint8_t* msg, size_t size, EntityControl& out);
 
 //-----------------------------------------------------------------------------
 // Parsing helper

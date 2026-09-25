@@ -6,8 +6,11 @@
 //    that the IG reports. If the IG answers HOT = 0 the aircraft is flown into
 //    the ground. The sim's own terrain engine answers the HOT itself, through
 //    the PdkTerrainProbe add-on (TerrainProbe.h); this module is the last
-//    fallback, and the source of the aircraft's own position and altitude that
-//    the entity-relative requests are anchored to.
+//    fallback. Its ground reading describes one point only -- the terrain under
+//    the *sim's* own aircraft -- so it can stand in only while the request is
+//    where that aircraft is; and the position it carries is the entity-relative
+//    anchor only until the HOST has sent an Entity Control of its own, which is
+//    the authoritative anchor (see answerHatHot() in main.cpp).
 //
 //  What it does
 //    Opens FSUIPC against the local Prepar3D and polls the player-aircraft
@@ -40,10 +43,10 @@ namespace terrain {
 // successful FSUIPC round trip, and drops back to false if the link is lost.
 struct Sample {
     bool     connected         = false;
-    double   groundAltMeters   = 0.0;  // terrain height under the aircraft, m MSL
-    double   aircraftAltMeters = 0.0;  // player aircraft altitude, m MSL
-    double   latDeg            = 0.0;  // player aircraft latitude, degrees
-    double   lonDeg            = 0.0;  // player aircraft longitude, degrees
+    double   groundAltMeters   = 0.0;  // terrain under the sim's aircraft, m MSL
+    double   aircraftAltMeters = 0.0;  // the sim's own aircraft altitude, m MSL
+    double   latDeg            = 0.0;  // the sim's aircraft latitude, degrees
+    double   lonDeg            = 0.0;  // the sim's aircraft longitude, degrees
     uint64_t tick              = 0;    // increments once per successful read
 };
 

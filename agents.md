@@ -74,7 +74,11 @@ A drop-in replacement for the Master IG. It plays the IG side of the link:
   a bench test, and the deployment passes none of them.
 - **Answers HAT/HOT** from the terrain the aircraft will actually fly onto —
   Prepar3D's own engine, through the `PdkTerrainProbe` add-on — falling back to
-  an offline SRTM database and then to FSUIPC. On by default.
+  an offline SRTM database and then to FSUIPC. On by default. Entity-relative
+  requests are anchored to the HOST's own Entity Control pose (entity 0), not to
+  the FSUIPC read-back; FSUIPC is only the fallback before one has arrived. The
+  rig holds Prepar3D paused throughout, and on v6 a pause stops Prepar3D's own
+  ticks, so there the add-on answers from a thread of its own.
 - **Fans the downstream stream out** to the extra IG PCs in `client.txt`, byte
   for byte, source-labelled as the HOST. Optional, Npcap-backed, passive clients
   only.
@@ -82,8 +86,8 @@ A drop-in replacement for the Master IG. It plays the IG side of the link:
   EXIT as the only way off the link. `--no-auto-start` restores the paused
   window.
 
-Two design points are where it differs from a naive IG, and both matter to the
-HOST:
+Three design points are where it differs from a naive IG, and all of them matter
+to the HOST:
 
 - **Flow control (default on)** holds a SOF back while the HOST has not answered
   the previous one, so the stream fits the frame rate the HOST can actually
@@ -93,8 +97,16 @@ HOST:
   SOFs. That is what the reference Master did; an IG-side count would drift away
   from the HOST by (rate − 53) frames every second, which is what used to break
   it above ~60 Hz.
+- **Entity-relative HAT/HOT answers are anchored to the HOST's Entity Control**
+  (entity 0), the pose the HOST's flight model is flying, rather than to the
+  sim's FSUIPC read-back. The requests are the same six offsets wherever the
+  aircraft is, so an anchor left over another airfield cannot be seen on the
+  wire — it just answers the wrong terrain, and the HOST flies the aircraft to
+  meet it. That is the rig's "repositions, then parks at the departure ground"
+  failure: the sim link had frozen at the departure field while the HOST flew
+  the aircraft to the destination.
 
-`README.md` has the mechanism behind all four: the operator window, every
+`README.md` has the mechanism behind all of it: the operator window, every
 option, the terrain sources, the fan-out and the wire layout.
 
 ## Message flow
@@ -131,8 +143,10 @@ looking to them exactly like the HOST's own.
 | HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
 | SOF live field    | the HOST's frame counter, echoed at offset 8; offsets 12/16 stay 0 |
 | Sim at the IG PC  | Prepar3D Professional — its CIGI feature is a Professional Plus extra, so the IG's 8000/8001 are not contested there |
+| Sim driver        | a 3rd-party vendor program holds Prepar3D **paused** throughout, with **slew off**, positioning the sim's aircraft over FSUIPC; the sim's own aircraft altitude can stay at Prepar3D's startup value, so it is not the HOST's — the anchor is the HOST's Entity Control |
 | Terrain source    | P3D's own terrain via the `PdkTerrainProbe` add-on; then an SRTM `.hgt` tileset; then FSUIPC `0x0020` |
-| Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D; free-standing query, no SimObject; optional, and so far only ever loaded into the bench's Professional Plus sim |
+| Entity anchor     | entity-relative HAT/HOT is anchored to the HOST's Entity Control (entity 0), a pose at offset 24/32/40 (lat/lon/alt, CIGI 3.3 layout); FSUIPC only until one has arrived |
+| Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D; free-standing query, no SimObject; optional, and loaded on the bench's Professional Plus v5 and the rig's v6 |
 | Terrain database  | `.hgt` tiles in `terrain\` by default or `--terrain-dir`; from `tools\get_terrain.ps1` or a `tools\TerrainBaker` bake |
 | Extra IG PCs      | `client.txt` beside the executable, `address[:port]`, read once at startup |
 | Fan-out           | one Npcap-injected copy per client, HOST source address/port spoofed |

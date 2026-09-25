@@ -6,8 +6,9 @@
     CigiStarter answers HAT/HOT requests from the local Prepar3D's own terrain
     through the PdkTerrainProbe add-on when it is installed, and from an offline
     SRTM tile set in the "terrain" folder beside the program otherwise. The
-    offline copy stays live while the local Prepar3D is held in slew mode by
-    whatever drives it (TerrainDb.h explains why). This script fetches the raw
+    offline copy answers about the world rather than about where the sim's own
+    aircraft happens to be, so no sim mode -- slew, pause or neither -- can
+    freeze it (TerrainDb.h explains why). This script fetches the raw
     1 arc-second ".hgt" tiles that folder needs, from the public AWS "skadi"
     mirror (SRTMGL1, public domain).
 

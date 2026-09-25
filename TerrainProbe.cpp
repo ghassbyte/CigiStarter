@@ -90,7 +90,11 @@ bool tryOpen() {
     HANDLE h = ::OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, kMappingName);
     if (!h) return false;
 
-    void* view = ::MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Shared));
+    // Map whatever the add-on created rather than our own idea of the size, so
+    // a pair built from different revisions is rejected by the version check
+    // below -- with a message the operator can act on -- instead of failing
+    // here with an unexplained "not loaded".
+    void* view = ::MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, 0);
     if (!view) {
         ::CloseHandle(h);
         return false;
@@ -112,6 +116,25 @@ bool tryOpen() {
     return true;
 }
 
+// The tick watchdog, shared by available() and health() so both judge staleness
+// from the same clock. A mapping left behind by a Prepar3D that has since exited
+// would otherwise look usable forever; a tick that has not moved for this long
+// means the sim has stopped driving the probe. `g_mutex` must be held.
+uint32_t g_lastTicks  = 0;
+DWORD    g_lastChange = 0;
+
+bool tickFresh() {
+    const uint32_t ticks = g_shm->ticks;
+    const DWORD    now   = ::GetTickCount();
+    if (ticks != g_lastTicks) {
+        g_lastTicks  = ticks;
+        g_lastChange = now;
+    } else if (static_cast<DWORD>(now - g_lastChange) > kStaleAfterMs) {
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool available() {
@@ -122,18 +145,44 @@ bool available() {
 
     // The tick has to be advancing: a mapping left behind by a Prepar3D that
     // has since exited would otherwise look usable forever.
-    static uint32_t lastTicks  = 0;
-    static DWORD    lastChange = 0;
+    return tickFresh();
+}
 
-    const uint32_t ticks = g_shm->ticks;
-    const DWORD    now   = ::GetTickCount();
-    if (ticks != lastTicks) {
-        lastTicks  = ticks;
-        lastChange = now;
-    } else if (static_cast<DWORD>(now - lastChange) > kStaleAfterMs) {
-        return false;
+Health health() {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+
+    Health s;
+    if (!tryOpen()) return s;   // mappingOpen stays false
+    s.mappingOpen = true;
+
+    s.alive      = g_shm->alive != 0;
+    s.lastError  = g_shm->lastError;
+    s.tickRateHz = g_shm->tickRateHz;
+    s.ticks      = g_shm->ticks;
+    s.queryFails = g_shm->queryFails;
+
+    const uint32_t d = g_shm->diag;
+    s.diagnosed = (d & diag::kPresent) != 0;
+    if (s.diagnosed) {
+        s.objectCreates     = diag::field(d, diag::kCreatesShift,     diag::kCreatesMask);
+        s.objectRemoves     = diag::field(d, diag::kRemovesShift,     diag::kRemovesMask);
+        s.attachFails       = diag::field(d, diag::kAttachFailsShift, diag::kAttachFailsMask);
+        s.attached          = (d & diag::kAttached) != 0;
+        s.hostIsUser        = (d & diag::kHostIsUser) != 0;
+        s.skippedUserCreate = (d & diag::kSkippedUserCreate) != 0;
+        s.ownThread         = (d & diag::kOwnThreadTick) != 0;
     }
-    return true;
+
+    s.ticking = s.alive && tickFresh();
+
+    // The diagnostic tail.  tryOpen() only accepts a mapping whose version
+    // matches, so when it succeeded these fields are present and meaningful.
+    s.frameTicks = g_shm->frameTicks;
+    s.simEvents  = g_shm->simEvents;
+    s.simMode    = g_shm->simMode;
+    s.frameFails = g_shm->frameFails;
+    s.simPaused  = (s.simEvents & simEvent::kPausedNow) != 0;
+    return s;
 }
 
 bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters, double& hotMeters) {
@@ -263,6 +312,8 @@ void stop() {
     std::memset(g_slotUsed, 0, sizeof(g_slotUsed));
     std::memset(g_slotHasHot, 0, sizeof(g_slotHasHot));
     std::memset(g_slotProbed, 0, sizeof(g_slotProbed));
+    g_lastTicks  = 0;
+    g_lastChange = 0;
 }
 
 } // namespace probe

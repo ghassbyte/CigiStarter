@@ -27,7 +27,11 @@
     Decode a capture that already exists instead of taking a new one.
 
 .PARAMETER Out
-    Capture file to write. Defaults to %TEMP%\cigi-hat-hot.pcapng.
+    Capture file to write. Defaults to %TEMP%\cigi-hat-hot.pcapng, but a cloned
+    or locked-down box can carry a stale 8.3 %TEMP% that cannot actually be
+    written to; the script probes the folder and falls back to the system temp,
+    then to its own folder, so pass this only when none of those is what you
+    want. The folder it settled on is printed.
 
 .PARAMETER IgPort
     CigiStarter's receive port: the HOST's flight data, HAT/HOT requests
@@ -46,6 +50,14 @@
     Answers } -- for a script to assert on instead of a person reading the
     tables. Used by tools\test-hathot-emulator.ps1; the tables are printed
     either way.
+
+.PARAMETER Summary
+    Print a compact digest instead of one row per message. The link runs at
+    ~100 Hz with six requests per frame, so a real capture is tens of
+    thousands of rows; this collapses the requests to their distinct points
+    and the answers to a ~1 Hz time series of HAT/HOT per HAT/HOT ID (with
+    the probe point's own altitude, HAT + HOT, alongside). Meant for a rig
+    capture pasted into a report.
 
 .EXAMPLE
     # Watch the bench link for 30 seconds:
@@ -67,10 +79,18 @@ param(
     [int]    $IgPort   = 8000,
     [int]    $HostPort = 8001,
     [string] $Device   = '\Device\NPF_Loopback',
-    [switch] $PassThru
+    [switch] $PassThru,
+    [switch] $Summary
 )
 
 $ErrorActionPreference = 'Stop'
+
+# The folder this script lives in, captured once in the script scope. Inside a
+# function $PSScriptRoot is not always populated (it depends on how the script
+# was invoked), and Resolve-OutPath below needs this as its last-resort place to
+# write a capture -- a plain variable is read down into the function reliably.
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
 
 function Find-Tool([string]$Name) {
     foreach ($dir in @("$env:ProgramFiles\Wireshark", "${env:ProgramFiles(x86)}\Wireshark")) {
@@ -85,15 +105,68 @@ function Find-Tool([string]$Name) {
 $dumpcap = Find-Tool 'dumpcap.exe'
 $tshark  = Find-Tool 'tshark.exe'
 
+# Can this folder actually be used for a capture file? Test-Path is not enough:
+# a stale 8.3 %TEMP% can answer Test-Path for a folder that Remove-Item (and so
+# the provider underneath both) then refuses to act on. The only honest test is
+# to create and delete a real file there.
+function Test-WritableDir([string]$Dir) {
+    if (-not $Dir) { return $false }
+    try {
+        $probe = Join-Path $Dir ("cigi-probe-{0}.tmp" -f [Guid]::NewGuid().ToString('N'))
+        [IO.File]::WriteAllText($probe, '')
+        [IO.File]::Delete($probe)
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# Where a new capture should go. %TEMP% is the documented default, but a cloned
+# or locked-down machine can carry a stale 8.3 profile name there -- a path that
+# looks plausible, passes Test-Path and still cannot be used. So the requested
+# path is only honoured when a probe file can be written and removed in its
+# folder, and the fallbacks are the system temp then the script's own folder
+# (which obviously exists). Being able to write is the whole requirement, so no
+# path reaches dumpcap -- or the pre-capture cleanup -- until it has passed.
+function Resolve-OutPath([string]$Requested) {
+    if ($Requested) {
+        try {
+            $parent = Split-Path -Parent $Requested
+            if (-not $parent) { $parent = (Get-Location).Path }
+            if (Test-WritableDir $parent) { return $Requested }
+        } catch { }
+    }
+    foreach ($dir in @($env:TEMP, [IO.Path]::GetTempPath(), $ScriptDir)) {
+        try {
+            if (Test-WritableDir $dir) { return (Join-Path $dir 'cigi-hat-hot.pcapng') }
+        } catch { }
+    }
+    throw "no writable folder for the capture - pass -Out <file>"
+}
+
 # ---------------------------------------------------------------- capture ----
 if (-not $Capture) {
+    $Out     = Resolve-OutPath $Out
     $Capture = $Out
     $filter  = "udp port $IgPort or udp port $HostPort"
     Write-Host ("capturing on {0} for {1}s" -f $Device, $Seconds)
     Write-Host ("  filter: {0}" -f $filter)
+    Write-Host ("  file:   {0}" -f $Out)
 
     $errFile = [IO.Path]::ChangeExtension($Out, '.dumpcap.err')
-    Remove-Item $Out, $errFile -Force -ErrorAction SilentlyContinue
+    # An earlier capture of the same name may be lying around; clear it so the
+    # "did we get data" check below cannot be fooled by stale bytes. Delete with
+    # .NET rather than Remove-Item: Remove-Item is the command that threw on this
+    # machine, and a file we are about to overwrite anyway is not worth aborting
+    # a run over. Delete of a file that is not there is a no-op, so the normal
+    # case costs nothing.
+    foreach ($path in @($Out, $errFile)) {
+        if (-not $path) { continue }
+        try { [IO.File]::Delete($path) } catch { }
+    }
+    if ([IO.File]::Exists($Out)) {
+        throw "stale capture $Out could not be removed - delete it by hand and re-run"
+    }
     $dumpcapArgs = "-i `"$Device`" -f `"$filter`" -w `"$Out`" -a duration:$Seconds"
     $proc = Start-Process -FilePath $dumpcap -ArgumentList $dumpcapArgs `
                           -PassThru -WindowStyle Hidden -RedirectStandardError $errFile
@@ -195,7 +268,17 @@ if ($requestLines.Count -eq 0) {
             z          = Format-Metres $f[8]
         }
     })
-    $requests | Format-Table -AutoSize | Out-String | Write-Host
+    if ($Summary) {
+        # The HOST's points are fixed, so the requests collapse to a handful of
+        # distinct rows; the count shows how often each one was asked.
+        $requests |
+            Group-Object { "{0} {1}  entity {2} / id {3}  x {4} y {5} z {6}" -f $_.system, $_.type, $_.entity, $_.id, $_.x, $_.y, $_.z } |
+            Sort-Object Name | ForEach-Object {
+                Write-Host ("    {0,7} x  {1}" -f $_.Count, $_.Name)
+            }
+    } else {
+        $requests | Format-Table -AutoSize | Out-String | Write-Host
+    }
 }
 
 Write-Host "=== IG -> HOST : HAT/HOT answers ==="
@@ -260,8 +343,30 @@ if ($answers.Count -eq 0) {
 } else {
     # The numbers are on the objects for a script to assert on; the table stays
     # as it always was.
-    $answers | Select-Object 'time (s)', id, answer, valid, value |
-        Format-Table -AutoSize | Out-String | Write-Host
+    if ($Summary) {
+        # One row per HAT/HOT ID per second: enough to see the answer change as
+        # the aircraft repositions without the ~100 Hz firehose. `point` is
+        # HAT + HOT, the MSL height of the spot the IG was asked about -- for the
+        # z=0 request that is the aircraft altitude the IG believed it had.
+        $answers | Group-Object id | Sort-Object { [int]$_.Name } | ForEach-Object {
+            Write-Host ("  id {0}  ({1} answer(s)):" -f $_.Name, $_.Count)
+            $next = -1.0
+            foreach ($a in ($_.Group | Sort-Object { [double]$_.'time (s)' })) {
+                $t = [double]$a.'time (s)'
+                if ($t -lt $next) { continue }
+                $next = $t + 1.0
+                $hat  = if ($null -eq $a.hat) { '' } else { Format-Metres ([string]$a.hat) }
+                $hot  = if ($null -eq $a.hot) { '' } else { Format-Metres ([string]$a.hot) }
+                $test = if ($null -eq $a.hat -or $null -eq $a.hot) { '' }
+                        else { Format-Metres ([string]([double]$a.hat + [double]$a.hot)) }
+                Write-Host ("    t={0,7:F1}s  valid={1}  HAT {2} m  HOT {3} m   point {4} m" -f `
+                    $t, $a.valid, $hat, $hot, $test)
+            }
+        }
+    } else {
+        $answers | Select-Object 'time (s)', id, answer, valid, value |
+            Format-Table -AutoSize | Out-String | Write-Host
+    }
 }
 
 Write-Host ("{0} request(s), {1} answer(s)  [{2}]" -f $requests.Count, $answers.Count, $Capture)

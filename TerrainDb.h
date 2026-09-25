@@ -3,14 +3,15 @@
 //
 //  Why this exists
 //    The HOST drives its aircraft altitude from the Height Of Terrain (HOT)
-//    the IG reports. The local Prepar3D can supply that, but only while its
-//    ground model is live: a caller that drives the aircraft with FSUIPC
-//    position writes (CigiP3dBridge, or the vendor program that replaces it)
-//    has to hold the sim in slew mode, and Prepar3D freezes its ground model
-//    in slew. The FSUIPC ground altitude then stops following the aircraft,
-//    so the IG answers every request with the terrain of wherever the last
-//    reposition left it -- and the HOST flies the aircraft on until it meets
-//    rising ground.
+//    the IG reports. The local Prepar3D can supply that ground, but its FSUIPC
+//    reading (`0x0020`) is the terrain under the *player* aircraft and nothing
+//    else, so it can stand in only while the request is where that aircraft is.
+//    It used to be worse: while the program that drives the aircraft held the
+//    sim in slew mode, Prepar3D froze its ground model in slew, so the reading
+//    stopped following the aircraft and the IG answered every request with the
+//    terrain of wherever the last reposition left it -- and the HOST flew the
+//    aircraft on until it met rising ground. (The rig's vendor program now
+//    holds the sim paused with slew off, so the reading follows again.)
 //
 //    This module gives the HAT/HOT path a terrain source that does not depend
 //    on the live sim at all: Shuttle Radar Topography Mission (SRTM) tiles,

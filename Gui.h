@@ -61,6 +61,15 @@ struct Status {
     bool     terrainConnected  = false;  // FSUIPC link up?
     double   groundAltMeters   = 0.0;    // terrain under the aircraft
     double   aircraftAltMeters = 0.0;    // aircraft altitude
+    // Where entity-relative HAT/HOT requests are anchored: the HOST's own
+    // Entity Control (the aircraft its flight model is flying) when one has been
+    // seen, otherwise the sim link's position. The requests carry no position of
+    // their own, so an anchor stuck over the wrong airfield cannot be seen on
+    // the wire -- only here, which is why it is shown.
+    bool     anchorFromHost    = false;  // true: HOST Entity Control, false: FSUIPC
+    double   anchorLatDeg      = 0.0;
+    double   anchorLonDeg      = 0.0;
+    double   anchorAltMeters   = 0.0;
     // The offline terrain database the HAT/HOT answer falls back to (TerrainDb.h)
     // when the sim's own terrain probe is not answering. Optional: no tiles means
     // the answer goes to the FSUIPC terrain instead.
@@ -74,6 +83,10 @@ struct Status {
     // is what answers HAT/HOT -- it is the surface the sim will actually put the
     // aircraft on -- and the database above is only the fallback.
     bool        terrainProbe = false;    // add-on loaded and ticking?
+    // Why the probe is not the source, as a short phrase from probe::health().
+    // Empty when the probe is answering, or when there is nothing more useful to
+    // say than that. Only meaningful while `terrainProbe` is false.
+    std::string terrainProbeNote;
     // The fan-out to the extra IG PCs (Relay.h). The relay is read once, at
     // startup, so everything here is a fixed description of what it is doing
     // apart from the two counters and the `ready` count.

@@ -29,10 +29,10 @@
 //
 //    It deliberately does NOT use FSUIPC. The earlier version walked the grid
 //    one cell at a time, writing the aircraft's position over FSUIPC and reading
-//    0x0020 back, which needed slew mode to make the writes land and took hours
-//    per tile. The surface query is answered about the *world* rather than about
-//    where the aircraft is, so there is nothing to reposition, nothing to hold,
-//    and no slew mode to get right.
+//    0x0020 back, which took hours per tile and depended on the sim's own mode
+//    (it froze while the sim was held in slew). The surface query is answered
+//    about the *world* rather than about where the aircraft is, so there is
+//    nothing to reposition, nothing to hold still, and no mode to get right.
 //
 //  Three modes
 //    probe    sample a handful of well-spread points and print sim vs SRTM.
@@ -288,8 +288,7 @@ public:
                       "(no shared region to open)";
             return false;
         }
-        void* v = ::MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0,
-                                  sizeof(terrain::probe::Shared));
+        void* v = ::MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, 0);
         if (!v) {
             ::CloseHandle(h);
             m_error = "could not map the probe's shared region";
@@ -301,7 +300,8 @@ public:
             s->capacity != terrain::probe::kMaxQueries) {
             ::UnmapViewOfFile(v);
             ::CloseHandle(h);
-            m_error = "the shared region belongs to a different build of the probe";
+            m_error = "the shared region belongs to a different build of the probe"
+                      " (deploy the same revision of PdkTerrainProbe.dll and TerrainBaker)";
             return false;
         }
         m_map = h;
@@ -327,13 +327,37 @@ public:
         const uint32_t before = m_shm->ticks;
         ::Sleep(250);
         if (m_shm->ticks == before) {
-            m_error = "the probe is loaded but its simulation tick is not running";
+            m_error = describeStoppedTick();
             return false;
         }
         return true;
     }
 
     const std::string& error() const { return m_error; }
+
+    // A compact readout of the diagnostic counters for the probe mode's header:
+    // a healthy baseline to compare a later failing run against.  Empty when the
+    // add-on is an older build that leaves the diagnostic word unset.
+    std::string summary() {
+        if (!open()) return std::string();
+        const uint32_t d = m_shm->diag;
+        if (!(d & terrain::probe::diag::kPresent)) return std::string();
+
+        const auto f = [d](uint32_t shift, uint32_t mask) {
+            return terrain::probe::diag::field(d, shift, mask);
+        };
+        return "probe: creates " + std::to_string(f(terrain::probe::diag::kCreatesShift, terrain::probe::diag::kCreatesMask)) +
+               ", removes " + std::to_string(f(terrain::probe::diag::kRemovesShift, terrain::probe::diag::kRemovesMask)) +
+               ", attach fails " + std::to_string(f(terrain::probe::diag::kAttachFailsShift, terrain::probe::diag::kAttachFailsMask)) +
+               ", attached " + ((d & terrain::probe::diag::kAttached) ? "yes" : "no") +
+               ", host is user " + ((d & terrain::probe::diag::kHostIsUser) ? "yes" : "no") +
+               ", tick rate " + std::to_string(m_shm->tickRateHz) + " Hz" +
+               ", frames " + std::to_string(m_shm->frameTicks) +
+               (m_shm->frameTicks ? " (frame tick)" : " (object tick only)") +
+               ", own thread " + ((d & terrain::probe::diag::kOwnThreadTick) ? "yes" : "no") +
+               ", sim " + simState() +
+               ", query failures " + std::to_string(m_shm->queryFails);
+    }
 
     // Ask about a batch of points; one height and one "answered" flag per point.
     // A point the sim has no surface for comes back with `ok` false, which the
@@ -389,6 +413,55 @@ public:
     }
 
 private:
+    // What the sim has been doing, from the message events the add-on saw.
+    // Prepar3D's own ticks stop while the sim is paused -- that is the case the
+    // add-on's thread exists for -- so a pause is only the whole story when
+    // nothing is ticking at all.
+    std::string simState() {
+        const uint32_t e = m_shm->simEvents;
+        std::string s = (e & terrain::probe::simEvent::kPausedNow) ? "paused" : "running";
+        if (e & terrain::probe::simEvent::kSawPause)        s += ", saw pause";
+        if (e & terrain::probe::simEvent::kSawUnpause)      s += ", saw unpause";
+        if (e & terrain::probe::simEvent::kSawScenarioLoad) s += ", scenario load";
+        if (e & terrain::probe::simEvent::kSawVehicleChange) s += ", vehicle change";
+        if (e & terrain::probe::simEvent::kSawFrozen)       s += ", frozen";
+        return s;
+    }
+
+    // Nothing is ticking at all, which now takes all three: the per-frame event,
+    // the object's simulation and the add-on's own thread.  Spelling out what
+    // Prepar3D was willing to deliver saves a rig trip.
+    std::string describeStoppedTick() {
+        const uint32_t d = m_shm->diag;
+        if (!(d & terrain::probe::diag::kPresent)) {
+            return "the probe is loaded but its tick is not running "
+                   "(an older add-on with no diagnostics; deploy the current one)";
+        }
+        const uint32_t creates = terrain::probe::diag::field(
+            d, terrain::probe::diag::kCreatesShift, terrain::probe::diag::kCreatesMask);
+        const uint32_t removes = terrain::probe::diag::field(
+            d, terrain::probe::diag::kRemovesShift, terrain::probe::diag::kRemovesMask);
+        const bool paused = (m_shm->simEvents & terrain::probe::simEvent::kPausedNow) != 0;
+
+        if (m_shm->frameTicks == 0) {
+            std::string s = "the probe is loaded but no tick is running: ";
+            if (m_shm->frameFails > 0) {
+                s += "the per-frame event could not be set up (" +
+                     std::to_string(m_shm->frameFails) + " failures)";
+            } else {
+                s += "the per-frame event was registered but has not been delivered";
+            }
+            return s + (paused ? ", the sim is paused" : "") +
+                   ", and the add-on's own thread has not taken over"
+                   ". Deploy the current PdkTerrainProbe.dll.";
+        }
+        return "the probe's per-frame tick has stopped after " + std::to_string(m_shm->frameTicks) +
+               " frames" + (paused ? " (sim paused)" : "") +
+               ", so Prepar3D's frame loop is not running"
+               ", and the add-on's own thread has not taken over"
+               " (creates " + std::to_string(creates) +
+               ", removes " + std::to_string(removes) + ")";
+    }
     // Wait for one whole write pass: the sequence goes odd at its start and back
     // to even at its end.
     bool waitForPass(int ms) {
@@ -584,6 +657,11 @@ int modeProbe(const Options& o) {
 
     std::printf("probe: surface queries through PdkTerrainProbe.dll, asked from %.0f m\n\n",
                 o.altitude);
+
+    // The add-on's own view of what it is bound to, when this build fills it:
+    // a healthy baseline to compare a later failing run against.
+    const std::string probeDiag = link.summary();
+    if (!probeDiag.empty()) std::printf("%s\n\n", probeDiag.c_str());
 
     // Centre plus the four corners of each box. Far apart on purpose: it shows
     // the sim really is answering per point rather than handing back one number.

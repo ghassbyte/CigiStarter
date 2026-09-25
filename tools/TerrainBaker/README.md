@@ -54,10 +54,12 @@ for `compose` explicitly.
 
 ## Running a bake
 
-Do it on the **IG PC**, with Prepar3D up and running (not paused) and the
-`PdkTerrainProbe` add-on loaded. Nothing else has to be held still: the bake
-reads the world rather than steering the aircraft, so the vendor program or
-`CigiP3dBridge` may be running, and the aircraft is never touched.
+Do it on the **IG PC**, with Prepar3D up and the `PdkTerrainProbe` add-on loaded.
+The add-on answers from Prepar3D's own ticks while the sim is running and from a
+thread of its own while the sim is paused, so a bake works through a pause too;
+`probe` (below) proves it before you start. Nothing else has to be held still:
+the bake reads the world rather than steering the aircraft, so the vendor program
+or `CigiP3dBridge` may be running, and the aircraft is never touched.
 
 The IG PC needs `TerrainBaker.exe` and the SRTM base in `<exeDir>\terrain\` —
 either the 1″ set or the 90 m set. A bake of the default boxes consults only
@@ -118,11 +120,21 @@ Read **four** things:
 | `worst repeat \|d\|` | `0.00 m` | the answer is tied to the point asked, not invented |
 | final `VERDICT` | `answering per point and repeating` | safe to survey |
 
-It exits non-zero (2) if the add-on answers nothing — Prepar3D paused, scenery
-not loaded, or the DLL not installed — or if the repeat disagrees, in which case
-the answers are not tied to the points asked and the bake must not run. The
+It exits non-zero (2) if the add-on answers nothing — scenery not loaded, the DLL
+not installed, or no tick reaching the sim — or if the repeat disagrees, in which
+case the answers are not tied to the points asked and the bake must not run. The
 message names which case it is; `tasklist /m PdkTerrainProbe.dll` is the direct
-check that the DLL is loaded.
+check that the DLL is loaded. A **paused** Prepar3D is not a failure: Prepar3D's
+own ticks stop while it is paused, and the add-on's own thread keeps the table
+answering underneath them.
+
+After a successful gate it prints a `probe: creates …, frames …, own thread …,
+sim …` line — the add-on's own view of what is driving it, straight from the
+shared diagnostic word and tail. `frames` is the count of Prepar3D's per-frame
+events (nonzero is the frame tick answering; zero from an old DLL is the object
+tick alone), and `own thread yes` means Prepar3D's ticks have stopped and the
+add-on is answering from its own thread — what a paused sim looks like. Keep the
+line with the run. `tools\PdkTerrainProbe\README.md` has the layout.
 
 **Record the probe output** with the bake (screenshot or pasted), together with
 the `compose` residual. They are the evidence the run was sound, and a property
@@ -218,8 +230,9 @@ point's altitude, so a baked tile and a live answer describe the same surface.
 |---|---|
 | `PdkTerrainProbe.dll is not loaded in Prepar3D` | add-on not installed for this Prepar3D version, or the sim has not been restarted since it was |
 | `the probe is loaded but has no surface service` | the DLL could not get the service; check `lastError` in the shared region |
-| `the probe is loaded but its simulation tick is not running` | Prepar3D is paused, on a menu, or still loading |
-| `the sim stopped answering` mid-run | Prepar3D was paused, closed or hung; re-run and it resumes |
+| `the probe is loaded but no tick is running` | neither Prepar3D's per-frame event nor the object simulation has ever run, and the add-on's own thread has not taken over either — so the whole add-on is not running. Deploy the current `PdkTerrainProbe.dll`; the message carries `frameFails` (`tools\PdkTerrainProbe\README.md`) |
+| `the probe's per-frame tick has stopped after N frames` | Prepar3D's frame loop is not running and the add-on's own thread has not taken over — the add-on is not running at all. A load or a modal dialog resumes on its own; if it does not, the sim is hung |
+| `the sim stopped answering` mid-run | Prepar3D was closed or hung; re-run after reading the `probe:` line |
 | `cannot append to ...` + `FAILED`, exit 1 | `--out` (or its parent) not writable, or is a file |
 | probe says `no surface` for every point | scenery not loaded yet, or the sim is at a different location |
 | probe says `repeat queries disagree` | answers are not tied to the points asked; do not bake with this |

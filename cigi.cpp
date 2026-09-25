@@ -149,4 +149,40 @@ bool parseHatHotRequest(const uint8_t* msg, size_t size, HatHotRequest& out) {
     return true;
 }
 
+//-----------------------------------------------------------------------------
+// Entity Control (48 bytes)
+//
+//   off  len  field
+//   0    1    message id      = 0x02 (2)
+//   1    1    message size    = 48
+//   2    2    entity ID       (uint16 LE)
+//   4    1    entity state
+//   5    1    flags
+//   6    2    entity type
+//   8    2    parent ID
+//   10   1    opacity
+//   11   1    reserved
+//   12   4    roll            (float LE, degrees)
+//   16   4    pitch           (float LE, degrees)
+//   20   4    yaw             (float LE, degrees)
+//   24   8    latitude        (double LE, degrees)
+//   32   8    longitude       (double LE, degrees)
+//   40   8    altitude        (double LE, metres MSL)
+//
+// Only the pose is decoded: the offsets below are the CIGI 3.3 layout, checked
+// field by field against the rig capture, where the doubles at 24/32/40 read
+// back as the aircraft's own Atang-to-Halim track.
+//-----------------------------------------------------------------------------
+bool parseEntityControl(const uint8_t* msg, size_t size, EntityControl& out) {
+    if (size < kEntityControlSize ||
+        msg[0] != static_cast<uint8_t>(MsgEntityControl)) {
+        return false;
+    }
+    out.entityId  = readU16LE(msg + 2);
+    out.latDeg    = readF64LE(msg + 24);
+    out.lonDeg    = readF64LE(msg + 32);
+    out.altMeters = readF64LE(msg + 40);
+    return true;
+}
+
 } // namespace cigi

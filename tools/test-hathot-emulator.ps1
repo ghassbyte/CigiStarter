@@ -397,14 +397,57 @@ function Probe-F64([int]$Offset) {
 function Get-ProbeHeader {
     if ($null -eq (Open-ProbeShm)) { return $null }
     if ((Probe-I32 0) -ne 0x50425450) { return $null }   # 'PTBP'
-    return [pscustomobject]@{
-        Version    = Probe-I32 4
-        Capacity   = Probe-I32 8
-        TickRateHz = Probe-I32 12
-        Alive      = Probe-I32 16
-        Ticks      = Probe-I32 28
-        QueryFails = Probe-I32 40
+    # The diag word occupies the old padding at offset 44 (TerrainProbeIpc.h);
+    # it is diagnostic only and 0 on an add-on build that predates it. ReadInt32
+    # is signed and bit 31 is always set, so lift it to a non-negative int64
+    # before any shift: a [uint32] cast of the negative number would throw.
+    $diag = [int64](Probe-I32 44) -band 0xFFFFFFFFL
+    # kVersion 2 appended a diagnostic tail after the two tables: frameTicks,
+    # simEvents, simMode, frameFails at the old end of the region (20528+). A
+    # v1 mapping stops at 20528, so only touch it when the version says it is
+    # there. Bit 0 of simEvents is the live "paused" flag.
+    $version    = Probe-I32 4
+    $frameTicks = 0; $simEvents = 0; $simMode = 0; $frameFails = 0
+    if ($version -ge 2) {
+        $frameTicks = [uint32](Probe-I32 20528)
+        $simEvents  = [uint32](Probe-I32 20532)
+        $simMode    = [uint32](Probe-I32 20536)
+        $frameFails = [uint32](Probe-I32 20540)
     }
+    return [pscustomobject]@{
+        Version           = $version
+        Capacity          = Probe-I32 8
+        TickRateHz        = Probe-I32 12
+        Alive             = Probe-I32 16
+        LastError         = Probe-I32 20
+        ProbePid          = [uint32](Probe-I32 24)
+        Ticks             = [uint32](Probe-I32 28)
+        QueryFails        = [uint32](Probe-I32 40)
+        Diag              = $diag
+        Present           = ((($diag -shr 31) -band 1) -eq 1)
+        Creates           = [int](($diag -shr 0)  -band 0xFF)
+        Removes           = [int](($diag -shr 8)  -band 0xFF)
+        AttachFails       = [int](($diag -shr 16) -band 0xFF)
+        Attached          = [bool]($diag -band 0x01000000)
+        HostIsUser        = [bool]($diag -band 0x02000000)
+        SkippedUserCreate = [bool]($diag -band 0x04000000)
+        OwnThreadTick     = [bool]($diag -band 0x08000000)
+        FrameTicks        = $frameTicks
+        SimEvents         = $simEvents
+        SimMode           = $simMode
+        FrameFails        = $frameFails
+        Paused            = (($simEvents -band 1) -ne 0)
+    }
+}
+
+# Watch the tick counter move: the failure this whole readout exists for is a
+# probe that is loaded (Alive = 1) but whose simulation tick has stopped, which
+# reads as "ticking at 60 Hz" from the header alone.
+function Test-ProbeTicking {
+    if ($null -eq (Open-ProbeShm)) { return $false }
+    $before = [uint32](Probe-I32 28)
+    Start-Sleep -Milliseconds 400
+    return [uint32](Probe-I32 28) -ne $before
 }
 
 # The row the probe holds for one HAT/HOT id (the id is the key it echoed back),
@@ -578,7 +621,27 @@ try {
     Initialize-Bench
     $probe = Get-ProbeHeader
     if ($null -ne $probe -and $probe.Alive -eq 1) {
-        Write-Host ("  probe       loaded, ticking at {0} Hz, {1} query failure(s)" -f $probe.TickRateHz, $probe.QueryFails)
+        $ticking = Test-ProbeTicking
+        Write-Host ("  probe       loaded, {0} at {1} Hz, {2} query failure(s)" -f `
+            $(if ($ticking) { 'ticking' } else { 'TICK STOPPED' }), $probe.TickRateHz, $probe.QueryFails)
+        if ($probe.Present) {
+            Write-Host ("              creates {0}, removes {1}, attach fails {2}, attached {3}, host is user {4}, skipped user create {5}" -f `
+                $probe.Creates, $probe.Removes, $probe.AttachFails, $probe.Attached, $probe.HostIsUser, $probe.SkippedUserCreate)
+        } else {
+            Write-Host '              (this add-on build does not publish diagnostics; rebuild PdkTerrainProbe.dll)'
+        }
+        if ($probe.Version -ge 2) {
+            Write-Host ("              frames {0}, frame failures {1}, object mode 0x{2:X}, sim {3}{4}" -f `
+                $probe.FrameTicks, $probe.FrameFails, $probe.SimMode,
+                $(if ($probe.Paused) { 'paused' } else { 'running' }),
+                $(if ($probe.OwnThreadTick) { ", answered by the add-on's own thread" } else { '' }))
+        }
+        if (-not $ticking) {
+            Write-Host '              the probe is loaded but its tick has stopped: HAT/HOT will fall back to the database / FSUIPC' -ForegroundColor Yellow
+            if ($probe.Version -ge 2 -and $probe.FrameTicks -eq 0) {
+                Write-Host '              neither the per-frame event nor the object simulation has ever run' -ForegroundColor Yellow
+            }
+        }
     } else {
         Write-Host '  probe       not loaded (answers come from the terrain database / FSUIPC)'
     }
@@ -769,6 +832,10 @@ Run-Test 'the sim is the terrain source' {
     $hdr = Get-ProbeHeader
     if ($null -eq $hdr -or $hdr.Alive -ne 1) {
         Skip "CigiStarter's HOT equals the probe's reading" 'the PdkTerrainProbe add-on is not loaded in Prepar3D'
+        return
+    }
+    if (-not (Test-ProbeTicking)) {
+        Skip "CigiStarter's HOT equals the probe's reading" 'the add-on is loaded but its simulation tick has stopped (see the probe readout above)'
         return
     }
     if (-not (Set-HatHotFields -Type Extended -System Geodetic -Id 29 -X $Halim.X -Y $Halim.Y -Z $Alt -Period 0)) {

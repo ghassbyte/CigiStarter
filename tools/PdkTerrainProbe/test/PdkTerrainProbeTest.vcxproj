@@ -43,7 +43,12 @@
       <WarningLevel>Level3</WarningLevel>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\..\..\..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>WIN32;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- The test creates its own mapping. Give it a name of its own so that,
+           run while a real add-on is loaded, CreateFileMapping cannot hand it
+           the live region (whose header its initial memset would then wipe).
+           Applied to both TUs: TerrainProbe.cpp's reader must look for the same
+           name the test creates. -->
+      <PreprocessorDefinitions>WIN32;WIN32_LEAN_AND_MEAN;TERRAIN_PROBE_MAPPING_NAME=&quot;Local\\CigiStarter.TerrainProbeTest.v1&quot;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Debug'">_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Release'">NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>

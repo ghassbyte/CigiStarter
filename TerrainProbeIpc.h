@@ -15,8 +15,9 @@
 //     runway's flattening or any changed scenery, and has to be re-baked
 //     whenever the scenery changes; and
 //   * the ground altitude under the local aircraft, read from Prepar3D over
-//     FSUIPC, which freezes while the aircraft is being flown into the sim with
-//     slew writes.
+//     FSUIPC, which describes one point only -- the ground beneath the sim's own
+//     aircraft -- and froze outright while the program that drives the aircraft
+//     held the sim in slew.
 //
 // Prepar3D itself will answer the question directly, from the same terrain it
 // will actually put the aircraft on, through the PDK's surface query service.
@@ -65,7 +66,14 @@ namespace probe {
 
 // 'PTBP' in little-endian byte order, so a hex dump of the region is readable.
 constexpr uint32_t kMagic   = 0x50425450u;  // 'P','T','B','P'
-constexpr uint32_t kVersion = 1u;
+// 2: the probe can be driven by Prepar3D's per-frame event instead of the
+//    object's own simulation, and a diagnostic tail was appended after the
+//    tables (see Shared).  The tick hung off the user object stops whenever the
+//    sim is paused -- and the rig is flown with the sim held paused -- so a tick
+//    that survives a pause is not optional.  The append does not move
+//    any existing offset, but the mapping is bigger, so the version was bumped
+//    to make a half-updated pair fail visibly rather than read a short region.
+constexpr uint32_t kVersion = 2u;
 
 // Slots in the table; the probe answers every enabled one on each simulation
 // tick.  The HOST only ever asks about six points (see the capture analysis:
@@ -79,7 +87,19 @@ constexpr int kMaxQueries = 256;
 // Session-local, because CigiStarter and Prepar3D both run in the logged-on
 // user's session (the IG PC starts unattended at logon rather than as a
 // service).  A `Global\` name would need elevation on one side or the other.
-constexpr const wchar_t* kMappingName = L"Local\\CigiStarter.TerrainProbe.v1";
+//
+// The name is a plain narrow literal so a build can override it, and is widened
+// below.  The contract test (tools\PdkTerrainProbe\test) overrides it on
+// purpose: it creates a region of its own, and if it shared this name
+// CreateFileMapping would hand it a *running* add-on's region and its initial
+// memset would wipe the live header -- which then reads as a probe that is
+// loaded but has stopped answering.  No shipped binary defines the override.
+#ifndef TERRAIN_PROBE_MAPPING_NAME
+#define TERRAIN_PROBE_MAPPING_NAME "Local\\CigiStarter.TerrainProbe.v1"
+#endif
+#define TERRAIN_PROBE_WIDE_(x) L##x
+#define TERRAIN_PROBE_WIDE(x)  TERRAIN_PROBE_WIDE_(x)
+constexpr const wchar_t* kMappingName = TERRAIN_PROBE_WIDE(TERRAIN_PROBE_MAPPING_NAME);
 
 enum Status : uint32_t {
     StatusNone    = 0,  // not asked, or not answered yet
@@ -87,6 +107,48 @@ enum Status : uint32_t {
     StatusFailed  = 2,  // Prepar3D's terrain system refused the query (E_FAIL)
     StatusInvalid = 3,  // the point was not usable (NaN/out of range)
 };
+
+// The layout of `Shared::diag`.  Purely diagnostic: nothing on either side makes
+// a decision from it, so a stale or absent value is harmless.  The add-on sets
+// `kPresent` once it fills the word at all, which is how a reader tells a new
+// add-on (diagnosis available) from an older one (diag stays 0).
+namespace diag {
+constexpr uint32_t kCreatesShift      = 0;         // user-object creates
+constexpr uint32_t kCreatesMask       = 0xFFu;
+constexpr uint32_t kRemovesShift      = 8;         // the tick's object, or a user object
+constexpr uint32_t kRemovesMask       = 0xFFu;
+constexpr uint32_t kAttachFailsShift  = 16;
+constexpr uint32_t kAttachFailsMask   = 0xFFu;
+constexpr uint32_t kAttached          = 1u << 24;  // a simulation is bound right now
+constexpr uint32_t kHostIsUser        = 1u << 25;  // bound object == GetUserObject() at the last tick
+constexpr uint32_t kSkippedUserCreate = 1u << 26;  // a user-object create was ignored (already bound)
+constexpr uint32_t kOwnThreadTick     = 1u << 27;  // the newest pass was serviced by the add-on's own thread
+constexpr uint32_t kPresent           = 1u << 31;  // the add-on fills this word
+
+inline uint32_t field(uint32_t d, uint32_t shift, uint32_t mask) {
+    return (d >> shift) & mask;
+}
+} // namespace diag
+
+// Bits in `Shared::simEvents`, the simulator messages the add-on has seen.  These
+// say what the *sim* was doing, which is what tells a paused sim apart from a
+// genuine loss of the terrain service: Prepar3D stops signalling its per-frame
+// event while it is paused, so "paused" plus a silent frame event is the normal
+// state the add-on's own thread exists to cover.  Bit 0 is live (set for as long
+// as the sim is paused); bits 8-15 are sticky, so a reader that looks after the
+// fact can still see what happened.
+namespace simEvent {
+constexpr uint32_t kPausedNow        = 1u << 0;   // live: sim paused right now
+constexpr uint32_t kSawPause         = 1u << 8;
+constexpr uint32_t kSawUnpause       = 1u << 9;
+constexpr uint32_t kSawSimStop       = 1u << 10;  // SimConnect "simulating" stopped
+constexpr uint32_t kSawSimStart      = 1u << 11;
+constexpr uint32_t kSawScenarioLoad  = 1u << 12;
+constexpr uint32_t kSawScenarioReady = 1u << 13;
+constexpr uint32_t kSawVehicleChange = 1u << 14;
+constexpr uint32_t kSawFrozen        = 1u << 15;
+constexpr uint32_t kSawUnfrozen      = 1u << 16;
+} // namespace simEvent
 
 // One point to look up.  `altMeters` is the altitude of the point being tested
 // (the HAT point, i.e. where the HOST wants to know the height *of* the
@@ -134,10 +196,25 @@ struct Shared {
     volatile uint32_t reqSeq;       // bumped by the IG once it has written queries
     volatile uint32_t rspSeq;       // seqlock over results: odd = being rewritten
     volatile uint32_t queryFails;   // how many points Prepar3D has refused
-    uint32_t          _pad;
+    // Diagnostic word, written by the add-on so a reader can tell *why* the
+    // probe is not answering and not merely that it is not.  It occupies the
+    // field that used to be padding, so the layout and `kVersion` do not move;
+    // an add-on built before this existed leaves it 0 and a reader must treat a
+    // 0 as "no diagnosis available" rather than as fact (see diag::kPresent).
+    volatile uint32_t diag;
 
     Query  queries[kMaxQueries];
     Result results[kMaxQueries];
+
+    // --- Diagnostic tail (kVersion 2) -------------------------------------
+    // Appended *after* the tables on purpose: no slot offset moves, so the only
+    // cost is a slightly larger mapping.  A build that leaves these zero is an
+    // older add-on; a reader must treat a zero as "not known" rather than as a
+    // reading.  Nothing on either side decides anything from them.
+    volatile uint32_t frameTicks;   // Prepar3D frame-event callbacks seen
+    volatile uint32_t simEvents;    // simulator messages, see simEvent::*
+    volatile uint32_t simMode;      // GetMode() at the last object tick (0 if never)
+    volatile uint32_t frameFails;   // frame-event RegisterCallback failures
 };
 #pragma pack(pop)
 
@@ -150,8 +227,10 @@ static_assert(sizeof(Result) == 48, "Result must stay 48 bytes (44 + tail pad)")
 static_assert(offsetof(Shared, queries) == 48, "queries[] must start at 48");
 static_assert(offsetof(Shared, results) == 48 + kMaxQueries * 32,
               "results[] must follow queries[] exactly");
-static_assert(sizeof(Shared) == 48 + kMaxQueries * (32 + 48),
-              "Shared must be exactly header + both tables");
+static_assert(offsetof(Shared, frameTicks) == 48 + kMaxQueries * (32 + 48),
+              "the diagnostic tail must sit exactly after both tables");
+static_assert(sizeof(Shared) == 48 + kMaxQueries * (32 + 48) + 16,
+              "Shared must be header + both tables + the 4-word diagnostic tail");
 
 } // namespace probe
 } // namespace terrain

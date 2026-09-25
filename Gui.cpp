@@ -40,9 +40,10 @@ constexpr int kMargin    = 12;
 constexpr int kClientW   = 660;
 constexpr int kStatusW   = kClientW - 2 * kMargin;
 // Tall enough for the whole status block plus a couple of wrapped lines: the
-// relay line grows with the counters, and a line that wraps (the terrain
-// database summary carries a folder path) must not push a reading out of sight.
-constexpr int kStatusH   = 336;
+// relay line grows with the counters, the terrain block gains a "Probe" line
+// when the add-on is not answering, and a line that wraps (the terrain database
+// summary carries a folder path) must not push a reading out of sight.
+constexpr int kStatusH   = 356;
 constexpr int kSettingsY = kMargin + kStatusH + kMargin;
 constexpr int kRowH      = 24;
 // The flow-control check box gets a row of its own under the HAT/HOT row: there
@@ -205,11 +206,11 @@ void Refresh() {
     // The terrain lines have their own branches because they can be missing.
     // The sim's own terrain probe answers HAT/HOT when it is loaded, because it
     // reports the surface the sim will actually fly the aircraft onto; the
-    // offline database is the fallback (the sim's ground model freezes in slew,
-    // which is why a database existed at all), and FSUIPC supplies the
-    // aircraft's own position and altitude and stands in for terrain neither
+    // offline database is the fallback (the sim's ground model froze in slew,
+    // which is why a database existed at all), and FSUIPC supplies the sim's
+    // own aircraft position and altitude and stands in for terrain neither
     // covers.
-    wchar_t terrain[384];
+    wchar_t terrain[1024];
     if (!s.respondingHatHot) {
         std::swprintf(terrain, ARRAYSIZE(terrain),
                       L"  HAT/HOT   : not answered (switched off)");
@@ -229,20 +230,53 @@ void Refresh() {
           : (s.terrainTiles > 0) ? L"answering from the terrain database"
           : (s.terrainConnected  ? L"answering from FSUIPC"
                                  : L"switched on, but nothing to answer from");
+
+        // Which tick the probe is answering from, and why it is not, when there
+        // is something to say: without this the operator sees only that the
+        // answer fell back -- never whether the add-on is missing, has stopped
+        // ticking, has had its tick left on an object the sim no longer
+        // simulates (the reposition failure), or has fallen back to its own
+        // thread because Prepar3D stopped ticking (a pause).
+        wchar_t probeLine[320] = L"";
+        if (s.respondingHatHot && !s.terrainProbeNote.empty()) {
+            std::swprintf(probeLine, ARRAYSIZE(probeLine),
+                          L"\r\n  Probe     : %hs", s.terrainProbeNote.c_str());
+        }
+
+        // The aircraft the entity-relative answers are anchored to. When the
+        // HOST has sent an Entity Control it is the truth the HOST itself uses;
+        // otherwise the sim link stands in. Shown because a frozen anchor (the
+        // failure that parked the aircraft on the departure ground) is otherwise
+        // invisible -- the requests are the same offsets wherever it is.
+        wchar_t anchorLine[256] = L"";
+        if (!s.anchorFromHost && !s.terrainConnected) {
+            std::swprintf(anchorLine, ARRAYSIZE(anchorLine),
+                          L"\r\n  Anchor    : none yet -- no Entity Control, "
+                          L"no FSUIPC link");
+        } else {
+            std::swprintf(anchorLine, ARRAYSIZE(anchorLine),
+                          L"\r\n  Anchor    : %s %.5f, %.5f, %.0f ft",
+                          s.anchorFromHost ? L"HOST Entity Control"
+                                           : L"FSUIPC (sim)",
+                          s.anchorLatDeg, s.anchorLonDeg,
+                          s.anchorAltMeters * kFeetPerMetre);
+        }
+
         if (s.terrainConnected) {
             std::swprintf(terrain, ARRAYSIZE(terrain),
                           L"%s\r\n"
-                          L"  HAT/HOT   : %s\r\n"
-                          L"  Terrain   : %.0f ft under the aircraft, %.0f ft aircraft",
-                          dbline, source,
+                          L"  HAT/HOT   : %s%s%s\r\n"
+                          L"  Terrain   : %.0f ft ground under the sim aircraft, "
+                          L"%.0f ft sim aircraft",
+                          dbline, source, probeLine, anchorLine,
                           s.groundAltMeters * kFeetPerMetre,
                           s.aircraftAltMeters * kFeetPerMetre);
         } else {
             std::swprintf(terrain, ARRAYSIZE(terrain),
                           L"%s\r\n"
-                          L"  HAT/HOT   : %s\r\n"
+                          L"  HAT/HOT   : %s%s%s\r\n"
                           L"  FSUIPC    : no link to Prepar3D",
-                          dbline, source);
+                          dbline, source, probeLine, anchorLine);
         }
     }
 

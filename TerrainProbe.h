@@ -6,10 +6,10 @@
 //    the IG reports, so a wrong or stale HOT flies the aircraft into the ground.
 //    The offline SRTM database (TerrainDb.h) is a copy of the world that has to
 //    be re-baked whenever the scenery changes, and the FSUIPC reading
-//    (TerrainSource.h) freezes while the aircraft is slewed.  Prepar3D will
-//    answer the same question directly, from the terrain it is actually about
-//    to place the aircraft on, if a small PDK add-on asks it -- see
-//    TerrainProbeIpc.h and tools\PdkTerrainProbe.
+//    (TerrainSource.h) only ever describes the ground under the sim's own
+//    aircraft.  Prepar3D will answer the same question directly, from the
+//    terrain it is actually about to place the aircraft on, if a small PDK
+//    add-on asks it -- see TerrainProbeIpc.h and tools\PdkTerrainProbe.
 //
 //  What it does
 //    Talks to PdkTerrainProbe.dll, an add-on loaded into the local Prepar3D,
@@ -32,12 +32,50 @@
 //=============================================================================
 #pragma once
 
+#include <cstdint>
+
 namespace terrain {
 namespace probe {
 
 // True when the add-on is loaded in the local Prepar3D and its tick is
 // advancing. Cheap enough to call per request.
 bool available();
+
+// A fuller picture than available(), for the operator window and a bench
+// readout: why the probe is or is not answering.  Everything here is advisory
+// -- no decision is taken from it -- and it degrades to zeros when the mapping
+// is absent or the add-on is an older build that leaves the diagnostic word
+// unset (`diagnosed` is then false and the diagnostics below must be ignored).
+struct Health {
+    bool     mappingOpen = false;  // the shared region is open
+    bool     alive       = false;  // the add-on has its surface service
+    bool     ticking     = false;  // its tick advanced within the last 1.5 s
+    int32_t  lastError   = 0;      // last HRESULT the add-on recorded
+    uint32_t tickRateHz  = 0;      // rate it registered the tick at
+    uint32_t ticks       = 0;      // heartbeat counter, as last read
+    uint32_t queryFails  = 0;      // points Prepar3D has refused
+    bool     diagnosed         = false;  // the add-on fills the diagnostic word
+    uint32_t objectCreates     = 0;      // object-create callbacks it saw
+    uint32_t objectRemoves     = 0;      // object-remove callbacks it saw
+    uint32_t attachFails       = 0;      // RegisterSimulation failures
+    bool     attached          = false;  // a simulation is bound right now
+    bool     hostIsUser        = false;  // bound object was the user object
+    bool     skippedUserCreate = false;  // a user-object create was ignored
+    // The tick that actually runs.  Prepar3D stops signalling its per-frame
+    // event while it is paused, so the probe also keeps a thread of its own and
+    // falls back to it once every Prepar3D-provided tick has gone quiet; these
+    // say which tick is answering, what the sim last did, and what the object's
+    // mode was when its tick last ran.  Zero when an older add-on is loaded
+    // (kVersion 1), which is also the case `diagnosed` covers.
+    uint32_t frameTicks  = 0;      // frame-event callbacks the add-on has seen
+    uint32_t simEvents   = 0;      // simulator messages, see simEvent::*
+    uint32_t simMode     = 0;      // GetMode() at the last object tick
+    uint32_t frameFails  = 0;      // frame-event RegisterCallback failures
+    bool     simPaused   = false;  // the sim reported itself paused (simEvents bit 0)
+    bool     ownThread   = false;  // the newest pass came from the add-on's own thread
+};
+
+Health health();
 
 // Ask the sim for the terrain height at a point.
 //

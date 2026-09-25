@@ -12,10 +12,28 @@
 // or teleported around the world.  What comes back is the surface Prepar3D will
 // actually place the aircraft on, runway flattening, add-on scenery and all.
 //
-// It runs in-process (loaded from an add-on.xml as a PDK DLL) and is driven by
-// the sim's own update loop, so no extra thread ever touches the terrain
-// engine.  The shape below - DLLStart/DLLStop plus an ISimulation registered on
-// an object - is the same one the SDK's own RadarAltimeter sample uses.
+// It runs in-process (loaded from an add-on.xml as a PDK DLL).  Prepar3D's own
+// callbacks drive it wherever they reach: the per-frame event, which is the tick
+// of a running sim, and -- until that event has been seen -- an ISimulation on
+// an object, the shape the SDK's own RadarAltimeter sample uses.
+//
+// Why the frame event, and why a clock behind it
+// ----------------------------------------------
+// An ISimulation on an object is only called while the sim is *simulating* it,
+// and the program that drives the aircraft holds Prepar3D paused while it does
+// so (the rig's vendor program does so throughout, with slew off).  A paused sim
+// stops calling the object's simulation, so a probe driven by it goes silent
+// exactly when the HOST is asking for terrain.  Prepar3D's global per-frame event
+// was the answer: it is signalled once per rendered frame and was taken to keep
+// running while the sim is paused.  On v5 it does.
+//
+// On the rig's v6 it does not: a pause stops the frame loop as well, so both of
+// Prepar3D's ticks go quiet, and with the sim held paused throughout the HOST
+// gets no terrain answer at all.  Prepar3D offers nothing else that ticks on its
+// own while it is paused, so the probe keeps a thread of its own (watchProc), and
+// uses it only when every tick Prepar3D provides has fallen silent.  That one
+// call is the only time the terrain engine is touched off Prepar3D's thread, and
+// it can only happen while the sim's own loop has stopped.
 //
 // See TerrainProbe.h for the shared-memory contract, and README.md in this
 // folder for how it is installed on the IG PC.
@@ -25,6 +43,11 @@
 
 #include <Pdk.h>
 #include <ISimObject.h>
+// The EVENTID_* GUIDs are declared with DEFINE_GUID, which is an extern
+// declaration unless INITGUID is in scope. This is the only translation unit in
+// the DLL, so instantiate them here.
+#include <initguid.h>
+#include <IEventService.h>
 
 #include "TerrainProbeIpc.h"
 
@@ -61,6 +84,83 @@ class ProbeSim;
 ProbeSim*                 g_sim  = nullptr;  // one ref held by us, one by the host object
 IBaseObjectV400*          g_host = nullptr;  // the object we registered the tick on
 
+// Prepar3D's global event service, and the callbacks we leave with it.  The
+// frame event is the real tick (see the file header); the message callback only
+// records what the sim was doing, so a stopped object tick can be told apart
+// from a stopped render loop.
+IEventServiceV400*        g_events = nullptr;
+class ProbeCallback;
+ProbeCallback*            g_frameCb = nullptr;
+ProbeCallback*            g_msgCb   = nullptr;
+
+// Set once a frame event has actually arrived, and the wall clock of the most
+// recent one.  Update() defers to the frame event while it is live, so the two
+// never both service the table (and never race); if the event stops being
+// delivered, Update() takes over again on its own.
+volatile LONG             g_frameSeen  = 0;
+volatile DWORD            g_lastFrameMs = 0;
+constexpr DWORD           kFrameFallbackMs = 500;
+
+// The last-resort tick: a thread of our own, because Prepar3D stopping is
+// exactly the case that matters here (see the file header).  It only ever
+// services the table once *both* Prepar3D-provided ticks -- the frame event and
+// the object's simulation -- have been silent for a whole grace period, so a
+// running sim never runs it, and the off-thread call into the terrain engine can
+// only ever happen while the sim's own loop has stalled.
+HANDLE        g_watch      = nullptr;
+volatile LONG g_watchStop  = 0;
+bool          g_watchLast  = false;  // the newest pass came from the thread
+constexpr DWORD kWatchMs      = 50;   // how often the thread looks
+constexpr DWORD kWatchGraceMs = 1000; // silence before it steps in at all
+
+// Only one tick may rewrite the table at a time.  The frame event and an object
+// simulation are both delivered on Prepar3D's main thread; the thread above is
+// the one that is not, and it is the reason this is here rather than left to the
+// sim to have serialised.
+volatile LONG             g_servicing = 0;
+
+// Diagnostic counters published in `Shared::diag` (TerrainProbeIpc.h).  They
+// exist so a reader can tell *why* the probe went quiet: the tick hangs off one
+// object, and a sim that hands the user role to a new object -- which a
+// reposition can do -- can leave the tick bound to one it no longer simulates.
+// Nothing below changes behaviour; it only observes.
+uint32_t g_creates           = 0;
+uint32_t g_removes           = 0;
+uint32_t g_attachFails       = 0;
+uint32_t g_frameFails        = 0;
+bool     g_attached          = false;
+bool     g_hostIsUser        = false;
+bool     g_skippedUserCreate = false;
+
+void publishDiag() {
+    if (!g_shm) return;
+    const auto sat = [](uint32_t n) { return n > 0xFFu ? 0xFFu : n; };
+    uint32_t v = terrain::probe::diag::kPresent;
+    v |= sat(g_creates)     << terrain::probe::diag::kCreatesShift;
+    v |= sat(g_removes)     << terrain::probe::diag::kRemovesShift;
+    v |= sat(g_attachFails) << terrain::probe::diag::kAttachFailsShift;
+    if (g_attached)          v |= terrain::probe::diag::kAttached;
+    if (g_hostIsUser)        v |= terrain::probe::diag::kHostIsUser;
+    if (g_skippedUserCreate) v |= terrain::probe::diag::kSkippedUserCreate;
+    if (g_watchLast)         v |= terrain::probe::diag::kOwnThreadTick;
+    g_shm->diag = v;
+    g_shm->frameFails = g_frameFails;
+}
+
+// Is the object our tick is on still the sim's user object?  Sampled on each
+// tick, so if the user role moves to a new object while the old one is still
+// ticking for a moment, the diag word records it before the tick stops.
+void sampleHostIsUser() {
+    g_hostIsUser = false;
+    if (!g_objects || !g_host) return;
+
+    IBaseObjectV400* user = nullptr;
+    if (SUCCEEDED(g_objects->GetUserObject(&user)) && user) {
+        g_hostIsUser = (static_cast<IUnknown*>(user) == static_cast<IUnknown*>(g_host));
+        user->Release();
+    }
+}
+
 constexpr float  kTickHz      = 60.0f;
 constexpr double kDegToRad    = 3.14159265358979323846 / 180.0;
 constexpr double kMetersToFt  = 3.280839895013123;
@@ -94,6 +194,7 @@ void openShared() {
     g_shm->probePid   = ::GetCurrentProcessId();
     g_shm->alive      = 0;
     g_shm->lastError  = 0;
+    publishDiag();  // sets kPresent, so a reader knows the diag word is meaningful
 }
 
 void closeShared() {
@@ -111,43 +212,28 @@ void closeShared() {
 //-----------------------------------------------------------------------------
 // The tick
 //
-// Prepar3D calls Update() on the sim's thread at the rate registered below.
-// That is the only place the terrain engine is touched: the readers on the
-// other side of the mapping never call into Prepar3D at all.
+// One pass over the query table.  Prepar3D never sees the readers on the other
+// side of the mapping: they only drop points into the table, and this is what
+// asks the sim about them.  Every tick funnels through here -- the per-frame
+// event, the object's own simulation and the add-on's own thread -- so the work
+// has exactly one implementation and no two passes can overlap.
+//
+// `fromSim` is false for the add-on's own thread, the one tick that does not run
+// on Prepar3D's thread.  It skips the object-manager calls, which only fill in
+// diagnostics; the surface query is the one service it has to borrow.
 //-----------------------------------------------------------------------------
-class ProbeSim final : public ISimulation
-{
-public:
-    volatile LONG m_ref = 1;
+void serviceTick(bool fromSim) {
+    if (!g_shm) return;
+    if (::InterlockedExchange(&g_servicing, 1) != 0) return;  // a pass is already running
 
-    ULONG STDMETHODCALLTYPE AddRef() override { return ::InterlockedIncrement(&m_ref); }
+    ++g_shm->ticks;
+    g_shm->alive = (g_surface != nullptr) ? 1 : 0;
 
-    ULONG STDMETHODCALLTYPE Release() override {
-        const ULONG n = ::InterlockedDecrement(&m_ref);
-        if (n == 0) delete this;
-        return n;
-    }
+    g_watchLast = !fromSim;
+    if (fromSim) sampleHostIsUser();
+    publishDiag();
 
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
-        if (!ppv) return E_POINTER;
-        *ppv = nullptr;
-        if (::IsEqualIID(riid, IID_IUnknown) || ::IsEqualIID(riid, IID_ISimulationV310) ||
-            ::IsEqualIID(riid, IID_ISimulationV01)) {
-            *ppv = static_cast<ISimulation*>(this);
-        }
-        if (!*ppv) return E_NOINTERFACE;
-        AddRef();
-        return S_OK;
-    }
-
-    STDMETHOD(Update)(double /*dDeltaT*/) override {
-        if (!g_shm) return S_OK;
-
-        ++g_shm->ticks;
-        g_shm->alive = (g_surface != nullptr) ? 1 : 0;
-
-        if (!g_surface || g_shm->reqSeq == 0) return S_OK;
-
+    if (g_surface && g_shm->reqSeq != 0) {
         // Seqlock: an odd value tells the reader the rows below are being
         // rewritten and it should try again rather than trust a half-written
         // one.  This is the only synchronisation between the two processes.
@@ -197,6 +283,173 @@ public:
         }
 
         ++g_shm->rspSeq;
+    }
+
+    ::InterlockedExchange(&g_servicing, 0);
+}
+
+//-----------------------------------------------------------------------------
+// The frame event: once per rendered frame, the tick of a running sim
+//-----------------------------------------------------------------------------
+void probeOnFrame() {
+    if (!g_shm) return;
+    ::InterlockedIncrement(reinterpret_cast<volatile LONG*>(&g_shm->frameTicks));
+    g_lastFrameMs = ::GetTickCount();
+    ::InterlockedExchange(&g_frameSeen, 1);
+    serviceTick(true);
+}
+
+void probeOnMessage(IParameterListV400* p) {
+    if (!g_shm || !p || p->GetCount() < 1) return;
+
+    const uint64_t id = p->GetParameter(0).Value;
+    uint32_t e = g_shm->simEvents;
+    switch (id) {
+    case EVENT_MESSAGE_SIM_PAUSED:
+        e |= terrain::probe::simEvent::kPausedNow | terrain::probe::simEvent::kSawPause;
+        break;
+    case EVENT_MESSAGE_SIM_UNPAUSED:
+        e |= terrain::probe::simEvent::kSawUnpause;
+        e &= ~terrain::probe::simEvent::kPausedNow;
+        break;
+    case EVENT_MESSAGE_SIMCONNECT_SIMULATION_STOP:  e |= terrain::probe::simEvent::kSawSimStop;       break;
+    case EVENT_MESSAGE_SIMCONNECT_SIMULATION_START: e |= terrain::probe::simEvent::kSawSimStart;      break;
+    case EVENT_MESSAGE_SCENARIO_LOADING:            e |= terrain::probe::simEvent::kSawScenarioLoad;  break;
+    case EVENT_MESSAGE_SCENARIO_LOADED:             e |= terrain::probe::simEvent::kSawScenarioReady; break;
+    case EVENT_MESSAGE_CHANGE_USER_VEHICLE_START:   e |= terrain::probe::simEvent::kSawVehicleChange; break;
+    case EVENT_MESSAGE_SIM_FROZEN:                  e |= terrain::probe::simEvent::kSawFrozen;        break;
+    case EVENT_MESSAGE_SIM_UNFROZEN:                e |= terrain::probe::simEvent::kSawUnfrozen;      break;
+    default: return;
+    }
+    g_shm->simEvents = e;
+}
+
+//-----------------------------------------------------------------------------
+// The last resort: a clock of our own
+//
+// Prepar3D documents the frame event as "signaled once per frame", and on v5 it
+// kept signalling it while the sim was paused -- which is why the probe was
+// moved off the object's simulation in the first place.  On the rig's v6 it does
+// not: a pause stops the frame loop as well, so both of Prepar3D's ticks go
+// quiet, and with the sim held paused throughout the HOST is left without a
+// terrain answer at all.  Nothing Prepar3D offers ticks on its own while it is
+// paused, so the probe keeps one.
+//
+// It is deliberately the *last* resort, not a second opinion: it only services
+// the table after every tick Prepar3D provides has been silent for a whole grace
+// period, so a running sim never reaches it.  That also bounds what it can cost:
+// the one call it makes off Prepar3D's thread happens only while Prepar3D's own
+// loop has stopped, when the terrain engine is not being driven by a frame.
+//-----------------------------------------------------------------------------
+bool frameLive() {
+    return g_frameSeen != 0 && (::GetTickCount() - g_lastFrameMs) <= kFrameFallbackMs;
+}
+
+DWORD WINAPI watchProc(LPVOID) {
+    uint32_t lastTicks  = 0;
+    DWORD    lastChange = ::GetTickCount();
+
+    while (::InterlockedCompareExchange(&g_watchStop, 0, 0) == 0) {
+        ::Sleep(kWatchMs);
+        if (::InterlockedCompareExchange(&g_watchStop, 0, 0) != 0) break;
+        if (!g_shm) { lastTicks = 0; lastChange = ::GetTickCount(); continue; }
+
+        // Watch the heartbeat rather than the frame event alone: any tick that
+        // services the table refreshes it, so the thread stays out of the way
+        // for as long as something Prepar3D provides is still doing the work.
+        const uint32_t t   = g_shm->ticks;
+        const DWORD    now = ::GetTickCount();
+        if (t != lastTicks) { lastTicks = t; lastChange = now; }
+
+        if (frameLive()) continue;
+        if (static_cast<DWORD>(now - lastChange) < kWatchGraceMs) continue;
+
+        serviceTick(false);
+    }
+    return 0;
+}
+
+// The events carry no payload we need, so one callback class serves both; the
+// kind only picks the handler.
+class ProbeCallback final : public ICallbackV400
+{
+public:
+    enum Kind { Frame, Message };
+    explicit ProbeCallback(Kind k) : m_kind(k) {}
+
+    ULONG STDMETHODCALLTYPE AddRef() override { return ::InterlockedIncrement(&m_ref); }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG n = ::InterlockedDecrement(&m_ref);
+        if (n == 0) delete this;
+        return n;
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        *ppv = nullptr;
+        if (::IsEqualIID(riid, IID_IUnknown) || ::IsEqualIID(riid, IID_ICallbackV400)) {
+            *ppv = static_cast<ICallbackV400*>(this);
+        }
+        if (!*ppv) return E_NOINTERFACE;
+        AddRef();
+        return S_OK;
+    }
+
+    void Invoke(IParameterListV400* pParams) override {
+        if (m_kind == Frame) probeOnFrame();
+        else                 probeOnMessage(pParams);
+    }
+
+private:
+    volatile LONG m_ref = 1;
+    Kind          m_kind;
+};
+
+//-----------------------------------------------------------------------------
+// The object fallback
+//
+// Only used until a frame event has been seen (and again if one stops arriving).
+// Prepar3D calls Update() at the rate registered on attach, but a paused sim
+// does not call it at all -- which is why the frame event became the tick, and
+// why the add-on keeps a clock of its own behind both of them.
+//-----------------------------------------------------------------------------
+class ProbeSim final : public ISimulation
+{
+public:
+    volatile LONG m_ref = 1;
+
+    ULONG STDMETHODCALLTYPE AddRef() override { return ::InterlockedIncrement(&m_ref); }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG n = ::InterlockedDecrement(&m_ref);
+        if (n == 0) delete this;
+        return n;
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        *ppv = nullptr;
+        if (::IsEqualIID(riid, IID_IUnknown) || ::IsEqualIID(riid, IID_ISimulationV310) ||
+            ::IsEqualIID(riid, IID_ISimulationV01)) {
+            *ppv = static_cast<ISimulation*>(this);
+        }
+        if (!*ppv) return E_NOINTERFACE;
+        AddRef();
+        return S_OK;
+    }
+
+    STDMETHOD(Update)(double /*dDeltaT*/) override {
+        if (!g_shm) return S_OK;
+
+        // Record the object's mode while it is still being simulated.  Once the
+        // sim pauses this freezes, and a frozen mode alongside a frozen object
+        // tick is the fingerprint of the failure the frame tick exists to fix.
+        if (g_host) g_shm->simMode = static_cast<uint32_t>(g_host->GetMode());
+
+        // Defer to the frame event while it is live, so the table is serviced by
+        // one tick and not two.
+        if (!frameLive()) serviceTick(true);
         return S_OK;
     }
 
@@ -222,6 +475,8 @@ void attachTo(IBaseObjectV400* obj) {
     const HRESULT hr = obj->RegisterSimulation(sim, kTickHz);
     if (FAILED(hr)) {
         publish(hr);
+        ++g_attachFails;
+        publishDiag();
         sim->Release();
         return;
     }
@@ -229,7 +484,9 @@ void attachTo(IBaseObjectV400* obj) {
     obj->AddRef();
     g_host = obj;
     g_sim  = sim;
+    g_attached = true;
     publish(0);
+    publishDiag();
 
     // Record the rate we asked the sim for, so the reader can tell a probe that
     // is merely running from one the sim is actually ticking.
@@ -240,29 +497,54 @@ void detach() {
     if (g_host) { g_host->Release(); g_host = nullptr; }
     if (g_sim)  { g_sim->Release();  g_sim  = nullptr; }
     if (g_shm)  { g_shm->alive = 0; }
+    g_attached   = false;
+    g_hostIsUser = false;
+    publishDiag();
 }
 
 HRESULT STDMETHODCALLTYPE onObjectCreate(__in IUnknown& obj) {
-    if (g_sim) return S_OK;
-
     IBaseObjectV400* base = nullptr;
     if (FAILED(obj.QueryInterface(IID_IBaseObjectV400, reinterpret_cast<void**>(&base))) || !base) {
         return S_OK;
     }
 
-    if (base->IsUser()) attachTo(base);
+    if (base->IsUser()) {
+        // Counted only for the user object: that is the only create that can
+        // move the tick, and counting every object would saturate the field
+        // during scenario load and hide the one change that matters.
+        ++g_creates;
+        publishDiag();
+
+        if (g_sim) {
+            // The sim has offered a new user object while we are still bound to
+            // the old one.  The old object may stop being simulated -- which is
+            // the "tick stopped" failure this diagnostic is here to catch -- so
+            // record that it happened.  Deliberately no re-attach: this build
+            // observes only.
+            g_skippedUserCreate = true;
+            publishDiag();
+        } else {
+            attachTo(base);
+        }
+    }
     base->Release();
     return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE onObjectRemove(__in IUnknown& obj) {
-    if (!g_host) return S_OK;
-
     IBaseObjectV400* base = nullptr;
-    if (SUCCEEDED(obj.QueryInterface(IID_IBaseObjectV400, reinterpret_cast<void**>(&base))) && base) {
-        if (static_cast<IUnknown*>(base) == static_cast<IUnknown*>(g_host)) detach();
-        base->Release();
+    if (FAILED(obj.QueryInterface(IID_IBaseObjectV400, reinterpret_cast<void**>(&base))) || !base) {
+        return S_OK;
     }
+
+    // Only the object we tick on, or a user object, is worth counting.
+    const bool ours = g_host && static_cast<IUnknown*>(base) == static_cast<IUnknown*>(g_host);
+    if (ours || base->IsUser()) {
+        ++g_removes;
+        publishDiag();
+    }
+    if (ours) detach();
+    base->Release();
     return S_OK;
 }
 
@@ -293,6 +575,36 @@ STDMETHODIMP_(void) DLLStart(__in __notnull IPdk* pPdk)
         publish(E_NOINTERFACE);
     }
 
+    // The frame event is the tick of a running sim (see the file header).
+    // Registered before the object manager so the probe still ticks if that
+    // query is the one that fails -- and so there is no moment where the object
+    // tick is the only one.  The interface grew over the SDKs and the versions do
+    // not share a GUID, so ask for the one the headers in use declare, exactly as
+    // the SDK's own PdkServices helper does.
+#if defined(P3D_MANAGER_V520)
+    const HRESULT evHr = pPdk->QueryService(SID_EventService, IID_IEventServiceV510,
+#else
+    const HRESULT evHr = pPdk->QueryService(SID_EventService, IID_IEventServiceV600,
+#endif
+                                            reinterpret_cast<void**>(&g_events));
+    if (SUCCEEDED(evHr) && g_events) {
+        g_frameCb = new ProbeCallback(ProbeCallback::Frame);
+        g_msgCb   = new ProbeCallback(ProbeCallback::Message);
+        if (FAILED(g_events->RegisterCallback(EVENTID_Frame, g_frameCb))) ++g_frameFails;
+        g_events->RegisterCallback(EVENTID_Message, g_msgCb);
+    } else {
+        g_events = nullptr;
+        ++g_frameFails;
+    }
+    publishDiag();
+
+    // The clock of our own, for the times Prepar3D stops ticking: see watchProc.
+    // Started here rather than after the object manager because the surface
+    // service is the only thing it needs, and it must be running before the sim
+    // can be paused.
+    g_watchStop = 0;
+    g_watch = ::CreateThread(nullptr, 0, watchProc, nullptr, 0, nullptr);
+
     if (FAILED(pPdk->QueryService(SID_SimObjectManager, __uuidof(ObjectManager),
                                   reinterpret_cast<void**>(&g_objects)))) {
         g_objects = nullptr;
@@ -306,6 +618,26 @@ STDMETHODIMP_(void) DLLStart(__in __notnull IPdk* pPdk)
 
 STDMETHODIMP_(void) DLLStop()
 {
+    // The thread first: it touches the mapping and the surface service, so
+    // nothing below may run while it could still be in a pass.  If it will not
+    // come back the process is going away anyway; stop rather than pull the
+    // services out from under it.
+    if (g_watch) {
+        ::InterlockedExchange(&g_watchStop, 1);
+        const DWORD done = ::WaitForSingleObject(g_watch, 5000);
+        ::CloseHandle(g_watch);
+        g_watch = nullptr;
+        if (done != WAIT_OBJECT_0) return;
+    }
+
+    if (g_events) {
+        if (g_frameCb) g_events->UnregisterCallback(EVENTID_Frame, g_frameCb);
+        if (g_msgCb)   g_events->UnregisterCallback(EVENTID_Message, g_msgCb);
+        g_events = nullptr;
+    }
+    if (g_frameCb) { g_frameCb->Release(); g_frameCb = nullptr; }
+    if (g_msgCb)   { g_msgCb->Release();   g_msgCb   = nullptr; }
+
     if (g_objects) {
         g_objects->UnRegisterOnObjectCreateCallback(onObjectCreate);
         g_objects->UnRegisterOnObjectRemoveCallback(onObjectRemove);
