@@ -147,6 +147,10 @@ the enable flag: Prepar3D keeps one `ACTIVE` entry per package in
 perfect while the DLL never appears. Look there first, then at the folder and
 `add-on.xml`, then at Prepar3D's own logging for loading errors.
 
+It has been loaded on both editions of the sim in use — Professional Plus (the
+bench's v5) and Professional (the rig's v6) — so it is not restricted to
+Professional Plus.
+
 No elevation is needed, and unlike the fan-out it needs no Npcap.
 
 ## Behaviour when it is not there

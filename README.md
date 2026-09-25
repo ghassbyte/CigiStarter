@@ -492,10 +492,14 @@ will actually place the aircraft on.
   (`netstat -ano -p udp | findstr :8000` shows it). Point the sim's CIGI
   elsewhere in that file, or leave the sim alone and run the bench on other ports
   (`--ig-port` / `--host-port`, see [Usage](#usage)).
-- **It has been loaded on v5 and v6.** The bench's Professional Plus v5 was the
-  first, then the rig's **v6**. Whether the deployment's Prepar3D Professional
-  edition accepts it is still open; if it is refused, the answers come from the
-  database ([below](#terrain-database)) and nothing else changes.
+- **It has been loaded on v5 and v6, and answers on both.** The bench's
+  Professional Plus v5 was the first, then the rig's v6 — the **Professional**
+  edition the deployment runs — where CigiStarter and the add-on run together
+  through the rig's pause with the answers staying on the sim's own terrain. That
+  is the case the add-on's own tick exists for (below), and it settles the
+  edition question: a Professional sim accepts the add-on. If some other install
+  refuses it, the answers come from the database
+  ([below](#terrain-database)) and nothing else changes.
 - **Not having it** is not an error: CigiStarter opens the shared region lazily
   and re-tries every 2 s, so the two may be started in either order, and with no
   add-on the answer simply comes from the database as before.
