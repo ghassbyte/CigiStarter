@@ -197,9 +197,16 @@ the table is serviced by, in order,
    never both service the table);
 3. a **thread of the add-on's own**, started at load and stopped at unload, which
    steps in only after both of the above have been silent for a full second
-   (`kWatchGraceMs`). A running sim never reaches it, so the one call made off
+   (`kWatchGraceMs`), and then services the table every `kWatchMs` (50 ms) for as
+   long as they stay silent. Prepar3D's silence is timed from its own last tick,
+   not from the shared heartbeat, because the thread's own passes advance that
+   heartbeat too. A running sim never reaches it, so the calls made off
    Prepar3D's thread can only happen while Prepar3D's own loop has stopped —
-   which is when the terrain engine is not being driven by a frame.
+   which is when the terrain engine is not being driven by a frame. The rate
+   matters: a paused sim is the rig's normal state, and at about one answer a
+   second every request for a point that had moved waited out CigiStarter's
+   first-answer budget, dropping it onto the database and stalling the SOF
+   stream while it waited.
 
 Because the frame event needs no object at all, the object-lifecycle failure mode
 — a reposition handing the user role to a fresh object and stranding the tick —

@@ -510,7 +510,8 @@ will actually place the aircraft on.
   asking; the per-frame event was the answer, and on v5 it does keep running while
   the sim is paused. **On the rig's v6 it does not** — pausing stops the frame loop
   as well — so the add-on also starts a thread of its own at load and hands it the
-  table once every Prepar3D tick has been silent for a second. A running sim never
+  table once every Prepar3D tick has been silent for a second, and every 50 ms
+  from then on while they stay silent. A running sim never
   reaches that thread; the rig runs paused throughout, so in practice that thread
   is the tick that answers there. Either way the answers come from the sim's own
   terrain engine rather than from a one-point reading under its aircraft. The

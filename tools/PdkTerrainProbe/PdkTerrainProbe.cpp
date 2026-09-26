@@ -31,9 +31,9 @@
 // Prepar3D's ticks go quiet, and with the sim held paused throughout the HOST
 // gets no terrain answer at all.  Prepar3D offers nothing else that ticks on its
 // own while it is paused, so the probe keeps a thread of its own (watchProc), and
-// uses it only when every tick Prepar3D provides has fallen silent.  That one
-// call is the only time the terrain engine is touched off Prepar3D's thread, and
-// it can only happen while the sim's own loop has stopped.
+// uses it only when every tick Prepar3D provides has fallen silent.  Those calls
+// are the only time the terrain engine is touched off Prepar3D's thread, and they
+// can only happen while the sim's own loop has stopped.
 //
 // See TerrainProbe.h for the shared-memory contract, and README.md in this
 // folder for how it is installed on the IG PC.
@@ -101,6 +101,14 @@ volatile LONG             g_frameSeen  = 0;
 volatile DWORD            g_lastFrameMs = 0;
 constexpr DWORD           kFrameFallbackMs = 500;
 
+// When a Prepar3D-provided tick last arrived -- the frame event or the object's
+// simulation.  The watchdog below times Prepar3D's silence by this, NOT by the
+// shared heartbeat (`g_shm->ticks`): the watchdog's own passes bump that
+// heartbeat too, so timing silence by it made the thread re-arm its own grace
+// period on every pass and service the table only about once a second, rather
+// than every kWatchMs.  See watchProc.
+volatile DWORD            g_lastSimTickMs = 0;
+
 // The last-resort tick: a thread of our own, because Prepar3D stopping is
 // exactly the case that matters here (see the file header).  It only ever
 // services the table once *both* Prepar3D-provided ticks -- the frame event and
@@ -110,8 +118,8 @@ constexpr DWORD           kFrameFallbackMs = 500;
 HANDLE        g_watch      = nullptr;
 volatile LONG g_watchStop  = 0;
 bool          g_watchLast  = false;  // the newest pass came from the thread
-constexpr DWORD kWatchMs      = 50;   // how often the thread looks
-constexpr DWORD kWatchGraceMs = 1000; // silence before it steps in at all
+constexpr DWORD kWatchMs      = 50;   // how often the thread looks (and services, once in charge)
+constexpr DWORD kWatchGraceMs = 1000; // Prepar3D silence before it steps in at all
 
 // Only one tick may rewrite the table at a time.  The frame event and an object
 // simulation are both delivered on Prepar3D's main thread; the thread above is
@@ -224,6 +232,11 @@ void closeShared() {
 //-----------------------------------------------------------------------------
 void serviceTick(bool fromSim) {
     if (!g_shm) return;
+    // A Prepar3D-provided tick is the fast path, and this is what the watchdog
+    // times Prepar3D's silence from.  Recorded before the servicing gate so a
+    // tick that lands while another pass runs still counts as "Prepar3D is
+    // alive", which is the only thing the watchdog reads it for.
+    if (fromSim) g_lastSimTickMs = ::GetTickCount();
     if (::InterlockedExchange(&g_servicing, 1) != 0) return;  // a pass is already running
 
     ++g_shm->ticks;
@@ -335,34 +348,40 @@ void probeOnMessage(IParameterListV400* p) {
 // terrain answer at all.  Nothing Prepar3D offers ticks on its own while it is
 // paused, so the probe keeps one.
 //
-// It is deliberately the *last* resort, not a second opinion: it only services
-// the table after every tick Prepar3D provides has been silent for a whole grace
-// period, so a running sim never reaches it.  That also bounds what it can cost:
-// the one call it makes off Prepar3D's thread happens only while Prepar3D's own
-// loop has stopped, when the terrain engine is not being driven by a frame.
+// It is deliberately the *last* resort, not a second opinion: it only starts
+// servicing the table after every tick Prepar3D provides has been silent for a
+// whole grace period, so a running sim never reaches it.  Once it has taken over
+// it keeps servicing the table every kWatchMs for as long as they stay silent, so
+// a paused sim gets answers at a usable rate rather than about once a second.
+// That also bounds what it can cost: the calls it makes off Prepar3D's thread
+// happen only while Prepar3D's own loop has stopped, when the terrain engine is
+// not being driven by a frame.
 //-----------------------------------------------------------------------------
 bool frameLive() {
     return g_frameSeen != 0 && (::GetTickCount() - g_lastFrameMs) <= kFrameFallbackMs;
 }
 
 DWORD WINAPI watchProc(LPVOID) {
-    uint32_t lastTicks  = 0;
-    DWORD    lastChange = ::GetTickCount();
+    // The grace period is measured from Prepar3D's last tick; with none seen yet
+    // it starts now, so a sim that has not ticked within kWatchGraceMs of load is
+    // taken as stopped.
+    g_lastSimTickMs = ::GetTickCount();
 
     while (::InterlockedCompareExchange(&g_watchStop, 0, 0) == 0) {
         ::Sleep(kWatchMs);
         if (::InterlockedCompareExchange(&g_watchStop, 0, 0) != 0) break;
-        if (!g_shm) { lastTicks = 0; lastChange = ::GetTickCount(); continue; }
+        if (!g_shm) { g_lastSimTickMs = ::GetTickCount(); continue; }
 
-        // Watch the heartbeat rather than the frame event alone: any tick that
-        // services the table refreshes it, so the thread stays out of the way
-        // for as long as something Prepar3D provides is still doing the work.
-        const uint32_t t   = g_shm->ticks;
-        const DWORD    now = ::GetTickCount();
-        if (t != lastTicks) { lastTicks = t; lastChange = now; }
-
+        // Defer while either Prepar3D-provided tick is live: the frame event
+        // through frameLive(), the object's simulation through the timestamp.
+        // Once both have been silent for the whole grace period this thread is
+        // in charge, and it keeps servicing the table every pass -- not once per
+        // grace period.  A pass of its own must not re-arm the grace period, or
+        // the table is answered at about 1 Hz while the sim is paused and every
+        // request for a point that has moved waits out CigiStarter's first-
+        // answer budget and stalls the SOF stream instead.
         if (frameLive()) continue;
-        if (static_cast<DWORD>(now - lastChange) < kWatchGraceMs) continue;
+        if (static_cast<DWORD>(::GetTickCount() - g_lastSimTickMs) < kWatchGraceMs) continue;
 
         serviceTick(false);
     }
