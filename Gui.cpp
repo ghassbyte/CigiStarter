@@ -210,7 +210,7 @@ void Refresh() {
     // which is why a database existed at all), and FSUIPC supplies the sim's
     // own aircraft position and altitude and stands in for terrain neither
     // covers.
-    wchar_t terrain[1024];
+    wchar_t terrain[1536];
     if (!s.respondingHatHot) {
         std::swprintf(terrain, ARRAYSIZE(terrain),
                       L"  HAT/HOT   : not answered (switched off)");
@@ -262,22 +262,41 @@ void Refresh() {
                           s.anchorAltMeters * kFeetPerMetre);
         }
 
-        if (s.terrainConnected) {
-            std::swprintf(terrain, ARRAYSIZE(terrain),
-                          L"%s\r\n"
-                          L"  HAT/HOT   : %s%s%s\r\n"
-                          L"  Terrain   : %.0f ft ground under the sim aircraft, "
+        // The ground the answers actually use: the terrain at the aircraft they
+        // are anchored to, from the same chain the answer is taken from. This is
+        // the number to watch. The sim's own FSUIPC reading below it is *not*
+        // the answer, and can hold still at the last reposition (Prepar3D
+        // freezes its ground model in slew) while the answers follow the
+        // aircraft -- the failure this line exists to make visible.
+        wchar_t answerLine[160] = L"";
+        if (s.anchorGroundValid) {
+            std::swprintf(answerLine, ARRAYSIZE(answerLine),
+                          L"\r\n  Terrain   : %.0f ft ground under the %s aircraft",
+                          s.anchorGroundMeters * kFeetPerMetre,
+                          s.anchorFromHost ? L"HOST" : L"sim");
+        }
+
+        // The sim's own FSUIPC reading, kept only while it is a different
+        // aircraft from the anchor. When the anchor *is* the sim the line above
+        // already describes it, and a second copy would only invite the mistake
+        // of reading this one as the answer.
+        wchar_t simLine[224] = L"";
+        if (!s.terrainConnected) {
+            std::swprintf(simLine, ARRAYSIZE(simLine),
+                          L"\r\n  Sim       : no FSUIPC link to Prepar3D");
+        } else if (s.anchorFromHost) {
+            std::swprintf(simLine, ARRAYSIZE(simLine),
+                          L"\r\n  Sim       : %.0f ft ground under the sim aircraft, "
                           L"%.0f ft sim aircraft",
-                          dbline, source, probeLine, anchorLine,
                           s.groundAltMeters * kFeetPerMetre,
                           s.aircraftAltMeters * kFeetPerMetre);
-        } else {
-            std::swprintf(terrain, ARRAYSIZE(terrain),
-                          L"%s\r\n"
-                          L"  HAT/HOT   : %s%s%s\r\n"
-                          L"  FSUIPC    : no link to Prepar3D",
-                          dbline, source, probeLine, anchorLine);
         }
+
+        std::swprintf(terrain, ARRAYSIZE(terrain),
+                      L"%s\r\n"
+                      L"  HAT/HOT   : %s%s%s%s%s",
+                      dbline, source, probeLine, anchorLine,
+                      answerLine, simLine);
     }
 
     // The relay block, likewise: off is a normal state, and each way of being
@@ -335,7 +354,7 @@ void Refresh() {
         std::swprintf(pacing, ARRAYSIZE(pacing), L"paced to the HOST");
     }
 
-    wchar_t text[2048];
+    wchar_t text[3072];
     std::swprintf(text, ARRAYSIZE(text),
         L"  HOST %hs:%u   ->  SOF destination\r\n"
         L"  IG   :%u   (this IG is %hs)\r\n"

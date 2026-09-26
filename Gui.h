@@ -70,6 +70,12 @@ struct Status {
     double   anchorLatDeg      = 0.0;
     double   anchorLonDeg      = 0.0;
     double   anchorAltMeters   = 0.0;
+    // The ground under the anchored aircraft, from the same source chain the
+    // HAT/HOT answers take (TerrainProbe / TerrainDb / FSUIPC). This is the
+    // terrain the answers actually use, so it follows a reposition even when the
+    // sim's own ground model -- `groundAltMeters` below -- has frozen.
+    bool     anchorGroundValid  = false;
+    double   anchorGroundMeters = 0.0;
     // The offline terrain database the HAT/HOT answer falls back to (TerrainDb.h)
     // when the sim's own terrain probe is not answering. Optional: no tiles means
     // the answer goes to the FSUIPC terrain instead.

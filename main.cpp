@@ -451,6 +451,28 @@ static bool nearAircraft(double latDeg, double lonDeg, const terrain::Sample& si
            (kGeodeticToleranceMeters * kGeodeticToleranceMeters);
 }
 
+// The terrain height for one point, from the same chain every HAT/HOT answer is
+// taken from: the sim's own terrain engine through the PDK add-on (the surface
+// Prepar3D will actually put the aircraft on), else the offline database, else
+// -- only when it describes the same place -- the sim's ground height read over
+// FSUIPC. `key` is the probe slot to ask on, so a caller that is not answering a
+// real request (the window's anchor readout) can keep a slot of its own.
+static bool terrainAt(unsigned key,
+                      double latDeg, double lonDeg, double altMeters,
+                      bool simFallback, const terrain::Sample& sim,
+                      double& hot) {
+    if (terrain::probe::elevation(key, latDeg, lonDeg, altMeters, hot)) {
+        return true;
+    }
+    bool ok = false;
+    hot = terrain::db::elevation(latDeg, lonDeg, ok);
+    if (!ok && simFallback) {
+        hot = sim.groundAltMeters;
+        ok  = true;
+    }
+    return ok;
+}
+
 // The answer to one HAT/HOT request. `valid` follows the ICD: it is cleared
 // whenever the IG cannot return the requested datum, which here means "we have
 // no terrain to report" (a request for another entity, no anchor at all for an
@@ -516,25 +538,18 @@ static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
         simFallback = sim.connected && nearAircraft(lat, lon, sim);
     }
 
-    // The sim's own terrain engine first, through the PDK add-on: it reports
-    // the surface Prepar3D will actually put the aircraft on (a runway's
-    // flattening included), it stays live for the whole flight, and it answers
-    // a geodetic request anywhere rather than only under the aircraft. The
-    // offline database, and then the sim's ground height read over FSUIPC, are
-    // the fallbacks for when the add-on is not loaded. See TerrainProbe.h.
+    // The chain below answers from the sim's own terrain engine first, through
+    // the PDK add-on: it reports the surface Prepar3D will actually put the
+    // aircraft on (a runway's flattening included), it stays live for the whole
+    // flight, and it answers a geodetic request anywhere rather than only under
+    // the aircraft. The offline database, and then the sim's ground height read
+    // over FSUIPC, are the fallbacks for when the add-on is not loaded. See
+    // TerrainProbe.h.
     bool   ok  = false;
     double hot = 0.0;
 
-    if (terrain::probe::elevation(static_cast<unsigned>(req.hatHotId),
-                                  lat, lon, testAlt, hot)) {
-        ok = true;
-    } else {
-        hot = terrain::db::elevation(lat, lon, ok);
-        if (!ok && simFallback) {
-            hot = sim.groundAltMeters;
-            ok  = true;
-        }
-    }
+    ok = terrainAt(static_cast<unsigned>(req.hatHotId), lat, lon, testAlt,
+                   simFallback, sim, hot);
     if (!ok) {
         // No terrain to report: leave Valid = 0 so the HOST ignores the packet
         // rather than following a fabricated HOT of 0 into the ground.
@@ -545,6 +560,38 @@ static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
     ans.hat   = testAlt - hot;
     ans.valid = true;
     return ans;
+}
+
+//-----------------------------------------------------------------------------
+// The terrain under the anchored aircraft, for the window
+//-----------------------------------------------------------------------------
+// The ground *the answers use*: the height at the aircraft the entity-relative
+// requests are anchored to, from the same chain answerHatHot() takes. The
+// transmit loop refreshes it every frame, so the window has a live reading even
+// when the sim's own FSUIPC ground height has stopped following the aircraft (a
+// slew freezes Prepar3D's ground model). The FSUIPC reading is not the answer
+// and must not be mistaken for one.
+//
+// A reserved probe key keeps this read out of the slots the real HAT/HOT ids
+// use; the HOST's ids are one byte wide, so 0xFFFFFFFF can never collide.
+constexpr unsigned kAnchorTerrainKey = 0xFFFFFFFFu;
+
+struct AnchorTerrain {
+    bool   valid     = false;  // a source could answer for the anchor
+    double hotMeters = 0.0;    // ground height there, metres MSL
+};
+static std::mutex    g_anchorTerrainMtx;
+static AnchorTerrain g_anchorTerrain;
+
+static void noteAnchorTerrain(bool valid, double hotMeters) {
+    std::lock_guard<std::mutex> lk(g_anchorTerrainMtx);
+    g_anchorTerrain.valid     = valid;
+    g_anchorTerrain.hotMeters = hotMeters;
+}
+
+static AnchorTerrain anchorTerrain() {
+    std::lock_guard<std::mutex> lk(g_anchorTerrainMtx);
+    return g_anchorTerrain;
 }
 
 //-----------------------------------------------------------------------------
@@ -629,6 +676,13 @@ static gui::Status uiStatus() {
     s.anchorLatDeg    = anchor.seen ? anchor.latDeg    : sim.latDeg;
     s.anchorLonDeg    = anchor.seen ? anchor.lonDeg    : sim.lonDeg;
     s.anchorAltMeters = anchor.seen ? anchor.altMeters : sim.aircraftAltMeters;
+
+    // The ground the answers use at that anchor, refreshed by the transmit loop
+    // (see anchorTerrain()). Shown so the operator watches the terrain that is
+    // actually being answered, not the sim's own FSUIPC reading below it.
+    const AnchorTerrain ground = anchorTerrain();
+    s.anchorGroundValid  = ground.valid;
+    s.anchorGroundMeters = ground.hotMeters;
 
     const terrain::db::Status tdb = terrain::db::status();
     s.terrainTiles  = tdb.tiles;
@@ -978,6 +1032,27 @@ int main(int argc, char** argv) {
 
                     const terrain::Sample sim = terrain::latest();
                     const HostPose       host = hostPose();
+
+                    // The ground the answers use, at the anchor the requests are
+                    // taken from. Recomputed every frame so the window can show
+                    // the terrain actually being answered instead of the sim's
+                    // own FSUIPC reading, which can hold still at the last
+                    // reposition while the answers follow the aircraft.
+                    {
+                        const bool   haveAnchor = host.seen || sim.connected;
+                        const double lat = host.seen ? host.latDeg : sim.latDeg;
+                        const double lon = host.seen ? host.lonDeg : sim.lonDeg;
+                        const double alt = host.seen ? host.altMeters
+                                                     : sim.aircraftAltMeters;
+                        const bool   fb  = sim.connected &&
+                                           nearAircraft(lat, lon, sim);
+                        double hot = 0.0;
+                        const bool ok = haveAnchor &&
+                                        terrainAt(kAnchorTerrainKey, lat, lon, alt,
+                                                  fb, sim, hot);
+                        noteAnchorTerrain(ok, hot);
+                    }
+
                     const uint8_t lsn = static_cast<uint8_t>(
                         g_stats.lastHostFrame.load() & 0x0Fu);
                     int answered = 0;

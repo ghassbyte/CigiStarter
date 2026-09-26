@@ -398,9 +398,9 @@ Prepar3D **freezes its ground model in slew**: the reading stopped following the
 aircraft and stayed wherever the last reposition left it, so an IG answering from
 FSUIPC alone kept reporting the same terrain however far the aircraft flew, and
 the HOST flew it on until it met rising ground. (The rig's vendor program now
-holds the sim **paused** with slew off, so the ground reading follows again — but
-it is still a single point, and the sim's own altitude is not following anything
-at all: the position is written and the altitude is not.) The original Master IG
+holds the sim **paused** with slew off, but FSUIPC is still a single point, and
+the sim's own altitude is not following anything at all: the position is written
+and the altitude is not.) The original Master IG
 answered from its own database for that same reason. Both sources 1 and 2 are
 answers about the *world* rather than about where the aircraft is sitting, so
 neither can go stale.
@@ -644,7 +644,8 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  HAT/HOT   : answering from the sim's own terrain                        |
 |  Probe     : sim paused; the probe is answering from its own thread      |
 |  Anchor    : HOST Entity Control -6.53973, 106.75963, 576 ft             |
-|  Terrain   : 89 ft ground under the sim aircraft, 99 ft sim aircraft     |
+|  Terrain   : 82 ft ground under the HOST aircraft                        |
+|  Sim       : 89 ft ground under the sim aircraft, 99 ft sim aircraft     |
 |                                                                          |
 |  [x] Answer HAT/HOT                       SOF rate: [ 150 ] Hz [ Apply ]   |
 |  [x] Pace SOF to HOST replies (flow control)                             |
@@ -696,17 +697,24 @@ with the window up instead, which is the behaviour the sketch below shows.
   else `answering from the terrain database` when tiles are indexed, else
   `answering from FSUIPC`, else `switched on, but nothing to answer from`.
   `TerrainDB` names the database behind that fallback — `N tile(s), M in
-  memory, X MB`, or `none` with the reason (for instance no `terrain\` folder)
-  — and `Terrain` shows the live FSUIPC reading of the **sim's own** aircraft:
-  the ground under it and its altitude, in feet, the way Prepar3D displays them.
-  It is not the HOST's aircraft — that is the `Anchor` line — and the two can be
-  at different places and altitudes, because an external program positions the
-  sim's aircraft. On the rig that program leaves the sim's altitude at the value
-  Prepar3D started with — the position follows what it writes, the altitude does
-  not — so that second number is not a live aircraft altitude there; it reaches
-  no answer either, because an entity-relative request is anchored to the HOST's
-  Entity Control. With no sim the line reads `FSUIPC : no link to Prepar3D`; with
-  answering off the block collapses to `not answered (switched off)`.
+  memory, X MB`, or `none` with the reason (for instance no `terrain\` folder).
+  `Terrain` is the ground **the answers use**: the height at the aircraft they
+  are anchored to — the `Anchor` line's aircraft — in feet, from the same source
+  chain the answer is taken from. With the anchor on the HOST's Entity Control
+  that is the ground under the aircraft the HOST is flying, so it follows a
+  reposition even while the sim holds its own ground model still; with no Entity
+  Control the anchor is the sim's own aircraft and the line names that instead.
+- `Sim` appears when the anchor is the HOST's Entity Control: it is the sim's own
+  FSUIPC reading — the ground under the sim's aircraft and its altitude, in feet,
+  the way Prepar3D displays them — and it is **not** the answer. It is kept
+  because it is the one place the sim's own aircraft is visible, and because the
+  answer falls back to its ground height (`0x0020`) when neither the add-on nor
+  the database can answer. It is not the terrain in force: it can stop following
+  while an external program positions the sim's aircraft (Prepar3D freezes its
+  ground model in slew), and on the rig that program leaves the sim's own
+  altitude at the value Prepar3D started with, so only the position follows.
+  With no sim the line reads `Sim : no FSUIPC link to Prepar3D`; with answering
+  off the block collapses to `not answered (switched off)`.
 - A `Probe` line appears under `HAT/HOT` when there is something to say about the
   add-on: `add-on not loaded`, `loaded, but it has no terrain service`, a stopped
   tick with the reason behind it, or — while Prepar3D has stopped ticking, which
