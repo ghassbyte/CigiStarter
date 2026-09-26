@@ -419,7 +419,8 @@ locate the terrain query.
 FSUIPC is only the fallback for a HOST that has not sent an Entity Control yet,
 and a pose outside the globe — or the all-zero placeholder a HOST emits for
 entities it is not driving — is refused rather than adopted. The window's
-`Anchor` line names whichever of the two is in use and where it points, because
+`Anchor` line names whichever of the two is in use and where it points — the
+position in the degrees, minutes and seconds Prepar3D itself displays — because
 this failure is invisible on the wire: the requests look identical whether the
 anchor is right or stuck over the departure airfield. On the rig the sim link
 froze at the departure field while the HOST flew the aircraft to its
@@ -643,7 +644,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  TerrainDB : 2 tile(s), 1 in memory, 25 MB                               |
 |  HAT/HOT   : answering from the sim's own terrain                        |
 |  Probe     : sim paused; the probe is answering from its own thread      |
-|  Anchor    : HOST Entity Control -6.53973, 106.75963, 576 ft             |
+|  Anchor    : HOST Entity Control S6°32'23.03" E106°45'34.67", 576 ft     |
 |  Terrain   : 82 ft ground under the HOST aircraft                        |
 |  Sim       : 89 ft ground under the sim aircraft, 99 ft sim aircraft     |
 |                                                                          |
@@ -691,6 +692,13 @@ with the window up instead, which is the behaviour the sketch below shows.
   since shutting down waits only for the [fan-out](#fan-out-to-the-other-ig-pcs)
   thread to finish the client-address lookup it is already in the middle of.
 - Since the process has no console, `Ctrl+C` cannot reach it either.
+- `Anchor` is the aircraft the entity-relative answers are about: the HOST's
+  own Entity Control once one has arrived, else the sim's aircraft over FSUIPC.
+  Its position is shown the way Prepar3D shows one — hemisphere, degrees,
+  minutes and seconds, e.g. `S6°32'23.03" E106°45'34.67"` — and its altitude in
+  feet, because the line is meant to be read against the sim's own readout and
+  a frozen anchor is invisible on the wire (see
+  [above](#which-aircraft-the-request-is-about)).
 - Terrain lines appear while answering is on. `HAT/HOT` names the source in
   force, in the order the answer is taken from: `answering from the sim's own
   terrain` when the `PdkTerrainProbe` add-on is loaded in the local Prepar3D,

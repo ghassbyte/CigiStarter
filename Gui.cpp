@@ -110,6 +110,31 @@ const wchar_t* IgModeName(unsigned mode) {
     }
 }
 
+// A latitude or longitude the way Prepar3D shows its own -- its `Seconds`
+// LatLonFormat: hemisphere, then degrees, minutes and whole seconds with two
+// fractional digits. The signed decimal degrees this replaced are exact and
+// unreadable beside the sim's readout, which is the one thing the `Anchor` line
+// exists to be compared with. Rounding the seconds can carry a whole minute, and
+// that a whole degree, so the carry is resolved before printing.
+void FormatLatLon(double deg, wchar_t north, wchar_t south,
+                  wchar_t* out, size_t outCount) {
+    const wchar_t hemi = deg < 0.0 ? south : north;
+    const double  abs  = deg < 0.0 ? -deg : deg;
+
+    int    d      = static_cast<int>(abs);
+    double remMin = (abs - d) * 60.0;
+    int    m      = static_cast<int>(remMin);
+    double s      = (remMin - m) * 60.0;
+    if (s >= 59.995) {
+        s = 0.0;
+        if (++m >= 60) {
+            m = 0;
+            ++d;
+        }
+    }
+    std::swprintf(out, outCount, L"%c%d\x00B0%d'%.2f\"", hemi, d, m, s);
+}
+
 // Control identifiers ride in the HMENU slot of CreateWindowExW(), so the cast
 // has to go through INT_PTR to keep it pointer-sized on x64.
 inline HMENU ControlId(int id) {
@@ -254,11 +279,17 @@ void Refresh() {
                           L"\r\n  Anchor    : none yet -- no Entity Control, "
                           L"no FSUIPC link");
         } else {
+            wchar_t anchorLat[32];
+            wchar_t anchorLon[32];
+            FormatLatLon(s.anchorLatDeg, L'N', L'S', anchorLat,
+                         ARRAYSIZE(anchorLat));
+            FormatLatLon(s.anchorLonDeg, L'E', L'W', anchorLon,
+                         ARRAYSIZE(anchorLon));
             std::swprintf(anchorLine, ARRAYSIZE(anchorLine),
-                          L"\r\n  Anchor    : %s %.5f, %.5f, %.0f ft",
+                          L"\r\n  Anchor    : %s %s %s, %.0f ft",
                           s.anchorFromHost ? L"HOST Entity Control"
                                            : L"FSUIPC (sim)",
-                          s.anchorLatDeg, s.anchorLonDeg,
+                          anchorLat, anchorLon,
                           s.anchorAltMeters * kFeetPerMetre);
         }
 
