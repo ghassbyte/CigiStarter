@@ -28,7 +28,8 @@ document is the network view.
 
 The copies keep the HOST's address and port as their source, so each extra IG PC
 runs the ordinary bridge with no reconfiguration and sees exactly the stream the
-HOST sent.
+HOST sent. `--no-relay-spoof` sends this IG's own address and port instead, for a
+client-side driver that follows the IG rather than the HOST.
 
 ## Agents
 
@@ -80,8 +81,8 @@ A drop-in replacement for the Master IG. It plays the IG side of the link:
   rig holds Prepar3D paused throughout, and on v6 a pause stops Prepar3D's own
   ticks, so there the add-on answers from a thread of its own.
 - **Fans the downstream stream out** to the extra IG PCs in `client.txt`, byte
-  for byte, source-labelled as the HOST. Optional, Npcap-backed, passive clients
-  only.
+  for byte, source-labelled as the HOST (`--no-relay-spoof` labels them as this
+  IG instead). Optional, Npcap-backed, passive clients only.
 - **Starts on its own** — streams from launch, minimises its window, and leaves
   EXIT as the only way off the link. `--no-auto-start` restores the paused
   window.
@@ -149,7 +150,7 @@ looking to them exactly like the HOST's own.
 | Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D; free-standing query, no SimObject; optional, and loaded on the bench's Professional Plus v5 and the rig's Professional v6 |
 | Terrain database  | `.hgt` tiles in `terrain\` by default or `--terrain-dir`; from `tools\get_terrain.ps1` or a `tools\TerrainBaker` bake |
 | Extra IG PCs      | `client.txt` beside the executable, `address[:port]`, read once at startup |
-| Fan-out           | one Npcap-injected copy per client, HOST source address/port spoofed |
+| Fan-out           | one Npcap-injected copy per client, source address/port spoofed as the HOST by default (`--no-relay-spoof` sends this IG's) |
 | Fan-out adapter   | found automatically: this IG's adapter, else the one the route to the HOST leaves by |
 | Bench HOST        | the CIGI Host Emulator in `external\`, on the IG PC, in place of the flight model; `tools\test-hathot-emulator.ps1` drives it |
 | Elevation         | none requested (`asInvoker`); the fan-out needs Npcap, not elevation |

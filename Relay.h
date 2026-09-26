@@ -15,7 +15,9 @@
 //    to each client -- carrying the HOST's own address and port as its source,
 //    so that the clients need no configuration at all: CigiP3dBridge's default
 //    live filter (`udp and src host <HOST> and dst port 8000`) picks the copies
-//    up exactly as it picks up the real thing.
+//    up exactly as it picks up the real thing. `--no-relay-spoof` sends them
+//    with this IG's own address instead, for a client driver that is pointed at
+//    the IG rather than the HOST; spoofing the HOST is the default.
 //
 //    The copies are whole Ethernet frames injected with Npcap
 //    (`pcap_sendpacket`). That is not a preference: Windows will not send a
@@ -43,15 +45,19 @@ namespace relay {
 // clients' hardware addresses on a background thread. Call once, after the
 // link addresses are known. Never fails -- see the note above.
 //
-//   hostIp / hostPort  the HOST: the copies carry this address and port as
-//                      their source, because a client IG PC identifies the CIGI
-//                      stream by looking for the HOST's address
+//   hostIp / hostPort  the HOST: by default the copies carry this address and
+//                      port as their source, because a client IG PC identifies
+//                      the CIGI stream by looking for the HOST's address
 //   igIp   / igPort    this IG: igIp chooses the adapter the copies leave by
 //                      (falling back to the route to the HOST when the machine
 //                      does not carry that address itself), igPort is the port
-//                      a client.txt line gets when it does not name one
+//                      a client.txt line gets when it does not name one, and
+//                      -- with spoofSource off -- the address the copies carry
+//   spoofSource        true (the default) labels the copies as the HOST;
+//                      false labels them as this IG's own adapter address
 void start(const char* hostIp, uint16_t hostPort,
-           const char* igIp,   uint16_t igPort);
+           const char* igIp,   uint16_t igPort,
+           bool        spoofSource);
 
 // Stop the resolver thread and close the capture handle. Safe to call when
 // never started, and may be followed by another start(). The caller must have
@@ -74,6 +80,8 @@ struct Status {
     uint64_t forwarded = 0;      // datagrams copied to at least one client
     uint64_t dropped   = 0;      // datagrams no client could receive
     std::string device;          // adapter the copies leave by ("" = none)
+    bool     spoofed   = true;   // copies carry the HOST's address as source
+    std::string source;          // that source address, "ip:port", for the window
     std::string error;           // why the relay is off ("" = nothing wrong)
 };
 

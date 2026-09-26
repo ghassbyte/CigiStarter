@@ -15,6 +15,8 @@
 //    is pinned to the HOST's address: "udp and src host <HOST> and dst port
 //    8000". Copies that arrived from *this* IG's address would be ignored by
 //    every client, so the copies have to look like they came from the HOST.
+//    `--no-relay-spoof` drops that disguise, for a client driver that is
+//    pointed at the IG instead: the copies then carry this IG's own address.
 //
 //    That cannot be done with an ordinary socket, and Windows forbids it on a
 //    raw socket too: "UDP datagrams with an invalid source address cannot be
@@ -101,8 +103,10 @@ std::atomic<uint64_t> g_dropped{0};
 pcap_t*  g_pcap        = nullptr;
 uint8_t  g_srcMac[6]   = {};     // this IG's NIC: the frame's source, because
 bool     g_haveSrcMac  = false;  // a switch would otherwise relearn the HOST
-uint32_t g_srcIpNet    = 0;      // the HOST address, network order
-uint16_t g_srcPort     = 0;      // the HOST port, host order
+uint32_t g_srcIpNet    = 0;      // the source address, network order (see start)
+uint16_t g_srcPort     = 0;      // the source port, host order
+bool     g_spoofSource = true;   // copies claim the HOST rather than this IG
+std::string g_sourceText;        // g_srcIpNet:g_srcPort, for the window
 uint32_t g_localIpNet  = 0;      // this IG's address, network order (SendARP)
 uint16_t g_frameId     = 0;      // IPv4 identification, one per datagram
 
@@ -581,12 +585,15 @@ void resolveLoop() {
 //-----------------------------------------------------------------------------
 // Public interface
 //-----------------------------------------------------------------------------
-void start(const char* hostIp, uint16_t hostPort, const char* igIp, uint16_t igPort) {
+void start(const char* hostIp, uint16_t hostPort, const char* igIp, uint16_t igPort,
+           bool spoofSource) {
     if (g_pcap != nullptr || g_resolving.load()) {
         return;  // already started
     }
 
-    // The copies carry the HOST's address and port as their source.
+    // The copies carry the HOST's address and port as their source, unless
+    // spoofing is off, in which case they carry this IG's own.
+    g_spoofSource = spoofSource;
     in_addr host{};
     in_addr ig{};
     uint32_t hostOrder = 0;
@@ -598,7 +605,7 @@ void start(const char* hostIp, uint16_t hostPort, const char* igIp, uint16_t igP
     if (inet_pton(AF_INET, igIp, &ig) == 1) {
         igOrder = ntohl(ig.s_addr);
     }
-    g_srcPort = hostPort;
+    g_srcPort = spoofSource ? hostPort : igPort;
 
     // client.txt first: with no extra IG PCs there is nothing to relay, and the
     // capture driver should not be touched at all.
@@ -651,6 +658,16 @@ void start(const char* hostIp, uint16_t hostPort, const char* igIp, uint16_t igP
         return;
     }
     g_localIpNet = htonl(wanted);
+
+    // The source the copies carry. With spoofing on it is the HOST's, and only
+    // the hardware address is this adapter's -- the clients recognise the
+    // stream by its HOST source. --no-relay-spoof swaps in the address that is
+    // actually inside these frames, for a client driver pointed at this IG.
+    if (!spoofSource) {
+        g_srcIpNet = g_localIpNet;
+    }
+    g_sourceText = (spoofSource ? std::string(hostIp) : dotted(wanted)) + ":" +
+                   std::to_string(g_srcPort);
 
     if (!loadNpcap(g_error)) {
         return;
@@ -739,6 +756,8 @@ Status status() {
     s.clients   = static_cast<int>(g_clients.size());
     s.skipped   = g_skipped;
     s.device    = g_device;
+    s.spoofed   = g_spoofSource;
+    s.source    = g_sourceText;
     s.error     = g_error;
     for (const Client& c : g_clients) {
         if (c.ready) {

@@ -103,6 +103,8 @@ struct Status {
     uint64_t    relayForwarded = 0;      // datagrams copied to a client
     uint64_t    relayDropped   = 0;      // datagrams no client could receive
     std::string relayDevice;             // adapter the copies leave by
+    bool        relaySpoofed   = true;   // copies carry the HOST's source address
+    std::string relaySource;             // that address, "ip:port", for the window
     std::string relayError;              // why the relay is off ("" = running)
 };
 

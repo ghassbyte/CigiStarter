@@ -56,7 +56,8 @@
 //
 //  Usage
 //    CigiStarter.exe [--fps 150] [--ig-mode 0] [--no-respond-hathot]
-//                    [--no-flow-control] [--terrain-dir <dir>]
+//                    [--no-flow-control] [--no-relay-spoof]
+//                    [--terrain-dir <dir>]
 //                    [--terrain-offset <m>] [--help]
 //    Being a windowed program there is no console, so --help and any startup
 //    error are reported in a message box.
@@ -120,6 +121,11 @@ struct Config {
     // the reference IG was free-running from the moment it started. The window
     // is still in the taskbar, and START / STOP / EXIT still work from it.
     bool    autoStart     = true;
+
+    // The relay to the extra IG PCs labels its copies as the HOST by default,
+    // which is what their capture filter looks for. --no-relay-spoof sends them
+    // with this IG's own address instead, for a client driver pointed at the IG.
+    bool    relaySpoof    = true;
 
     // The link endpoints. The deployment's are the defaults; they are only ever
     // changed for a bench test that runs the HOST somewhere other than
@@ -295,6 +301,12 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      (this is the default)\n"
         "  --no-auto-start     start with the stream stopped and the window up, so\n"
         "                      START has to be clicked\n"
+        "  --relay-spoof       label the copies sent to the extra IG PCs in\n"
+        "                      client.txt with the HOST's address, so a client's\n"
+        "                      capture filter finds them like the real stream\n"
+        "                      (this is the default)\n"
+        "  --no-relay-spoof    label those copies with this IG's own address\n"
+        "                      instead, for a client driver pointed at the IG\n"
         "  --terrain-dir <dir> folder of SRTM \".hgt\" terrain tiles to answer\n"
         "                      HAT/HOT from           (default: terrain\\ beside\n"
         "                      this program; see README.md)\n"
@@ -366,6 +378,10 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             cfg.autoStart = true;       // the default; kept for symmetry
         } else if (a == "--no-auto-start") {
             cfg.autoStart = false;
+        } else if (a == "--relay-spoof") {
+            cfg.relaySpoof = true;      // the default; kept for symmetry
+        } else if (a == "--no-relay-spoof") {
+            cfg.relaySpoof = false;
         } else if (a == "--terrain-dir") {
             const char* v = next("--terrain-dir"); if (!v) return false;
             cfg.terrainDir = v;
@@ -709,6 +725,8 @@ static gui::Status uiStatus() {
     s.relayForwarded = fan.forwarded;
     s.relayDropped   = fan.dropped;
     s.relayDevice    = fan.device;
+    s.relaySpoofed   = fan.spoofed;
+    s.relaySource    = fan.source;
     s.relayError     = fan.error;
     return s;
 }
@@ -846,7 +864,8 @@ int main(int argc, char** argv) {
     // ---- Fan the HOST's stream out to the extra IG PCs (client.txt) ------
     // Optional and never fatal: the client list lives next to the executable,
     // and with no client.txt this does nothing at all. See Relay.h.
-    relay::start(cfg.hostIp.c_str(), cfg.hostPort, cfg.igIp.c_str(), cfg.igPort);
+    relay::start(cfg.hostIp.c_str(), cfg.hostPort, cfg.igIp.c_str(), cfg.igPort,
+                 cfg.relaySpoof);
 
     HatHotRequestQueue hatHot;
 

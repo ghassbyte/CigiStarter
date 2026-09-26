@@ -362,12 +362,18 @@ void Refresh() {
         }
     }
 
-    wchar_t relayNic[256];
+    wchar_t relayNic[320];
     if (s.relayDevice.empty()) {
         std::swprintf(relayNic, ARRAYSIZE(relayNic), L"  Relay NIC : none");
-    } else {
+    } else if (s.relaySpoofed) {
         std::swprintf(relayNic, ARRAYSIZE(relayNic), L"  Relay NIC : %hs",
                       s.relayDevice.c_str());
+    } else {
+        // Only the non-default is called out: the copies normally claim the
+        // HOST, and a note saying so every time would be noise.
+        std::swprintf(relayNic, ARRAYSIZE(relayNic),
+                      L"  Relay NIC : %hs (copies as this IG %hs)",
+                      s.relayDevice.c_str(), s.relaySource.c_str());
     }
 
     // How the transmit loop is pacing, and -- when flow control is holding

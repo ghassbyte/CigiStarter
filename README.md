@@ -134,6 +134,11 @@ CigiStarter.exe [options]
                       window                                  (default on)
   --no-auto-start     start with the stream stopped and the window up, so START
                       has to be clicked
+  --relay-spoof       label the copies sent to the extra IG PCs in client.txt
+                      with the HOST's address, so a client's capture filter
+                      finds them like the real stream            (default on)
+  --no-relay-spoof    label those copies with this IG's own address instead,
+                      for a client driver pointed at the IG rather than the HOST
   --terrain-dir <dir> folder of SRTM ".hgt" terrain tiles to answer HAT/HOT
                       from              (default: terrain\ beside the program)
   --terrain-offset <m> constant added to every database height, for calibrating
@@ -148,8 +153,10 @@ CigiStarter.exe [options]
 ```
 
 The options only set the *starting* state, with one exception: the four link
-options (`--host-ip`, `--host-port`, `--ig-ip`, `--ig-port`) are read once and
-have no window control, because the deployed link never changes. The SOF rate,
+options (`--host-ip`, `--host-port`, `--ig-ip`, `--ig-port`) and the two relay
+options (`--relay-spoof`, `--no-relay-spoof`) are read once and have no window
+control, because the deployed link never changes and `client.txt` is read once.
+The SOF rate,
 HAT/HOT answering and flow control can all be changed from the window while the
 program runs — see [Operator window](#operator-window). Whether the stream starts
 on launch is a start-up decision only, so `--no-auto-start` is the single way back
@@ -169,6 +176,7 @@ Examples:
 CigiStarter.exe                        # 150 Hz, paced to the HOST, live on launch
 CigiStarter.exe --no-auto-start        # wait for START instead (old behaviour)
 CigiStarter.exe --no-flow-control --fps 100
+CigiStarter.exe --no-relay-spoof       # copies labelled as this IG, not the HOST
 CigiStarter.exe --host-ip 127.0.0.1 --ig-ip 127.0.0.1   # bench test, local HOST
 ```
 
@@ -739,7 +747,9 @@ with the window up instead, which is the behaviour the sketch below shows.
 - `Relay` and `Relay NIC` report the [fan-out](#fan-out-to-the-other-ig-pcs):
   how many clients are listed, how many of them answer, how many datagrams have
   been copied, and which adapter the copies leave by. There is no button for it
-  — it is on whenever `client.txt` says so.
+  — it is on whenever `client.txt` says so. With `--no-relay-spoof` the `Relay
+  NIC` line also names the address the copies carry, because it is then this
+  IG's rather than the HOST's, and nothing else on the window would say so.
 
 ## Fan-out to the other IG PCs
 
@@ -766,10 +776,18 @@ is read once at startup — restart the program to pick up an edit:
 
 Every datagram the HOST sends is copied **exactly as it arrived**, on the same
 UDP port, to each listed client — one Ethernet frame per client per datagram.
-The copies carry the **HOST's address and port as their source**
+By default the copies carry the **HOST's address and port as their source**
 (`192.168.70.2:8001`), so a client's bridge needs no reconfiguration at all: it
 sees the same stream it would have seen if it were the IG on the link. Nothing
 is ever sent back up the link, and clients never talk to CigiStarter.
+
+**`--no-relay-spoof`** drops that disguise: the copies carry this IG's own
+address and port (`192.168.70.70:8000`) instead. Use it when the client-side
+driver follows the IG rather than the HOST — that driver must then be given this
+IG's address, where the default needs no configuration whatsoever. It changes
+only the source address inside the frame; the adapter, the injection and the
+whole receive path are identical, and the `Relay NIC` line names the address the
+copies carry while the option is in force.
 
 Writing the copies needs **Npcap** (`wpcap.dll`) and nothing else. It is loaded
 at run time — deliberately *not* linked — so CigiStarter still builds and runs as
@@ -789,9 +807,10 @@ How it works, and why:
 - **Each copy is a hand-built Ethernet + IPv4 + UDP frame**, injected with
   `pcap_sendpacket`. Ethernet destination = the client's MAC; Ethernet source =
   this adapter's *own* MAC (spoofing that as well would teach every switch on
-  the way that the HOST lives on this port); IP source = the HOST; IP
-  destination = the client; UDP source = the HOST's port; UDP destination = the
-  client's. Both the IP and the UDP checksum are computed, over the IP
+  the way that the HOST lives on this port); IP source = the HOST, or this IG
+  with `--no-relay-spoof`; IP destination = the client; UDP source = the HOST's
+  port, or the IG port with `--no-relay-spoof`; UDP destination = the client's.
+  Both the IP and the UDP checksum are computed, over the IP
   pseudo-header as the UDP one must be, so a copy is a complete, valid datagram
   rather than something only a capture driver would show.
 - **Unicast, one frame per client** — not broadcast — so only the PCs named in
@@ -813,6 +832,14 @@ The `Relay` line in the window is the whole state, and it never needs a button:
 ```
   Relay     : 5 clients, 4 reachable, 1250431 datagrams forwarded, 2 dropped, 1 client.txt line ignored
   Relay NIC : Killer E2600 Gigabit Ethernet Controller
+```
+
+With `--no-relay-spoof` the second line names the address the copies carry, so
+the operator can see that the HOST's is not being used:
+
+```
+  Relay     : 5 clients, 5 reachable, 1250431 datagrams forwarded
+  Relay NIC : Killer E2600 Gigabit Ethernet Controller (copies as this IG 192.168.70.70:8000)
 ```
 
 `forwarded` counts datagrams that reached at least one client; `dropped` counts
