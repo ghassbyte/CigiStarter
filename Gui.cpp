@@ -25,6 +25,7 @@
 //  EXIT handler.
 //=============================================================================
 #include "Gui.h"
+#include "TerrainProbe.h"   // terrain::probe::surface::kCategory*, for the readout
 
 #include <windows.h>
 
@@ -299,12 +300,35 @@ void Refresh() {
         // the answer, and can hold still at the last reposition (Prepar3D
         // freezes its ground model in slew) while the answers follow the
         // aircraft -- the failure this line exists to make visible.
+        // What kind of surface the sim called that ground, when it said. Over a
+        // vessel at sea the interesting reading is a *platform*: the deck, which
+        // Prepar3D's collision will rest an aircraft on while the terrain under
+        // it is still sea level. Silently absent for a build or a point the
+        // surface was not reported for, so the line reads exactly as before.
+        wchar_t surfaceNote[64] = L"";
+        if (s.anchorGroundValid && s.groundSurfaceKnown) {
+            const wchar_t* cat = L"surface";
+            switch (s.groundCategory) {
+            case terrain::probe::surface::kCategoryHard:  cat = L"hard";  break;
+            case terrain::probe::surface::kCategorySoft:  cat = L"soft";  break;
+            case terrain::probe::surface::kCategoryWater: cat = L"water"; break;
+            default: break;
+            }
+            if (s.groundOnPlatform) {
+                std::swprintf(surfaceNote, ARRAYSIZE(surfaceNote),
+                              L" (%s, platform)", cat);
+            } else {
+                std::swprintf(surfaceNote, ARRAYSIZE(surfaceNote), L" (%s)", cat);
+            }
+        }
+
         wchar_t answerLine[160] = L"";
         if (s.anchorGroundValid) {
             std::swprintf(answerLine, ARRAYSIZE(answerLine),
-                          L"\r\n  Terrain   : %.0f ft ground under the %s aircraft",
+                          L"\r\n  Terrain   : %.0f ft ground under the %s aircraft%s",
                           s.anchorGroundMeters * kFeetPerMetre,
-                          s.anchorFromHost ? L"HOST" : L"sim");
+                          s.anchorFromHost ? L"HOST" : L"sim",
+                          surfaceNote);
         }
 
         // The sim's own FSUIPC reading, kept only while it is a different

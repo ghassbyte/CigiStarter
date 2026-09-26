@@ -34,7 +34,8 @@ They share one block of memory, described in `../../TerrainProbeIpc.h`:
         |    lat, lon, alt, key                  |    asks ISurfaceQueryManagerV400
         |                                        |    for each enabled point
         |  <---------------  writes results[i]   |
-        |    hot, status, key, echo of lat/lon   |
+        |    hot, status, surface, key,          |
+        |    echo of lat/lon                     |
 ```
 
 * The IG's read is guarded by a seqlock, so a row being rewritten underneath it
@@ -62,6 +63,20 @@ They share one block of memory, described in `../../TerrainProbeIpc.h`:
   surface query takes its altitude in **feet** and returns a height in feet — so
   the metres in `results[i]` are the query's feet value converted back. Nothing
   metric reaches the PDK call, and nothing imperial reaches the wire.
+* Each result also carries the sim's **classification of the surface** it
+  answered with: the category (hard / soft / water) and whether the surface is
+  an *object's* platform rather than terrain. Both live in `materialCode`, a
+  field the contract had always reserved for exactly this (it sat at 0 while the
+  add-on asked the elevation-only call), so no offset moved and `kVersion` did
+  not change. The flag matters because Prepar3D's collision will rest an aircraft
+  on a platform — a vessel's deck, a rig — while the terrain under it is still
+  sea level, so an answer taken from the height alone flies the aircraft into the
+  hull. Switching to the full surface query is what fixed that: over a moored
+  vessel it returns the deck's height where the elevation-only call returned sea
+  level, so no policy had to be built on the flag — it is what lets an operator
+  see that the ground answered with is an object and not terrain.
+  `TerrainBaker probe` prints it per point, and the operator window shows it on
+  the `Terrain` line.
 
 CigiStarter only ever wants about six points at a time, but the table holds 256
 and the add-on answers every enabled one on each tick. `tools\TerrainBaker` uses
@@ -282,8 +297,10 @@ the two never drift.
 `test\PdkTerrainProbeTest` compiles CigiStarter's half of the protocol and
 drives it against a fake sim that stands in for this DLL. It covers the cases
 that matter for safety: that no height is ever invented, that a reading is
-refused once its point has moved, that a sim which stops ticking is dropped, and
-that a row caught mid-rewrite is not believed.
+refused once its point has moved, that a sim which stops ticking is dropped,
+that a row caught mid-rewrite is not believed, and that the surface
+classification is passed through when it is published without ever being left
+over from another point when it is not.
 
 ```
 msbuild test\PdkTerrainProbeTest.vcxproj /p:Configuration=Release /p:Platform=x64
@@ -300,6 +317,11 @@ test\x64\Release\PdkTerrainProbeTest.exe --serve 30
 While it is serving it answers every enabled slot with `100 + lat*10 + lon +
 alt*0.001`, so a tool run against it can be checked against that formula.
 
-What it cannot cover is Prepar3D's side: whether `QuerySurfaceElevation` returns
-what the reference IG returned at a given airport. That needs the sim, and is
-the first thing to check on the IG PC once the add-on is loaded.
+What it cannot cover is Prepar3D's side: whether `QuerySurfaceInformation`
+returns what the reference IG returned at a given airport — and, for a vessel or
+rig standing in the sea, whether the sim calls that surface a *platform* at all.
+Both need the sim, and are the first things to check on the IG PC once the add-on
+is loaded (`TerrainBaker probe`, or the window's `Terrain` line). On the rig's v6
+the platform half is **settled**: over a moored vessel the sim answers the deck
+as `[hard, platform]` at the deck's own height, from a query point at or above
+it — where the elevation-only call answered sea level.

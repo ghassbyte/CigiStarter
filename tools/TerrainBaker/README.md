@@ -120,6 +120,15 @@ Read **four** things:
 | `worst repeat \|d\|` | `0.00 m` | the answer is tied to the point asked, not invented |
 | final `VERDICT` | `answering per point and repeating` | safe to survey |
 
+`sim` may carry a bracketed suffix naming the sim's own classification of what
+it answered with — `[hard]`, `[water]`, `[soft, platform]` (see `surface::*` in
+`../../TerrainProbeIpc.h`). **`platform` is the interesting one**: it means the
+surface is an *object's* rather than terrain — a vessel's deck, a rig — where
+Prepar3D's collision will rest an aircraft while the terrain under it is still
+sea level. No suffix means the add-on that answered did not publish a
+classification (a DLL built before it did, or a point the sim refused); it does
+not mean "no platform".
+
 It exits non-zero (2) if the add-on answers nothing — scenery not loaded, the DLL
 not installed, or no tick reaching the sim — or if the repeat disagrees, in which
 case the answers are not tied to the points asked and the bake must not run. The
@@ -221,8 +230,15 @@ point's altitude, so a baked tile and a live answer describe the same surface.
   for a PC that cannot run the add-on.)
 - Widen a field with `--box lat0,lon0,lat1,lon1` if the HOST's approaches start
   further out; the cost rises with the square of the box, so re-run `plan` first.
-- **Not covered yet:** the oil rig and the military ship. Land was done first;
-  those two are still to come.
+- **Platforms:** the oil rig and the military ship are the *platform* case — an
+  object's surface standing in the sea, which Prepar3D will rest an aircraft on
+  while the terrain under it is sea level. `probe` prints the sim's own
+  classification per point (`[water]`, `[hard, platform]`). A run over the rig's
+  moored vessel settled it: the deck comes back as `[hard, platform]` at its own
+  height, where the elevation-only call had answered sea level, so the deck is
+  answered by the surface query itself — no table of platforms needed. A point
+  answers the deck only from at or just under its height; asked from several
+  metres below, it answers the water under the hull.
 
 ## Troubleshooting
 

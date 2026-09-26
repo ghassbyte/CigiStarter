@@ -150,6 +150,41 @@ constexpr uint32_t kSawFrozen        = 1u << 15;
 constexpr uint32_t kSawUnfrozen      = 1u << 16;
 } // namespace simEvent
 
+// The layout of `Result::materialCode`: what kind of surface the sim answered
+// with.  The PDK's surface query returns more than an elevation -- alongside
+// `m_fElevation` it fills a `SurfaceInfoV400`, whose category says whether the
+// surface is hard, soft or water and whose `m_bOnPlatform` says whether it is an
+// *object's* surface rather than terrain.  That second flag is the one that
+// matters for a vessel or an oil rig standing in the sea: an aircraft can rest
+// on such a platform (Prepar3D's collision knows the deck) while the terrain
+// under it is still sea level, so a HAT/HOT answer taken from the elevation
+// alone would fly the aircraft into the hull.
+//
+// The field has always been reserved for this; it was simply left 0 while the
+// add-on asked the elevation-only query.  Nothing about the layout changes, so
+// `kVersion` does not move either -- a reader must still check `status` first,
+// and must treat a `kReported` bit that is clear as "this add-on does not say"
+// rather than as a category.
+namespace surface {
+constexpr uint32_t kCategoryShift = 0;
+constexpr uint32_t kCategoryMask  = 0xFFu;
+constexpr uint32_t kOnPlatform    = 1u << 8;   // SurfaceInfoV400::m_bOnPlatform
+constexpr uint32_t kReported      = 1u << 31;  // the field carries a reading
+
+// SurfaceInfoV400::SURFACE_TYPE_CATEGORY, copied out unchanged (`INVALID` is
+// -1, so the low byte of that encoding is 0xFF).
+constexpr int kCategoryInvalid = -1;
+constexpr int kCategoryHard    = 0;
+constexpr int kCategorySoft    = 1;
+constexpr int kCategoryWater   = 2;
+
+constexpr uint32_t encode(int category, bool onPlatform) {
+    return kReported
+         | (onPlatform ? kOnPlatform : 0u)
+         | ((static_cast<uint32_t>(category) & kCategoryMask) << kCategoryShift);
+}
+} // namespace surface
+
 // One point to look up.  `altMeters` is the altitude of the point being tested
 // (the HAT point, i.e. where the HOST wants to know the height *of* the
 // terrain), not the terrain height itself.  Prepar3D uses it to decide which
@@ -178,7 +213,7 @@ struct Result {
     double   hotMeters;     // terrain elevation, metres above mean sea level
     uint32_t key;
     uint32_t status;        // Status
-    uint32_t materialCode;  // PDK surface material, 0 until material is wired up
+    uint32_t materialCode;  // surface, see surface::*: category + on-platform flag
     float    nrmAzimuthDeg; // surface normal, 0 until wired up
     float    nrmElevationDeg;
 };

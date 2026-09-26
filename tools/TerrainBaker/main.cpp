@@ -361,12 +361,16 @@ public:
 
     // Ask about a batch of points; one height and one "answered" flag per point.
     // A point the sim has no surface for comes back with `ok` false, which the
-    // caller resolves by leaving that cell to the SRTM base.
+    // caller resolves by leaving that cell to the SRTM base.  `material`, when
+    // passed, gets the raw `Result::materialCode` for each point, for a caller
+    // that wants to know what kind of surface the sim called it (see surface::*).
     bool sample(const std::vector<std::pair<double,double>>& pts, double altitude,
-                std::vector<double>& hot, std::vector<uint8_t>& ok) {
+                std::vector<double>& hot, std::vector<uint8_t>& ok,
+                std::vector<uint32_t>* material = nullptr) {
         if (!open()) return false;
         hot.assign(pts.size(), 0.0);
         ok.assign(pts.size(), 0);
+        if (material) material->assign(pts.size(), 0u);
 
         const int cap = terrain::probe::kMaxQueries;
         for (std::size_t base = 0; base < pts.size(); base += std::size_t(cap)) {
@@ -394,14 +398,17 @@ public:
                 }
                 matched = true;
                 for (int i = 0; i < count; ++i) {
-                    double   h  = 0.0;
-                    uint32_t st = 0;
-                    if (!readSlot(unsigned(i), pts[base + i].first, pts[base + i].second, h, st)) {
+                    double   h    = 0.0;
+                    uint32_t st   = 0;
+                    uint32_t code = 0;
+                    if (!readSlot(unsigned(i), pts[base + i].first,
+                                  pts[base + i].second, h, st, code)) {
                         matched = false;   // answered a batch we had replaced
                         break;
                     }
                     hot[base + i] = h;
                     ok[base + i]  = (st == terrain::probe::StatusOk) ? 1 : 0;
+                    if (material) (*material)[base + i] = code;
                 }
             }
             if (!matched) {
@@ -479,15 +486,17 @@ private:
     // (lat, lon): the probe has not picked up this batch yet, so the caller
     // should wait for another pass rather than record someone else's height.
     // The doubles are copied through unchanged, hence the exact compare.
-    bool readSlot(unsigned i, double lat, double lon, double& hot, uint32_t& status) {
+    bool readSlot(unsigned i, double lat, double lon, double& hot,
+                  uint32_t& status, uint32_t& material) {
         for (int attempt = 0; attempt < 8; ++attempt) {
             const uint32_t before = m_shm->rspSeq;
             if (before & 1u) { ::Sleep(1); continue; }
             const terrain::probe::Result r = m_shm->results[i];
             if (m_shm->rspSeq != before) continue;
             if (r.latDeg != lat || r.lonDeg != lon) return false;
-            hot    = r.hotMeters;
-            status = r.status;
+            hot      = r.hotMeters;
+            status   = r.status;
+            material = r.materialCode;
             return true;
         }
         return false;
@@ -651,6 +660,28 @@ int requireProbe(ProbeLink& link, const char* mode) {
     return 2;
 }
 
+// What the sim called the surface, from `Result::materialCode` (see surface::*
+// in TerrainProbeIpc.h), as a short suffix for the probe readout.  Empty for a point the sim
+// refused, or for an add-on built before the surface was published.  A
+// "platform" here is an object's surface -- a vessel's deck, a rig -- rather
+// than terrain, which is the difference between a HAT/HOT answer made from real
+// ground and one made from the sea below a deck.
+std::string surfaceNote(uint32_t code) {
+    if (!(code & terrain::probe::surface::kReported)) return std::string();
+
+    const uint32_t cat = (code >> terrain::probe::surface::kCategoryShift)
+                         & terrain::probe::surface::kCategoryMask;
+    const char* name = "surface";
+    switch (cat) {
+    case terrain::probe::surface::kCategoryHard:  name = "hard";  break;
+    case terrain::probe::surface::kCategorySoft:  name = "soft";  break;
+    case terrain::probe::surface::kCategoryWater: name = "water"; break;
+    default: break;
+    }
+    return std::string(" [") + name +
+           ((code & terrain::probe::surface::kOnPlatform) ? ", platform]" : "]");
+}
+
 int modeProbe(const Options& o) {
     ProbeLink link;
     if (const int rc = requireProbe(link, "probe")) return rc;
@@ -676,9 +707,10 @@ int modeProbe(const Options& o) {
     }
     if (o.limit > 0 && int(pts.size()) > o.limit) pts.resize(std::size_t(o.limit));
 
-    std::vector<double>  sim;
-    std::vector<uint8_t> ok;
-    if (!link.sample(pts, o.altitude, sim, ok)) {
+    std::vector<double>   sim;
+    std::vector<uint8_t>  ok;
+    std::vector<uint32_t> material;
+    if (!link.sample(pts, o.altitude, sim, ok, &material)) {
         std::fprintf(stderr, "[probe] %s\n", link.error().c_str());
         return 2;
     }
@@ -707,11 +739,11 @@ int modeProbe(const Options& o) {
             vs = "n/a";
         }
 
+        const std::string simText =
+            have ? std::to_string(int(std::lround(sim[i]))) + " m" + surfaceNote(material[i])
+                 : std::string("no surface");
         std::printf("  %9.5f %9.5f   sim %s   srtm %s\n",
-                    pts[i].first, pts[i].second,
-                    have ? (std::to_string(int(std::lround(sim[i]))) + " m").c_str()
-                         : "no surface",
-                    vs.c_str());
+                    pts[i].first, pts[i].second, simText.c_str(), vs.c_str());
         if (have) distinct.insert(int(std::lround(sim[i] * 16.0)));   // ~6 cm buckets
     }
 

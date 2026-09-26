@@ -55,6 +55,7 @@ double g_slotHotLon[kMaxQueries] = {};
 double g_slotHotAlt[kMaxQueries] = {};
 bool   g_slotHasHot[kMaxQueries] = {};
 bool   g_slotProbed[kMaxQueries] = {};  // the sim has answered this slot's query
+Surface g_slotSurface[kMaxQueries];     // the surface that reading came from
 
 // How far a reading may be from the point that was asked about and still count
 // as an answer to it. The HOST's probes sit within a few metres of the
@@ -78,6 +79,22 @@ constexpr DWORD kStaleAfterMs = 1500;
 // ends the moment the answer lands. Only ever paid once per point -- every later
 // reply is already in the table.
 constexpr DWORD kFirstAnswerWaitMs = 120;
+
+// `Result::materialCode` -> the reader-side view of it.  An add-on that does not
+// set the kReported bit (a build from before the surface was published, or a row
+// the sim refused) reports nothing, and `category` stays Invalid rather than
+// being read out of a field that is all zeros.
+Surface decodeSurface(uint32_t code) {
+    Surface s;
+    if (!(code & surface::kReported)) return s;
+
+    s.reported   = true;
+    s.onPlatform = (code & surface::kOnPlatform) != 0;
+    const uint32_t cat = (code >> surface::kCategoryShift) & surface::kCategoryMask;
+    s.category = (cat == 0xFFu) ? surface::kCategoryInvalid
+                                : static_cast<int>(cat);
+    return s;
+}
 
 bool tryOpen() {
     if (g_shm) return true;
@@ -185,8 +202,13 @@ Health health() {
     return s;
 }
 
-bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters, double& hotMeters) {
+bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters,
+               double& hotMeters, Surface* surface) {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
+
+    // The caller may pass the same object in every frame, so never leave a
+    // previous frame's platform flag behind when this one does not answer.
+    if (surface) *surface = Surface{};
 
     if (!available()) return false;
 
@@ -201,6 +223,7 @@ bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters, dou
                 g_slotUsed[i]   = true;
                 g_slotKey[i]    = key;
                 g_slotProbed[i] = false;  // nothing has been asked of the sim yet
+                g_slotSurface[i] = Surface{};
                 break;
             }
         }
@@ -217,8 +240,9 @@ bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters, dou
 
     // Seqlock read: take the version before and after, and only believe the row
     // if it did not move underneath us.
-    bool   fresh    = false;
-    double freshHot = 0.0;
+    bool    fresh        = false;
+    double  freshHot     = 0.0;
+    Surface freshSurface;
 
     // A point the sim has not answered yet takes a tick before it has an answer
     // at all, so wait for that first reply rather than falling through to the
@@ -242,8 +266,9 @@ bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters, dou
                 std::fabs(r.lonDeg - lonDeg) <= kEchoToleranceDeg) {
                 if (r.status == StatusOk) {
                     g_slotProbed[slot] = true;
-                    freshHot = r.hotMeters;
-                    fresh    = true;
+                    freshHot           = r.hotMeters;
+                    freshSurface       = decodeSurface(r.materialCode);
+                    fresh              = true;
                 } else if (r.status != StatusNone) {
                     g_slotProbed[slot] = true;      // answered, just refused
                     if (firstAnswer) break;
@@ -264,12 +289,14 @@ bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters, dou
     }
 
     if (fresh) {
-        g_slotHot[slot]    = freshHot;
-        g_slotHotLat[slot] = latDeg;
-        g_slotHotLon[slot] = lonDeg;
-        g_slotHotAlt[slot] = altMeters;
-        g_slotHasHot[slot] = true;
+        g_slotHot[slot]     = freshHot;
+        g_slotHotLat[slot]  = latDeg;
+        g_slotHotLon[slot]  = lonDeg;
+        g_slotHotAlt[slot]  = altMeters;
+        g_slotHasHot[slot]  = true;
+        g_slotSurface[slot] = freshSurface;
         hotMeters = freshHot;
+        if (surface) *surface = freshSurface;
         return true;
     }
 
@@ -281,6 +308,7 @@ bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters, dou
         std::fabs(g_slotHotLon[slot] - lonDeg) <= kEchoToleranceDeg &&
         std::fabs(g_slotHotAlt[slot] - altMeters) <= kAltToleranceMeters) {
         hotMeters = g_slotHot[slot];
+        if (surface) *surface = g_slotSurface[slot];
         return true;
     }
 
@@ -312,6 +340,7 @@ void stop() {
     std::memset(g_slotUsed, 0, sizeof(g_slotUsed));
     std::memset(g_slotHasHot, 0, sizeof(g_slotHasHot));
     std::memset(g_slotProbed, 0, sizeof(g_slotProbed));
+    for (Surface& sf : g_slotSurface) sf = Surface{};
     g_lastTicks  = 0;
     g_lastChange = 0;
 }

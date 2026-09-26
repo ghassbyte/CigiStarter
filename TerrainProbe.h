@@ -34,6 +34,8 @@
 
 #include <cstdint>
 
+#include "TerrainProbeIpc.h"   // the surface::* encoding of Result::materialCode
+
 namespace terrain {
 namespace probe {
 
@@ -77,6 +79,23 @@ struct Health {
 
 Health health();
 
+// What the sim's surface query said about the ground it answered with, when the
+// add-on is a build that reports it (`reported` is false for an older one, and
+// for a point the add-on never asked about).
+//
+// `onPlatform` is the one worth watching: it says the surface is an *object's*,
+// not terrain.  A vessel moored in the sea, an oil rig or a bridge is answered
+// with the terrain below it -- sea level, for the vessel -- unless the platform
+// flag is honoured, so a caller that only reads `hotMeters` can fly an aircraft
+// into the deck.  This is diagnostic for now: nothing in the answer path reads
+// it, so that a bench run can say whether Prepar3D reports the deck at all
+// before any policy is built on it.
+struct Surface {
+    bool reported   = false;
+    bool onPlatform = false;
+    int  category   = surface::kCategoryInvalid;  // surface::kCategory*
+};
+
 // Ask the sim for the terrain height at a point.
 //
 //   key         identifies the caller's own query (CigiStarter uses the HOST's
@@ -87,12 +106,15 @@ Health health();
 //   latDeg/lonDeg/altMeters  the point, in CIGI's units. `altMeters` is the
 //               altitude of the test point, not of the terrain.
 //   hotMeters   set to the terrain height, metres MSL, on success.
+//   surface     optional: the sim's classification of that surface, when it
+//               reports one. Left default-constructed whenever the height did
+//               not come from the sim.
 //
 // Returns false when the probe is unavailable, has no answer for this point
 // yet, or has only an answer that was taken somewhere else. The caller should
 // then fall back to another terrain source.
 bool elevation(unsigned key, double latDeg, double lonDeg, double altMeters,
-               double& hotMeters);
+               double& hotMeters, Surface* surface = nullptr);
 
 // Open the shared region (lazily re-tried by the calls above; this just forces
 // an attempt) and release it. Safe to call in any order, any number of times.

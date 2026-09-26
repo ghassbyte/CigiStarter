@@ -13,7 +13,10 @@
 //    * a reading is only used for the point it was taken at, so a request that
 //      has moved is refused rather than answered with the previous terrain;
 //    * a reading that is being rewritten underneath the reader is not believed
-//      (the seqlock), and a probe whose tick has stopped is not believed either.
+//      (the seqlock), and a probe whose tick has stopped is not believed either;
+//    * the sim's classification of the surface (hard/soft/water, and whether it
+//      is an object's platform) is passed through when it is published, and is
+//      never left over from another point when this one had none.
 //
 //  Build/run:  msbuild test\PdkTerrainProbeTest.vcxproj /p:Configuration=Release
 //              test\x64\Release\PdkTerrainProbeTest.exe
@@ -97,6 +100,10 @@ public:
     // reading is refused for the right reason.
     void setAnswering(bool on)  { m_answering.store(on); }
     void setIntervalMs(int ms)  { m_intervalMs.store(ms); }
+    // What the sim says the surface is, as `Result::materialCode` carries it.
+    // Left 0 by default, which is what an add-on built before the surface was
+    // published leaves there.
+    void setMaterial(uint32_t code) { m_material.store(code); }
 
 private:
     void loop() {
@@ -116,11 +123,12 @@ private:
                 if (!q.enabled) continue;
 
                 terrain::probe::Result& r = m_shm->results[i];
-                r.latDeg    = q.latDeg;
-                r.lonDeg    = q.lonDeg;
-                r.hotMeters = answer(q.latDeg, q.lonDeg, q.altMeters);
-                r.key       = q.key;
-                r.status    = terrain::probe::StatusOk;
+                r.latDeg       = q.latDeg;
+                r.lonDeg       = q.lonDeg;
+                r.hotMeters    = answer(q.latDeg, q.lonDeg, q.altMeters);
+                r.key          = q.key;
+                r.status       = terrain::probe::StatusOk;
+                r.materialCode = m_material.load();
             }
 
             ++m_shm->rspSeq;  // even: stable again
@@ -136,12 +144,23 @@ private:
     std::atomic<bool>   m_running{false};
     std::atomic<bool>   m_answering{true};
     std::atomic<int>    m_intervalMs{2};
+    std::atomic<uint32_t> m_material{0};
 };
 
 // Poll for an answer, as the IG's per-frame call would.
 bool poll(unsigned key, double lat, double lon, double alt, double& hot, int tries = 400) {
     for (int i = 0; i < tries; ++i) {
         if (terrain::probe::elevation(key, lat, lon, alt, hot)) return true;
+        ::Sleep(5);
+    }
+    return false;
+}
+
+// The same, asking for the sim's classification of the surface too.
+bool pollSurface(unsigned key, double lat, double lon, double alt, double& hot,
+                 terrain::probe::Surface& surface, int tries = 400) {
+    for (int i = 0; i < tries; ++i) {
+        if (terrain::probe::elevation(key, lat, lon, alt, hot, &surface)) return true;
         ::Sleep(5);
     }
     return false;
@@ -197,6 +216,48 @@ int main(int argc, char** argv) {
         check(poll(0, kAtangLat, kAtangLon, kAtangAlt, hot), "an answer arrives");
         check(std::fabs(hot - FakeProbe::answer(kAtangLat, kAtangLon, kAtangAlt)) < 1e-9,
               "the height is the sim's, in metres");
+    }
+
+    // -- 2b. What the sim called the surface ---------------------------------
+    // `materialCode` carries the PDK's surface category and its on-platform
+    // flag. A platform is an *object's* surface rather than terrain -- a vessel's
+    // deck standing in the sea, which Prepar3D will rest an aircraft on while
+    // the terrain under it is still sea level -- so the reader has to be able to
+    // see it, and a sim that says nothing must not look as if it did.
+    std::printf("\nwhat the sim called the surface\n");
+    {
+        double hot = 0.0;
+        terrain::probe::Surface s;
+
+        fake.setMaterial(0);   // an add-on from before the surface was published
+        check(pollSurface(3, kAtangLat, kAtangLon, kAtangAlt, hot, s),
+              "a point is answered");
+        check(!s.reported, "and a sim that reports no surface is not believed to have one");
+
+        fake.setMaterial(terrain::probe::surface::encode(
+            terrain::probe::surface::kCategoryHard, true));
+        check(pollSurface(4, kHalimLat, kHalimLon, kHalimAlt, hot, s),
+              "a platform point is answered");
+        check(s.reported && s.onPlatform, "the platform flag comes through with it");
+        check(s.category == terrain::probe::surface::kCategoryHard,
+              "and so does the sim's surface category");
+
+        check(terrain::probe::elevation(4, kHalimLat, kHalimLon, kHalimAlt, hot),
+              "a caller that wants no surface still gets the height");
+
+        // A point the sim has not answered must leave the caller's Surface alone
+        // rather than keep the last one: a deck must never be handed back for a
+        // point it was not measured at.
+        fake.setAnswering(false);
+        ::Sleep(50);
+        terrain::probe::Surface stale;
+        stale.reported   = true;
+        stale.onPlatform = true;
+        check(!terrain::probe::elevation(9, kAtangLat, kAtangLon + 0.5, kAtangAlt, hot, &stale),
+              "a point the sim has not answered is refused");
+        check(!stale.reported && !stale.onPlatform,
+              "and no surface is handed back with it");
+        fake.setAnswering(true);
     }
 
     // -- 3. A point never asked about ----------------------------------------

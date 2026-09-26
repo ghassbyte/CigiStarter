@@ -473,13 +473,19 @@ static bool nearAircraft(double latDeg, double lonDeg, const terrain::Sample& si
 // -- only when it describes the same place -- the sim's ground height read over
 // FSUIPC. `key` is the probe slot to ask on, so a caller that is not answering a
 // real request (the window's anchor readout) can keep a slot of its own.
+//
+// `surface`, when passed, is filled only by the sim path: the database and
+// FSUIPC have no idea whether the ground they describe is a platform.  It is
+// diagnostic for now; see terrain::probe::Surface.
 static bool terrainAt(unsigned key,
                       double latDeg, double lonDeg, double altMeters,
                       bool simFallback, const terrain::Sample& sim,
-                      double& hot) {
-    if (terrain::probe::elevation(key, latDeg, lonDeg, altMeters, hot)) {
+                      double& hot,
+                      terrain::probe::Surface* surface = nullptr) {
+    if (terrain::probe::elevation(key, latDeg, lonDeg, altMeters, hot, surface)) {
         return true;
     }
+    if (surface) *surface = terrain::probe::Surface{};
     bool ok = false;
     hot = terrain::db::elevation(latDeg, lonDeg, ok);
     if (!ok && simFallback) {
@@ -595,14 +601,21 @@ constexpr unsigned kAnchorTerrainKey = 0xFFFFFFFFu;
 struct AnchorTerrain {
     bool   valid     = false;  // a source could answer for the anchor
     double hotMeters = 0.0;    // ground height there, metres MSL
+    // The sim's own classification of that ground, when the probe answered from
+    // an add-on that reports one: `onPlatform` is what says the answer is an
+    // object's deck rather than terrain (a vessel at sea). Diagnostic only, and
+    // left default when the database or FSUIPC supplied the height.
+    terrain::probe::Surface surface;
 };
 static std::mutex    g_anchorTerrainMtx;
 static AnchorTerrain g_anchorTerrain;
 
-static void noteAnchorTerrain(bool valid, double hotMeters) {
+static void noteAnchorTerrain(bool valid, double hotMeters,
+                              const terrain::probe::Surface& surface) {
     std::lock_guard<std::mutex> lk(g_anchorTerrainMtx);
     g_anchorTerrain.valid     = valid;
     g_anchorTerrain.hotMeters = hotMeters;
+    g_anchorTerrain.surface   = surface;
 }
 
 static AnchorTerrain anchorTerrain() {
@@ -699,6 +712,9 @@ static gui::Status uiStatus() {
     const AnchorTerrain ground = anchorTerrain();
     s.anchorGroundValid  = ground.valid;
     s.anchorGroundMeters = ground.hotMeters;
+    s.groundSurfaceKnown = ground.surface.reported;
+    s.groundOnPlatform   = ground.surface.onPlatform;
+    s.groundCategory     = ground.surface.category;
 
     const terrain::db::Status tdb = terrain::db::status();
     s.terrainTiles  = tdb.tiles;
@@ -1066,10 +1082,11 @@ int main(int argc, char** argv) {
                         const bool   fb  = sim.connected &&
                                            nearAircraft(lat, lon, sim);
                         double hot = 0.0;
+                        terrain::probe::Surface surface;
                         const bool ok = haveAnchor &&
                                         terrainAt(kAnchorTerrainKey, lat, lon, alt,
-                                                  fb, sim, hot);
-                        noteAnchorTerrain(ok, hot);
+                                                  fb, sim, hot, &surface);
+                        noteAnchorTerrain(ok, hot, surface);
                     }
 
                     const uint8_t lsn = static_cast<uint8_t>(

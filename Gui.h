@@ -76,6 +76,16 @@ struct Status {
     // sim's own ground model -- `groundAltMeters` below -- has frozen.
     bool     anchorGroundValid  = false;
     double   anchorGroundMeters = 0.0;
+    // What the sim's own surface query said about that ground, when the probe
+    // answered from an add-on that reports it (TerrainProbe.h, `Surface`).
+    // `groundOnPlatform` is the one that matters for a vessel or rig standing in
+    // the sea: it says the answer is an object's surface, not terrain.  Purely
+    // diagnostic -- the answer is taken from the height alone.  `groundCategory`
+    // is a `terrain::probe::surface::kCategory*` value, Invalid (-1) when the sim
+    // did not report one.
+    bool     groundSurfaceKnown = false;
+    bool     groundOnPlatform   = false;
+    int      groundCategory     = -1;
     // The offline terrain database the HAT/HOT answer falls back to (TerrainDb.h)
     // when the sim's own terrain probe is not answering. Optional: no tiles means
     // the answer goes to the FSUIPC terrain instead.

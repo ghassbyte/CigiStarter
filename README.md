@@ -478,6 +478,26 @@ mapping, and a newly added airport is answered the moment the sim can see it.
 It answers HAT/HOT whenever it is loaded, because it is the surface Prepar3D
 will actually place the aircraft on.
 
+The sim also says **what kind of surface** it answered with — hard, soft or
+water, and whether it is an object's *platform* rather than terrain. That last
+one is the reason to ask for more than a height: Prepar3D's collision will rest
+an aircraft on a vessel's deck, or a rig standing in the sea, while the terrain
+under it is still sea level — so an answer taken from the height alone flies the
+aircraft into the hull. That is exactly what asking the sim's **full surface
+query** fixed. Over a moored vessel the full query returns the deck's height,
+where Prepar3D's elevation-only call had returned sea level at the same point —
+so the moored-vessel case needed nothing beyond the switch, and no table of
+platforms. The classification is published with every answer
+(`Result::materialCode` in `TerrainProbeIpc.h`); `TerrainBaker probe` prints it
+per point, and the operator window shows it on the `Terrain` line.
+
+The query is **layer-aware**: the sim answers the surface *at or below* the point
+it is asked about, so a deck is reported only from at (or just under) its own
+height. CigiStarter asks from the HAT point's own altitude — the anchor's
+altitude less the request's Z offset — so over a deck the reference and gear-leg
+probes carry its height while a probe several metres below the deck top falls
+through to the water under the hull.
+
 - **Installing it** (on the IG PC): copy `PdkTerrainProbe.dll` and its
   `add-on.xml` into Prepar3D's default add-on discovery folder, one level deep —
   `%USERPROFILE%\Documents\Prepar3D v6 Add-ons\PdkTerrainProbe\` (or
@@ -653,7 +673,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  HAT/HOT   : answering from the sim's own terrain                        |
 |  Probe     : sim paused; the probe is answering from its own thread      |
 |  Anchor    : HOST Entity Control S6°32'23.03" E106°45'34.67", 576 ft     |
-|  Terrain   : 82 ft ground under the HOST aircraft                        |
+|  Terrain   : 82 ft ground under the HOST aircraft (hard)                 |
 |  Sim       : 89 ft ground under the sim aircraft, 99 ft sim aircraft     |
 |                                                                          |
 |  [x] Answer HAT/HOT                       SOF rate: [ 150 ] Hz [ Apply ]   |
@@ -720,6 +740,16 @@ with the window up instead, which is the behaviour the sketch below shows.
   that is the ground under the aircraft the HOST is flying, so it follows a
   reposition even while the sim holds its own ground model still; with no Entity
   Control the anchor is the sim's own aircraft and the line names that instead.
+  When the add-on answered and published the surface's classification, the line
+  carries it in brackets: `(hard)`, `(soft)`, `(water)`, or `(…, platform)`.
+  **`platform` is the one to watch** — it means the sim called the surface an
+  *object's* rather than terrain, which is what a vessel's deck or a rig standing
+  in the sea looks like (Prepar3D will rest an aircraft on it while the terrain
+  under it is still sea level). The brackets are absent when the answer came from
+  the database or FSUIPC, or from an add-on built before the classification was
+  published. The answer is not decided from them — the height the full surface
+  query returns already carries the deck — they are there to show that the ground
+  answered with is an object and not terrain.
 - `Sim` appears when the anchor is the HOST's Entity Control: it is the sim's own
   FSUIPC reading — the ground under the sim's aircraft and its altitude, in feet,
   the way Prepar3D displays them — and it is **not** the answer. It is kept

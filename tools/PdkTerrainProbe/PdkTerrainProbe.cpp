@@ -12,6 +12,17 @@
 // or teleported around the world.  What comes back is the surface Prepar3D will
 // actually place the aircraft on, runway flattening, add-on scenery and all.
 //
+// It asks for the whole surface (`QuerySurfaceInformation`), not just its
+// height, because the answer carries two things a bare elevation cannot: the
+// surface's category (hard/soft/water) and whether it is an *object's* platform
+// rather than terrain.  A vessel or rig standing in the sea is the platform
+// case, and Prepar3D's collision will rest an aircraft on such a deck while the
+// terrain under it is still sea level - so a HAT/HOT answer taken from the
+// elevation alone would fly the aircraft into the hull.  Both are published in
+// `Result::materialCode` (see surface::* in TerrainProbeIpc.h).  Nothing in the
+// answer path reads them yet; they are there so a bench run can say whether the
+// sim reports a platform at a point before any policy is built on it.
+//
 // It runs in-process (loaded from an add-on.xml as a PDK DLL).  Prepar3D's own
 // callbacks drive it wherever they reach: the per-frame event, which is the tick
 // of a running sim, and -- until that event has been seen -- an ISimulation on
@@ -256,7 +267,7 @@ void serviceTick(bool fromSim) {
             const terrain::probe::Query& q = g_shm->queries[i];
             terrain::probe::Result&      r = g_shm->results[i];
 
-            if (!q.enabled) { r.status = terrain::probe::StatusNone; continue; }
+            if (!q.enabled) { r.status = terrain::probe::StatusNone; r.materialCode = 0; continue; }
 
             // Echo the point before deciding anything, so a row always says
             // which point it is about -- including one that is refused.  Only
@@ -271,6 +282,7 @@ void serviceTick(bool fromSim) {
                 q.latDeg < -90.0 || q.latDeg > 90.0 ||
                 q.lonDeg < -180.0 || q.lonDeg > 180.0) {
                 r.status = terrain::probe::StatusInvalid;
+                r.materialCode = 0;
                 continue;
             }
 
@@ -282,15 +294,25 @@ void serviceTick(bool fromSim) {
             pos.dY = q.altMeters * kMetersToFt;
             pos.dZ = q.latDeg * kDegToRad;
 
-            float feet = 0.0f;
-            const HRESULT hr = g_surface->QuerySurfaceElevation(feet, pos);
+            // Ask for the whole surface, not just its elevation: the extra
+            // fields say whether the sim sees a hard/soft/water surface and
+            // whether it is an object's platform rather than terrain.  A vessel
+            // or rig standing in the sea is exactly the platform case, and a
+            // HAT/HOT answer that ignored the flag would report sea level under
+            // an aircraft that can actually rest on the deck.
+            SurfaceInfoV400 info = {};
+            const HRESULT hr = g_surface->QuerySurfaceInformation(info, pos);
 
             if (SUCCEEDED(hr)) {
-                r.hotMeters = static_cast<double>(feet) * kFtToMeters;
-                r.status    = terrain::probe::StatusOk;
+                r.hotMeters    = static_cast<double>(info.m_fElevation) * kFtToMeters;
+                r.materialCode = terrain::probe::surface::encode(
+                    static_cast<int>(info.m_eSurfaceCategory),
+                    info.m_bOnPlatform != 0);
+                r.status       = terrain::probe::StatusOk;
             } else {
-                r.hotMeters = 0.0;
-                r.status    = terrain::probe::StatusFailed;
+                r.hotMeters    = 0.0;
+                r.materialCode = 0;
+                r.status       = terrain::probe::StatusFailed;
                 ++g_shm->queryFails;
             }
         }
