@@ -42,9 +42,11 @@ constexpr int kClientW   = 660;
 constexpr int kStatusW   = kClientW - 2 * kMargin;
 // Tall enough for the whole status block plus a couple of wrapped lines: the
 // relay line grows with the counters, the terrain block gains a "Probe" line
-// when the add-on is not answering, and a line that wraps (the terrain database
-// summary carries a folder path) must not push a reading out of sight.
-constexpr int kStatusH   = 356;
+// when the add-on is not answering, the Datum line is the relay block's third
+// row, and a line that wraps (the terrain database summary carries a folder
+// path) must not push a reading out of sight. The Datum line's height is in
+// here, so the slack the rest of the block relies on is unchanged.
+constexpr int kStatusH   = 374;
 constexpr int kSettingsY = kMargin + kStatusH + kMargin;
 constexpr int kRowH      = 24;
 // The flow-control check box gets a row of its own under the HAT/HOT row: there
@@ -400,6 +402,40 @@ void Refresh() {
                       s.relayDevice.c_str(), s.relaySource.c_str());
     }
 
+    // What the copies carry for altitude, and what that was measured from. Off
+    // and waiting are both normal and each says which one it is, because the
+    // operator's next move differs: off is a flag to pass, and waiting is either
+    // the sim not being up or the aircraft not being parked yet. Applied and
+    // refused both print the two altitudes the difference came from -- a
+    // refusal means nothing beside numbers the operator can check against the
+    // sim's own instruments.
+    wchar_t datumLine[256];
+    switch (s.datumState) {
+    case datum::State::Off:
+        std::swprintf(datumLine, ARRAYSIZE(datumLine),
+                      L"  Datum     : off (--alt-datum-offset corrects the copies)");
+        break;
+    case datum::State::Waiting:
+        std::swprintf(datumLine, ARRAYSIZE(datumLine),
+                      L"  Datum     : waiting for the sim to hold the aircraft "
+                      L"on the ground");
+        break;
+    case datum::State::Applied:
+        std::swprintf(datumLine, ARRAYSIZE(datumLine),
+                      L"  Datum     : %+.2f m added to Entity 0 of every copy "
+                      L"(sim rests at %.2f m, HOST commands %.2f m)",
+                      s.datumOffsetM, s.datumRestM, s.datumCommandedM);
+        break;
+    case datum::State::Refused:
+    default:
+        std::swprintf(datumLine, ARRAYSIZE(datumLine),
+                      L"  Datum     : refused %+.2f m as not a datum gap "
+                      L"(sim rests at %.2f m, HOST commands %.2f m); retrying",
+                      s.datumRestM - s.datumCommandedM, s.datumRestM,
+                      s.datumCommandedM);
+        break;
+    }
+
     // How the transmit loop is pacing, and -- when flow control is holding
     // frames back -- whether it is the HOST that is setting the pace. The SOF
     // line already shows the rate that was achieved, so a rate well under the
@@ -429,6 +465,7 @@ void Refresh() {
         L"\r\n"
         L"%s\r\n"
         L"%s\r\n"
+        L"%s\r\n"
         L"\r\n"
         L"%s\r\n",
         g_link->hostIp, static_cast<unsigned>(g_link->hostPort),
@@ -442,7 +479,7 @@ void Refresh() {
         static_cast<unsigned long long>(s.entityUpdates),
         static_cast<unsigned>(s.hostIgMode), IgModeName(s.hostIgMode),
         static_cast<unsigned>(s.lastHostFrame),
-        relay, relayNic, terrain);
+        relay, relayNic, datumLine, terrain);
 
     SetWindowTextW(g_status, text);
 

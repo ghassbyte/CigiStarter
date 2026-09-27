@@ -37,8 +37,10 @@ sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
    paused, window-up behaviour — see
    [Operator window](#operator-window).
 6. **Fans the HOST's downstream stream out to the other IG PCs** listed in
-   `client.txt`, byte for byte, so several visual channels run off the one link
-   the HOST already feeds — see [Fan-out](#fan-out-to-the-other-ig-pcs).
+   `client.txt`, byte for byte — with one opt-in exception, `--alt-datum-offset`,
+   which rewrites entity 0's altitude — so several visual channels run off the
+   one link the HOST already feeds — see
+   [Fan-out](#fan-out-to-the-other-ig-pcs).
 
 ## Requirements
 
@@ -139,6 +141,10 @@ CigiStarter.exe [options]
                       finds them like the real stream            (default on)
   --no-relay-spoof    label those copies with this IG's own address instead,
                       for a client driver pointed at the IG rather than the HOST
+  --alt-datum-offset  measure the difference between this IG's Prepar3D aircraft
+                      and the HOST's, and write it into entity 0's altitude in
+                      the copies, so a client parked at the same field puts the
+                      aircraft on its own surface                    (default off)
   --terrain-dir <dir> folder of SRTM ".hgt" terrain tiles to answer HAT/HOT
                       from              (default: terrain\ beside the program)
   --terrain-offset <m> constant added to every database height, for calibrating
@@ -153,9 +159,11 @@ CigiStarter.exe [options]
 ```
 
 The options only set the *starting* state, with one exception: the four link
-options (`--host-ip`, `--host-port`, `--ig-ip`, `--ig-port`) and the two relay
-options (`--relay-spoof`, `--no-relay-spoof`) are read once and have no window
-control, because the deployed link never changes and `client.txt` is read once.
+options (`--host-ip`, `--host-port`, `--ig-ip`, `--ig-port`) and the three relay
+options (`--relay-spoof`, `--no-relay-spoof`, `--alt-datum-offset`) are read once
+and have no window control, because the deployed link never changes, `client.txt`
+is read once, and the datum the measurement lands on is a property of the field
+the aircraft is parked at.
 The SOF rate,
 HAT/HOT answering and flow control can all be changed from the window while the
 program runs — see [Operator window](#operator-window). Whether the stream starts
@@ -177,6 +185,7 @@ CigiStarter.exe                        # 150 Hz, paced to the HOST, live on laun
 CigiStarter.exe --no-auto-start        # wait for START instead (old behaviour)
 CigiStarter.exe --no-flow-control --fps 100
 CigiStarter.exe --no-relay-spoof       # copies labelled as this IG, not the HOST
+CigiStarter.exe --alt-datum-offset     # copies corrected onto this IG's sim datum
 CigiStarter.exe --host-ip 127.0.0.1 --ig-ip 127.0.0.1   # bench test, local HOST
 ```
 
@@ -668,6 +677,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |                                                                          |
 |  Relay     : 4 clients, 4 reachable, 1567 datagrams forwarded            |
 |  Relay NIC : Killer E2600 Gigabit Ethernet Controller                    |
+|  Datum     : off (--alt-datum-offset corrects the copies)                |
 |                                                                          |
 |  TerrainDB : 2 tile(s), 1 in memory, 25 MB                               |
 |  HAT/HOT   : answering from the sim's own terrain                        |
@@ -780,6 +790,12 @@ with the window up instead, which is the behaviour the sketch below shows.
   — it is on whenever `client.txt` says so. With `--no-relay-spoof` the `Relay
   NIC` line also names the address the copies carry, because it is then this
   IG's rather than the HOST's, and nothing else on the window would say so.
+- `Datum` reports the [altitude the copies carry](#altitude-datum-offset), and
+  only when `--alt-datum-offset` is in force: `off` without it, `waiting` until
+  the sim holds the aircraft on the ground, the measured correction once it has
+  one, or the gap it refused to believe. The applied and refused forms both
+  print the two altitudes the number came from, so a refusal can be checked
+  rather than taken on trust.
 
 ## Fan-out to the other IG PCs
 
@@ -806,10 +822,13 @@ is read once at startup — restart the program to pick up an edit:
 
 Every datagram the HOST sends is copied **exactly as it arrived**, on the same
 UDP port, to each listed client — one Ethernet frame per client per datagram.
-By default the copies carry the **HOST's address and port as their source**
-(`192.168.70.2:8001`), so a client's bridge needs no reconfiguration at all: it
-sees the same stream it would have seen if it were the IG on the link. Nothing
-is ever sent back up the link, and clients never talk to CigiStarter.
+The one exception is opt-in and off by default: `--alt-datum-offset` shifts
+entity 0's altitude on the way through, and touches nothing else — see
+[Altitude datum offset](#altitude-datum-offset). By default the copies carry the
+**HOST's address and port as their source** (`192.168.70.2:8001`), so a client's
+bridge needs no reconfiguration at all: it sees the same stream it would have
+seen if it were the IG on the link. Nothing is ever sent back up the link, and
+clients never talk to CigiStarter.
 
 **`--no-relay-spoof`** drops that disguise: the copies carry this IG's own
 address and port (`192.168.70.70:8000`) instead. Use it when the client-side
@@ -833,7 +852,9 @@ How it works, and why:
 - **The adapter is found automatically**: the one that owns this IG's address
   (`192.168.70.70`) — or, on a machine that does not have it, such as a test
   bench, whichever adapter the route to the HOST leaves by. No flag; the window
-  names the adapter it picked.
+  names the adapter it picked. An adapter with no hardware address cannot carry
+  a frame at all — the loopback adapter a bench link runs over is one — and the
+  window reports the relay off with that reason rather than appearing to work.
 - **Each copy is a hand-built Ethernet + IPv4 + UDP frame**, injected with
   `pcap_sendpacket`. Ethernet destination = the client's MAC; Ethernet source =
   this adapter's *own* MAC (spoofing that as well would teach every switch on
@@ -855,7 +876,8 @@ How it works, and why:
   CIGI stream would be worse than not sending it.
 - **The receive path is untouched**: only datagrams whose source address is the
   HOST's are copied at all, and the copy is taken before anything is parsed, so
-  clients get precisely what the HOST sent.
+  clients get precisely what the HOST sent — apart from `--alt-datum-offset`,
+  which edits the copy and leaves the datagram this IG parses alone.
 
 The `Relay` line in the window is the whole state, and it never needs a button:
 
@@ -876,6 +898,61 @@ the operator can see that the HOST's is not being used:
 datagrams that reached none (all of them too big, or every send failing while a
 client was reachable). Clients that have not answered yet are neither.
 
+### Altitude datum offset
+
+A client IG PC runs its own Prepar3D, with its own scenery, so the ground under
+the aircraft can sit at a different height there than on this IG. If the copies
+carry the HOST's altitude unchanged, the client's sim does not put the aircraft
+on its own surface — the same one-metre-class fault that makes an aircraft shake
+on a single IG, and one the clients cannot fix for themselves, because their
+drivers read the copies and never the HOST.
+
+**`--alt-datum-offset`** fixes it where it belongs. Off by default: without it
+every copy is byte for byte what the HOST sent.
+
+- **Measured, never configured.** This IG's Prepar3D aircraft, read over FSUIPC,
+  is compared with the HOST's own Entity 0 altitude, and the difference is added
+  to entity 0's altitude in the copies — the altitude at which *this* IG's sim
+  actually holds the aircraft. There is no constant to tune, and nothing to
+  measure by hand after a move to another field.
+- **Measured while the aircraft is on the ground.** The sim's own
+  weight-on-wheels status is read — never written — and the sample is taken at
+  the first one that says the aircraft is down. Started mid-flight it waits,
+  rather than measuring the few centimetres of a curved flight path and calling
+  it a datum.
+- **A reading that cannot be one is refused, not clamped.** A gap past ±20 m, or
+  a sim altitude that is not finite, is a bad reading: the copies are left alone
+  and it is tried again on the next datagram, with both altitudes printed so a
+  refusal can be checked. It is the same rule, and the same 20 m, as the
+  client-side bridge uses, so the two corrections agree instead of fighting.
+- **Entity 0 only** — the entity the measurement is against, and the only one
+  whose ground contact can be seen.
+- **The copies only.** The datagrams this IG parses keep the HOST's own numbers,
+  so the HAT/HOT anchor stays on the HOST's Entity Control pose and the driver
+  on this PC is approached exactly as before; nothing on the upstream link
+  changes.
+- **A property of where it was measured.** The gap is the difference between two
+  models of one field's surface: exact at the field the aircraft is parked at,
+  approximate everywhere else, so landing somewhere else brings the fault back
+  at the metre scale. The measurement is deliberately one-shot, from the parking
+  spot.
+- **Needs HAT/HOT answering**, because the FSUIPC poller that reads the sim's
+  aircraft is the same one that answers terrain requests: with
+  `--alt-datum-offset --no-respond-hathot` nothing is measured, and the line
+  stays `waiting`.
+- **Safe on both sides.** A client IG PC whose own driver also corrects the
+  datum re-measures the corrected copy against its own sim, finds ≈ 0, and adds
+  0.
+
+The window's `Datum` line is the whole state:
+
+```
+  Datum     : waiting for the sim to hold the aircraft on the ground
+  Datum     : -0.92 m added to Entity 0 of every copy (sim rests at 7.01 m, HOST commands 7.93 m)
+  Datum     : refused -171.85 m as not a datum gap (sim rests at 7.01 m, HOST commands 178.87 m); retrying
+  Datum     : off (--alt-datum-offset corrects the copies)
+```
+
 ## Network layout
 
 The nodes and the full diagram are in `agents.md`; this is the traffic
@@ -889,7 +966,9 @@ CigiStarter puts on the link:
 
 The fan-out row is the only traffic this program puts on the link labelled with
 somebody else's address: the copies claim to come from the HOST on purpose, so
-the clients need no reconfiguration. See
+the clients need no reconfiguration. The one thing a copy does not carry
+unchanged is entity 0's altitude, and only under
+[`--alt-datum-offset`](#altitude-datum-offset). See
 [Fan-out](#fan-out-to-the-other-ig-pcs). The addresses shown are the deployment's
 defaults; see [Usage](#usage) for the bench-test overrides.
 
@@ -949,8 +1028,9 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `TerrainProbe.h`   | API to the sim's own terrain, through the `PdkTerrainProbe` add-on — the preferred HAT/HOT source |
 | `TerrainProbe.cpp` | CigiStarter's half of the shared-memory link to `PdkTerrainProbe.dll` |
 | `TerrainProbeIpc.h`| the shared-memory contract between CigiStarter and the add-on |
-| `Relay.h`          | fan-out API: start/stop, per-datagram copy, status snapshot |
-| `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
+| `AltitudeDatum.h`  | the measured [altitude-datum rule](#altitude-datum-offset): the ±20 m plausibility limit and the applied/refused/waiting decision |
+| `Relay.h`          | fan-out API: start/stop, per-datagram copy, the altitude offset, status snapshot |
+| `Relay.cpp`        | the fan-out itself: `client.txt`, frame building (and the `--alt-datum-offset` correction inside it), Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
 | `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles the HAT/HOT fallback is answered from |
 | `external\`        | vendored third-party code: the build-time SDKs (FSUIPC, Npcap, Prepar3D PDK headers) and the CIGI Host Emulator the bench tests drive |

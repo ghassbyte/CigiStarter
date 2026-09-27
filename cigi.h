@@ -194,6 +194,32 @@ struct EntityControl {
 bool parseEntityControl(const uint8_t* msg, size_t size, EntityControl& out);
 
 //-----------------------------------------------------------------------------
+// Entity Control (message id 2) rewriting
+//-----------------------------------------------------------------------------
+// Add `offsetM` to the altitude of every Entity Control for entity 0 in a CIGI
+// datagram, in place, and return how many messages were changed. This is what
+// carries the measured altitude datum offset to the extra IG PCs: their drivers
+// write the HOST's altitude straight through, and at an airfield where the
+// HOST's terrain database and Prepar3D's disagree by about a metre that parks
+// the aircraft off P3D's own surface, which is the on-ground shake. Relay.h
+// calls this on the copy it is about to send; AltitudeDatum.h has the rule that
+// decides `offsetM`.
+//
+// Entity 0 only. It is the aircraft the HOST's flight model flies, the one
+// entity-relative HAT/HOT requests are about, and the only entity whose *ground
+// contact* can be seen: a metre of altitude on anything else is invisible, while
+// on a parked aircraft it is the difference between resting on the surface and
+// being pushed up out of it. It is also the entity the offset is measured
+// against, so correcting it and nothing else keeps the measurement and the
+// correction talking about the same aircraft.
+//
+// `datagram` must be writable, and must be a copy: never rewrite the datagram as
+// the HOST sent it. The entity-relative HAT/HOT answers are anchored to the
+// HOST's own Entity-0 pose (see main.cpp), and rewriting the original in place
+// would move that anchor -- and so those answers -- by the offset.
+int offsetEntity0Altitude(uint8_t* datagram, size_t len, double offsetM);
+
+//-----------------------------------------------------------------------------
 // Parsing helper
 //-----------------------------------------------------------------------------
 

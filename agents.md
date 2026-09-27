@@ -82,7 +82,9 @@ A drop-in replacement for the Master IG. It plays the IG side of the link:
   ticks, so there the add-on answers from a thread of its own.
 - **Fans the downstream stream out** to the extra IG PCs in `client.txt`, byte
   for byte, source-labelled as the HOST (`--no-relay-spoof` labels them as this
-  IG instead). Optional, Npcap-backed, passive clients only.
+  IG instead) — one opt-in exception, `--alt-datum-offset`, rewrites entity 0's
+  altitude in the copies so a client sees the aircraft on its own sim's surface.
+  Optional, Npcap-backed, passive clients only.
 - **Starts on its own** — streams from launch, minimises its window, and leaves
   EXIT as the only way off the link. `--no-auto-start` restores the paused
   window.
@@ -127,7 +129,8 @@ option, the terrain sources, the fan-out and the wire layout.
 The loop is self-limiting: flow control stops the IG asking for a frame the HOST
 has not made. With HAT/HOT answering on, the IG asks the sim's own terrain engine
 for each request's height before it replies; with `client.txt` populated, every
-downstream datagram also leaves the IG again — unaltered — towards each client,
+downstream datagram also leaves the IG again — unaltered, unless
+`--alt-datum-offset` is correcting entity 0's altitude — towards each client,
 looking to them exactly like the HOST's own.
 
 ## Key facts
@@ -152,6 +155,7 @@ looking to them exactly like the HOST's own.
 | Extra IG PCs      | `client.txt` beside the executable, `address[:port]`, read once at startup |
 | Fan-out           | one Npcap-injected copy per client, source address/port spoofed as the HOST by default (`--no-relay-spoof` sends this IG's) |
 | Fan-out adapter   | found automatically: this IG's adapter, else the one the route to the HOST leaves by |
+| Altitude datum    | `--alt-datum-offset` (off by default): entity 0's altitude in the copies is shifted by the measured HOST-vs-Prepar3D gap, so a client lands the aircraft on its own terrain rather than a metre off it; measured once, on the ground, a gap past ±20 m refused |
 | Bench HOST        | the CIGI Host Emulator in `external\`, on the IG PC, in place of the flight model; `tools\test-hathot-emulator.ps1` drives it |
 | Elevation         | none requested (`asInvoker`); the fan-out needs Npcap, not elevation |
 | Reference SOF rate | ~100 Hz (~10 ms, an 8/12 ms alternation) |

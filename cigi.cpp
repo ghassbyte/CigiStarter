@@ -20,6 +20,14 @@ inline void writeF64LE(uint8_t* p, double v)  { std::memcpy(p, &v, 8); }
 inline uint16_t readU16LE(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
 inline double   readF64LE(const uint8_t* p) { double   v; std::memcpy(&v, p, 8); return v; }
 
+// Entity Control field offsets, CIGI 3.3 -- the layout is written out above
+// parseEntityControl(). Named here so the reader and the rewriter below cannot
+// drift apart.
+constexpr size_t kEntityIdOffset  = 2;   // uint16
+constexpr size_t kEntityLatOffset = 24;  // double, degrees
+constexpr size_t kEntityLonOffset = 32;  // double, degrees
+constexpr size_t kEntityAltOffset = 40;  // double, metres MSL
+
 } // namespace
 
 //-----------------------------------------------------------------------------
@@ -178,11 +186,44 @@ bool parseEntityControl(const uint8_t* msg, size_t size, EntityControl& out) {
         msg[0] != static_cast<uint8_t>(MsgEntityControl)) {
         return false;
     }
-    out.entityId  = readU16LE(msg + 2);
-    out.latDeg    = readF64LE(msg + 24);
-    out.lonDeg    = readF64LE(msg + 32);
-    out.altMeters = readF64LE(msg + 40);
+    out.entityId  = readU16LE(msg + kEntityIdOffset);
+    out.latDeg    = readF64LE(msg + kEntityLatOffset);
+    out.lonDeg    = readF64LE(msg + kEntityLonOffset);
+    out.altMeters = readF64LE(msg + kEntityAltOffset);
     return true;
+}
+
+//-----------------------------------------------------------------------------
+// Entity Control (message id 2) rewriting
+//
+// The round trip is deliberately parse-then-write rather than a blind byte
+// poke at offset 40: the framing and the entity id are re-checked here, so a
+// datagram that happens to carry those bytes for another reason is left alone.
+//-----------------------------------------------------------------------------
+int offsetEntity0Altitude(uint8_t* datagram, size_t len, double offsetM) {
+    if (offsetM == 0.0 || datagram == nullptr) {
+        return 0;
+    }
+
+    int changed = 0;
+    // The walk -- and its handling of malformed framing -- is forEachMessage's;
+    // it hands out const pointers because it is a reader, and the cast is sound
+    // because this function's contract is that `datagram` is the caller's own
+    // writable copy.
+    forEachMessage(datagram, len,
+                   [&](uint8_t id, const uint8_t* msg, size_t msgSize) {
+        if (id != static_cast<uint8_t>(MsgEntityControl)) {
+            return;
+        }
+        EntityControl e;
+        if (!parseEntityControl(msg, msgSize, e) || e.entityId != 0) {
+            return;
+        }
+        writeF64LE(const_cast<uint8_t*>(msg) + kEntityAltOffset,
+                   e.altMeters + offsetM);
+        ++changed;
+    });
+    return changed;
 }
 
 } // namespace cigi

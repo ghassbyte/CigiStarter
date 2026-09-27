@@ -21,6 +21,13 @@
 //      0x0568  8 bytes  longitude, SINT64, 360/2^64 deg per unit
 //      0x0570  4 bytes  altitude, fractional metres (low half)
 //      0x0574  4 bytes  altitude, integer metres    (high half)
+//      0x0366  2 bytes  weight-on-wheels, 0 = airborne, 1 = on the ground
+//
+//    The last one is read, never written, and exists for --alt-datum-offset: the
+//    altitude datum gap is only measurable while Prepar3D is *holding* the
+//    aircraft on the ground, because that is the only time the sim's own
+//    altitude is a reference rather than a result of what a driver wrote
+//    (AltitudeDatum.h). It is the gate on that measurement, nothing else.
 //
 //    FSUIPC's request buffer is process-global, so exactly one thread may issue
 //    FSUIPC_Read/Process. That is this module's poller thread and nobody else —
@@ -48,6 +55,13 @@ struct Sample {
     double   latDeg            = 0.0;  // the sim's aircraft latitude, degrees
     double   lonDeg            = 0.0;  // the sim's aircraft longitude, degrees
     uint64_t tick              = 0;    // increments once per successful read
+
+    // The sim's weight-on-wheels flag (0x0366, read-only). True while Prepar3D
+    // is holding the aircraft on the surface, which is when its altitude is the
+    // terrain's rather than a driver's -- see --alt-datum-offset (main.cpp) and
+    // AltitudeDatum.h. False is also what a sim that has not computed it yet
+    // reports, so it gates a measurement rather than being one.
+    bool     onGround          = false;  // 0x0366 != 0
 };
 
 // Start the background poller. Never fails: if the sim is not up yet the

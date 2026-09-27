@@ -39,6 +39,7 @@
 //    datagrams, comfortably inside one frame.)
 //=============================================================================
 #include "Relay.h"
+#include "cigi.h"      // offsetEntity0Altitude: the datum correction on the copy
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -97,6 +98,13 @@ int                 g_skipped   = 0;
 
 std::atomic<uint64_t> g_forwarded{0};
 std::atomic<uint64_t> g_dropped{0};
+
+// The datum correction added to the Entity 0 altitude of every copy, in metres.
+// 0.0 -- the only value unless --alt-datum-offset measured one -- leaves the
+// payload untouched. Written once by the receive thread (which is also the only
+// caller of forward()), read on that same thread, and atomic anyway so that the
+// window's status read cannot tear it.
+std::atomic<double> g_altOffsetM{0.0};
 
 // Capture side. Written by start() before the worker threads exist, read by the
 // receive thread, released by stop() after that thread has been joined.
@@ -493,6 +501,13 @@ size_t buildFrame(uint8_t* out, const Client& client, const uint8_t* payload,
     put16(udp + 6, 0);        // checksum, filled in below
     std::memcpy(pay, payload, len);
 
+    // The datum correction, if one was measured, goes on the frame's copy of the
+    // payload -- never on the caller's datagram, which the rest of the program
+    // goes on to parse. It is applied here, before the UDP checksum below, so the
+    // checksum covers the bytes that actually go out. A no-op at 0.0, which is
+    // every run that did not pass --alt-datum-offset.
+    cigi::offsetEntity0Altitude(pay, len, g_altOffsetM.load());
+
     // The UDP checksum covers a pseudo-header (source, destination, protocol,
     // UDP length) followed by the UDP header and payload. Checksumming the
     // whole thing is what makes the copies indistinguishable from the real
@@ -749,6 +764,13 @@ void forward(const uint8_t* data, size_t len) {
     }
 }
 
+void setAltitudeOffset(double metres) {
+    // No validation here: the rule that decides whether a reading may become an
+    // offset is AltitudeDatum.h's, and this is the plumbing that carries its
+    // answer. A NaN would have been refused there.
+    g_altOffsetM.store(metres);
+}
+
 Status status() {
     Status s;
     std::lock_guard<std::mutex> lk(g_mtx);
@@ -758,6 +780,7 @@ Status status() {
     s.device    = g_device;
     s.spoofed   = g_spoofSource;
     s.source    = g_sourceText;
+    s.altitudeOffsetM = g_altOffsetM.load();
     s.error     = g_error;
     for (const Client& c : g_clients) {
         if (c.ready) {

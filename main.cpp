@@ -46,6 +46,18 @@
 //    itself (so the client PCs need no configuration). Relay.h explains how,
 //    and why that means Npcap.
 //
+//  The altitude datum offset (--alt-datum-offset)
+//    The HOST's Entity Control altitude is in the HOST's terrain database; the
+//    Prepar3D on every IG PC holds the aircraft in P3D's own. At a field where
+//    the two disagree by about a metre, a driver that writes the HOST's number
+//    straight through parks its aircraft off *its* P3D's surface, and P3D's
+//    ground model then fights the write every frame -- the parked-aircraft
+//    shake. This IG cannot correct somebody else's write, but it can correct
+//    what the client IG PCs are told: with the flag on, the gap is measured
+//    here (once, while the local sim is holding the aircraft on the ground) and
+//    added to every Entity 0 altitude in the copies. AltitudeDatum.h is the
+//    rule, Relay.h the application, resolveDatum() below the reading.
+//
 //  Dependencies
 //    Windows sockets, the 1 ms timer and user32 (Ws2_32.lib, Winmm.lib,
 //    User32.lib). While HAT/HOT answering is switched on (the default) the
@@ -57,12 +69,14 @@
 //  Usage
 //    CigiStarter.exe [--fps 150] [--ig-mode 0] [--no-respond-hathot]
 //                    [--no-flow-control] [--no-relay-spoof]
+//                    [--alt-datum-offset]
 //                    [--terrain-dir <dir>]
 //                    [--terrain-offset <m>] [--help]
 //    Being a windowed program there is no console, so --help and any startup
 //    error are reported in a message box.
 //=============================================================================
 #include "cigi.h"
+#include "AltitudeDatum.h"
 #include "SofPacer.h"
 #include "Gui.h"
 #include "Relay.h"
@@ -126,6 +140,16 @@ struct Config {
     // which is what their capture filter looks for. --no-relay-spoof sends them
     // with this IG's own address instead, for a client driver pointed at the IG.
     bool    relaySpoof    = true;
+
+    // --alt-datum-offset: measure how far apart the HOST's terrain datum and
+    // this Prepar3D's are at the aircraft, once, and add that to the Entity 0
+    // altitude in every copy the relay sends. A client IG PC's driver writes
+    // that altitude straight through, and at a field where the two datums
+    // disagree it parks the aircraft off its own P3D surface -- which its ground
+    // model then fights, i.e. the shake. Off by default: it changes what the
+    // clients receive, and the measurement needs a parked aircraft (see
+    // AltitudeDatum.h and resolveDatum()).
+    bool    altDatumOffset = false;
 
     // The link endpoints. The deployment's are the defaults; they are only ever
     // changed for a bench test that runs the HOST somewhere other than
@@ -203,6 +227,25 @@ static std::atomic<bool> g_respondHatHot{true};
 static std::atomic<int>  g_targetFps{150};
 static std::atomic<bool> g_flowControl{true};
 
+// --alt-datum-offset: whether the fan-out copies carry a measured altitude datum
+// offset. Live in the same way as the three above (seeded from the command line,
+// read by the worker threads), but never changed at runtime -- the reading it
+// gates is taken once.
+static std::atomic<bool> g_altDatumOffset{false};
+
+// What that measurement has managed to do, and what it was taken from. Written
+// by the receive thread (resolveDatum), read by the window. `g_datumOffsetM` is
+// what the relay is actually carrying, so it stays 0 unless a gap was applied;
+// the other two are the reading it came from, or the one that was refused, and
+// are kept so a refusal can be read beside the numbers that caused it.
+static std::atomic<int>    g_datumState{static_cast<int>(datum::State::Off)};
+static std::atomic<double> g_datumOffsetM{0.0};
+static std::atomic<double> g_datumRestM{0.0};
+static std::atomic<double> g_datumCommandedM{0.0};
+// Set once a gap has been applied, so the measurement never runs twice: it
+// describes the field the aircraft was parked at when this program started.
+static std::atomic<bool>   g_datumDecided{false};
+
 // The pose the HOST is commanding for the aircraft (its Entity Control for
 // entity 0), kept so the SOF thread can answer entity-relative HAT/HOT requests
 // against it. Those requests name no position of their own -- they are offsets
@@ -249,6 +292,51 @@ static void noteHostPose(const cigi::EntityControl& e) {
     g_hostPose.latDeg    = e.latDeg;
     g_hostPose.lonDeg    = e.lonDeg;
     g_hostPose.altMeters = e.altMeters;
+}
+
+//-----------------------------------------------------------------------------
+// The altitude datum measurement (--alt-datum-offset)
+//
+// Called on the receive thread, once per datagram from the HOST, until it has an
+// answer. It needs three things at once:
+//
+//   * a sim reading -- so this depends on HAT/HOT answering, which is what runs
+//     the FSUIPC poller (and is on by default);
+//   * the sim's own flag saying it is *holding* the aircraft on the ground,
+//     which is the only state in which Prepar3D's altitude for that aircraft is
+//     the terrain's rather than the result of whatever a driver last wrote; and
+//   * the HOST's Entity-0 altitude to compare it against.
+//
+// AltitudeDatum.h makes the call. An applied gap is final for the run. A refusal
+// is retried, because the aircraft may be parked somewhere the HOST does not
+// think it is right now and a later sample may be honest -- but it is reported
+// meanwhile, so the wait is visible rather than silent.
+//-----------------------------------------------------------------------------
+static void resolveDatum() {
+    if (!g_altDatumOffset.load() || g_datumDecided.load()) return;
+
+    const terrain::Sample sim = terrain::latest();
+    if (!sim.connected || !sim.onGround) return;
+
+    const HostPose host = hostPose();
+    if (!host.seen) return;
+
+    const datum::Decision d =
+        datum::decideOffset(sim.aircraftAltMeters, host.altMeters);
+
+    // Published on both paths: a refusal is only explicable beside the two
+    // altitudes it came from.
+    g_datumRestM.store(sim.aircraftAltMeters);
+    g_datumCommandedM.store(host.altMeters);
+
+    if (d.verdict != datum::Verdict::Applied) {
+        g_datumState.store(static_cast<int>(datum::State::Refused));
+        return;
+    }
+    g_datumOffsetM.store(d.offsetM);
+    relay::setAltitudeOffset(d.offsetM);
+    g_datumState.store(static_cast<int>(datum::State::Applied));
+    g_datumDecided.store(true);
 }
 
 //-----------------------------------------------------------------------------
@@ -307,6 +395,13 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      (this is the default)\n"
         "  --no-relay-spoof    label those copies with this IG's own address\n"
         "                      instead, for a client driver pointed at the IG\n"
+        "  --alt-datum-offset  measure the gap between the HOST's terrain datum and\n"
+        "                      this Prepar3D's, once, and add it to the Entity 0\n"
+        "                      altitude in the copies, so the client IG PCs park\n"
+        "                      the aircraft on their own P3D surface rather than\n"
+        "                      on the HOST's. Needs the aircraft parked here when\n"
+        "                      the program starts, and HAT/HOT answering on\n"
+        "                                                          (off by default)\n"
         "  --terrain-dir <dir> folder of SRTM \".hgt\" terrain tiles to answer\n"
         "                      HAT/HOT from           (default: terrain\\ beside\n"
         "                      this program; see README.md)\n"
@@ -328,7 +423,11 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
 }
 
 static void showUsage(const char* argv0) {
-    char msg[2048];
+    // The message is a little over 3 KB of text, so the buffer has to be larger
+    // than the default 2 KB it used to be -- at 2048 snprintf truncated it
+    // silently and the last options (the link endpoints and this note) never
+    // reached the operator. If more options are added, raise this again.
+    char msg[4096];
     buildUsage(msg, sizeof(msg), argv0);
     MessageBoxA(nullptr, msg, "CigiStarter", MB_OK);
 }
@@ -382,6 +481,8 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             cfg.relaySpoof = true;      // the default; kept for symmetry
         } else if (a == "--no-relay-spoof") {
             cfg.relaySpoof = false;
+        } else if (a == "--alt-datum-offset") {
+            cfg.altDatumOffset = true;
         } else if (a == "--terrain-dir") {
             const char* v = next("--terrain-dir"); if (!v) return false;
             cfg.terrainDir = v;
@@ -744,6 +845,15 @@ static gui::Status uiStatus() {
     s.relaySpoofed   = fan.spoofed;
     s.relaySource    = fan.source;
     s.relayError     = fan.error;
+
+    // --alt-datum-offset, from the measurement rather than from the relay, so
+    // that the window can say "waiting" while nothing has been measured and
+    // "applied" with the numbers the offset came from. `fan.altitudeOffsetM` is
+    // the same value once one is in force; the state is what tells them apart.
+    s.datumState      = static_cast<datum::State>(g_datumState.load());
+    s.datumOffsetM    = g_datumOffsetM.load();
+    s.datumRestM      = g_datumRestM.load();
+    s.datumCommandedM = g_datumCommandedM.load();
     return s;
 }
 
@@ -849,6 +959,12 @@ int main(int argc, char** argv) {
     g_flowControl.store(cfg.flowControl);
     g_sending.store(cfg.autoStart);
 
+    // --alt-datum-offset reports Waiting until it has a reading, so the window
+    // distinguishes "not asked for" from "asked for, nothing measured yet".
+    g_altDatumOffset.store(cfg.altDatumOffset);
+    g_datumState.store(static_cast<int>(cfg.altDatumOffset ? datum::State::Waiting
+                                                          : datum::State::Off));
+
     // The IG does not choose its own mode: it reports back whatever the HOST
     // last commanded. --ig-mode therefore only seeds the value used until the
     // first IG Control arrives, after which the receive thread takes over.
@@ -913,6 +1029,11 @@ int main(int argc, char** argv) {
                 // before anything can reject the frame: a reply is a reply even
                 // if we cannot parse it.
                 g_stats.hostReplies.fetch_add(1);
+                // --alt-datum-offset, if it is on and has not measured yet: this
+                // is as good a moment as any, and it is the same thread that
+                // forwards the copies, so an offset resolved here is in force
+                // before the next datagram leaves.
+                resolveDatum();
                 relay::forward(buf.data(), static_cast<size_t>(n));
             }
 

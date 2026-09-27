@@ -19,6 +19,13 @@
 //    with this IG's own address instead, for a client driver that is pointed at
 //    the IG rather than the HOST; spoofing the HOST is the default.
 //
+//    "Byte for byte" has one deliberate exception, and it is off unless it is
+//    asked for: --alt-datum-offset. It adds a measured altitude gap to the
+//    Entity 0 altitude in the copies, so that a client IG PC's driver lands its
+//    aircraft on its own Prepar3D's surface instead of on the HOST's terrain
+//    database (AltitudeDatum.h). Every other byte -- and every altitude, while no
+//    offset is in force -- still goes across unchanged.
+//
 //    The copies are whole Ethernet frames injected with Npcap
 //    (`pcap_sendpacket`). That is not a preference: Windows will not send a
 //    UDP datagram whose source address is not local, on a raw socket or
@@ -67,7 +74,20 @@ void stop();
 
 // Send one datagram, unchanged, to every client whose hardware address is
 // known. Called on the receive thread; does nothing while the relay is off.
+//
+// `data` is read, never written: the datum correction (setAltitudeOffset) is
+// applied to the copy inside the frame that is built from it, so the caller's
+// datagram -- which the rest of the program goes on to parse -- still holds the
+// HOST's own numbers.
 void forward(const uint8_t* data, size_t len);
+
+// The datum correction added to the Entity 0 altitude in every copy, in metres
+// (0 = no correction, and the copies are byte for byte). Set once, by
+// --alt-datum-offset, from the measured gap between the HOST's commanded
+// altitude and the altitude the local Prepar3D rests the aircraft at; see
+// AltitudeDatum.h for the rule and main.cpp for the reading. Thread-safe, and
+// meant to be a do-nothing call when the option is off.
+void setAltitudeOffset(double metres);
 
 // What the operator window shows about the relay. All of it comes from one
 // read of client.txt and the adapter the relay injects on, plus two running
@@ -82,6 +102,7 @@ struct Status {
     std::string device;          // adapter the copies leave by ("" = none)
     bool     spoofed   = true;   // copies carry the HOST's address as source
     std::string source;          // that source address, "ip:port", for the window
+    double   altitudeOffsetM = 0.0;  // added to Entity 0's altitude in the copies
     std::string error;           // why the relay is off ("" = nothing wrong)
 };
 

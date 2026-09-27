@@ -41,6 +41,9 @@
     <ClInclude Include="cigi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="AltitudeDatum.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Gui.h">
       <Filter>Header Files</Filter>
     </ClInclude>

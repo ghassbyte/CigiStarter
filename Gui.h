@@ -35,6 +35,8 @@
 //=============================================================================
 #pragma once
 
+#include "AltitudeDatum.h"  // datum::State, for the window's Datum line
+
 #include <cstdint>
 #include <string>
 
@@ -116,6 +118,16 @@ struct Status {
     bool        relaySpoofed   = true;   // copies carry the HOST's source address
     std::string relaySource;             // that address, "ip:port", for the window
     std::string relayError;              // why the relay is off ("" = running)
+
+    // --alt-datum-offset: the altitude correction the copies carry, and what it
+    // was measured from. The two altitudes are shown because a refusal only means
+    // anything beside the numbers that caused it; `datumState` says which of the
+    // three states it is in (AltitudeDatum.h). Measured here, on this IG's
+    // Prepar3D, and applied to the copies the clients' drivers read.
+    datum::State datumState      = datum::State::Off;
+    double       datumOffsetM    = 0.0;  // what is added to Entity 0 in the copies
+    double       datumRestM      = 0.0;  // where the sim rests the aircraft
+    double       datumCommandedM = 0.0;  // what the HOST commands there
 };
 
 // Fixed deployment information, shown above the live status.

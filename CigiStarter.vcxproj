@@ -121,6 +121,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cigi.h" />
+    <ClInclude Include="AltitudeDatum.h" />
     <ClInclude Include="Gui.h" />
     <ClInclude Include="Relay.h" />
     <ClInclude Include="SofPacer.h" />

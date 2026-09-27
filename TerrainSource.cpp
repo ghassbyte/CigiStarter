@@ -27,6 +27,11 @@ constexpr DWORD kLatitudeOffset  = 0x0560;  // 8 bytes, SINT64
 constexpr DWORD kLongitudeOffset = 0x0568;  // 8 bytes, SINT64
 constexpr DWORD kAltitudeLow     = 0x0570;  // 4 bytes, UINT32, fractional metres
 constexpr DWORD kAltitudeHigh    = 0x0574;  // 4 bytes, INT32,  integer metres
+// The sim's weight-on-wheels flag. Read-only: writing it does nothing (that is
+// Prepar3D's doing, see agents.md). Read here only to gate --alt-datum-offset's
+// measurement, which needs the sim resting the aircraft on the surface rather
+// than following a driver's write.
+constexpr DWORD kOnGroundOffset  = 0x0366;  // 2 bytes, 0 = airborne, 1 = on ground
 
 // Fixed-point scale factors, identical to CigiP3dBridge's Conversion.h.
 constexpr double kLatScale    = 90.0 / (10001750.0 * 65536.0 * 65536.0);
@@ -42,22 +47,35 @@ Sample            g_sample;
 // One FSUIPC read round trip into `out`. Poller thread only: FSUIPC's request
 // buffer is process-global, so this must never race with another reader.
 bool pollOnce(Sample& out) {
-    DWORD    dw      = 0;
-    int32_t  ground  = 0;
-    long long latRaw = 0;
-    long long lonRaw = 0;
-    uint32_t altLow  = 0;
-    int32_t  altHigh = 0;
+    DWORD    dw       = 0;
+    int32_t  ground   = 0;
+    long long latRaw  = 0;
+    long long lonRaw  = 0;
+    uint32_t altLow   = 0;
+    int32_t  altHigh  = 0;
+    uint16_t onGround = 0;
 
     // All the reads are queued first and then committed by a single Process();
     // the destination buffers must stay alive until it returns, so they are
-    // plain locals of this function.
+    // plain locals of this function. The five terrain reads are the ones the
+    // link lives or dies by: if any of them will not even queue, the sim (or
+    // FSUIPC) has gone.
     if (!FSUIPC_Read(kGroundAltOffset, 4, &ground,  &dw) ||
         !FSUIPC_Read(kLatitudeOffset,  8, &latRaw,  &dw) ||
         !FSUIPC_Read(kLongitudeOffset, 8, &lonRaw,  &dw) ||
         !FSUIPC_Read(kAltitudeLow,     4, &altLow,  &dw) ||
-        !FSUIPC_Read(kAltitudeHigh,    4, &altHigh, &dw) ||
-        !FSUIPC_Process(&dw)) {
+        !FSUIPC_Read(kAltitudeHigh,    4, &altHigh, &dw)) {
+        return false;
+    }
+
+    // The weight-on-wheels read is best-effort: it only gates --alt-datum-offset,
+    // so an FSUIPC that will not carry it must not take the terrain link down
+    // with it. Its return value is deliberately not checked -- a read that never
+    // queued just leaves the local at 0, i.e. "airborne", and the measurement
+    // waits.
+    FSUIPC_Read(kOnGroundOffset, 2, &onGround, &dw);
+
+    if (!FSUIPC_Process(&dw)) {
         return false;
     }
 
@@ -67,6 +85,7 @@ bool pollOnce(Sample& out) {
                             static_cast<double>(altLow) * kAltFraction;
     out.latDeg            = static_cast<double>(latRaw) * kLatScale;
     out.lonDeg            = static_cast<double>(lonRaw) * kLonScale;
+    out.onGround          = (onGround != 0);
     return true;
 }
 
