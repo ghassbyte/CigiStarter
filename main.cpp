@@ -30,6 +30,13 @@
 //    HOST 192.168.70.2  -> IG 192.168.70.70 : 8000   (downstream data)
 //    IG   192.168.70.70 -> HOST 192.168.70.2 : 8001  (upstream SOF / responses)
 //
+//  The local sim
+//    `--always-pause` holds the local Prepar3D paused, whatever unpauses it:
+//    the same FSUIPC poll that reads the terrain also reads the sim's own pause
+//    indicator, and writes the pause lever back whenever the indicator says the
+//    sim is running. It keeps the poller alive on its own, so it holds the sim
+//    even with answering switched off. Off by default (TerrainSource.h).
+//
 //  Operator interface
 //    A small fixed-size Win32 window (Gui.cpp) showing the link, the live
 //    stream statistics and the terrain sample, with START / STOP / EXIT plus
@@ -50,13 +57,14 @@
 //    Windows sockets, the 1 ms timer and user32 (Ws2_32.lib, Winmm.lib,
 //    User32.lib). While HAT/HOT answering is switched on (the default) the
 //    FSUIPC SDK is linked as well, to read the terrain height out of the local
-//    Prepar3D (isolated in TerrainSource.cpp). Npcap is used for the fan-out
+//    Prepar3D -- and to hold that sim paused under --always-pause (all of it
+//    isolated in TerrainSource.cpp). Npcap is used for the fan-out
 //    but is loaded at run time, never linked, so a PC without it is still a
 //    perfectly good IG (Relay.cpp).
 //
 //  Usage
 //    CigiStarter.exe [--fps 150] [--ig-mode 0] [--no-respond-hathot]
-//                    [--no-flow-control] [--no-relay-spoof]
+//                    [--always-pause] [--no-flow-control] [--no-relay-spoof]
 //                    [--terrain-dir <dir>]
 //                    [--terrain-offset <m>] [--help]
 //    Being a windowed program there is no console, so --help and any startup
@@ -115,6 +123,13 @@ struct Config {
     uint8_t igMode        = 0;    // 0 = Standby (0x30), 1 = Operate (0x31)
     bool    respondHatHot = true;
     bool    flowControl   = true; // pace the SOF stream to the HOST's replies
+    // Hold the local Prepar3D paused, whatever unpauses it (TerrainSource.h):
+    // the poller reads the sim's own pause indicator and writes the pause lever
+    // back whenever the indicator says the sim is running. Off by default, like
+    // everything else the deployment did not ask for. The rig's vendor program
+    // holds the sim paused anyway; this makes the IG do it itself rather than
+    // depend on another program's behaviour.
+    bool    alwaysPause   = false;
     // Start transmitting as soon as the program starts, and minimise the window
     // once it is. At a deployment site the IG PC is switched on rather than
     // operated, so there should be nothing to click before the link is live --
@@ -202,6 +217,10 @@ static Stats             g_stats;           // filled in by the receive thread
 static std::atomic<bool> g_respondHatHot{true};
 static std::atomic<int>  g_targetFps{150};
 static std::atomic<bool> g_flowControl{true};
+// Hold the sim paused (--always-pause). Seeded from the command line and owned
+// here, like the rest of the live state; the poller is started while this or
+// HAT/HOT answering wants it.
+static std::atomic<bool> g_alwaysPause{false};
 
 // The pose the HOST is commanding for the aircraft (its Entity Control for
 // entity 0), kept so the SOF thread can answer entity-relative HAT/HOT requests
@@ -291,6 +310,12 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      over FSUIPC, in that order   (this is the default)\n"
         "  --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC\n"
         "                      untouched\n"
+        "  --always-pause      hold the local Prepar3D paused, whatever unpauses\n"
+        "                      it: the FSUIPC poller reads the sim's own pause\n"
+        "                      indicator and sets the pause lever back whenever\n"
+        "                      the sim is running. Runs the poller on its own, so\n"
+        "                      it still holds the sim under --no-respond-hathot\n"
+        "                                                          (default off)\n"
         "  --flow-control      hold a SOF back while the HOST has not answered the\n"
         "                      previous one, so the stream fits the HOST (this is\n"
         "                      the default)\n"
@@ -328,7 +353,10 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
 }
 
 static void showUsage(const char* argv0) {
-    char msg[2048];
+    // The usage text is a little under 4 KB, so this has to be bigger than 2 KB:
+    // at 2048 swprintf truncated it silently and --help dropped its last
+    // options, which were exactly the ones an operator would be looking up.
+    char msg[4096];
     buildUsage(msg, sizeof(msg), argv0);
     MessageBoxA(nullptr, msg, "CigiStarter", MB_OK);
 }
@@ -370,6 +398,8 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             cfg.respondHatHot = true;   // the default; kept so old command lines work
         } else if (a == "--no-respond-hathot") {
             cfg.respondHatHot = false;
+        } else if (a == "--always-pause") {
+            cfg.alwaysPause = true;
         } else if (a == "--flow-control") {
             cfg.flowControl = true;     // the default; kept so old command lines work
         } else if (a == "--no-flow-control") {
@@ -695,6 +725,8 @@ static gui::Status uiStatus() {
     s.terrainConnected  = sim.connected;
     s.groundAltMeters   = sim.groundAltMeters;
     s.aircraftAltMeters = sim.aircraftAltMeters;
+    s.alwaysPause       = g_alwaysPause.load();
+    s.simPaused         = sim.paused;
 
     // Which aircraft the entity-relative answers are anchored to, and where it
     // is. A stale anchor is invisible on the wire -- the requests are the same
@@ -755,22 +787,32 @@ static void uiRequestQuit()       { g_running.store(false); }
 // (a held-back SOF simply becomes due again).
 static void uiSetFlowControl(bool on) { g_flowControl.store(on); }
 
-// Switching HAT/HOT answering on and off starts and stops the terrain poller
-// with it: the poller is the only thing in this process that touches FSUIPC and
-// there is no point reading the sim while the answer goes unused. It reconnects
-// on its own, so toggling is safe in any order (including before Prepar3D is
-// running, where it just retries).
+// The terrain poller is the only thing in this process that touches FSUIPC, and
+// there are now two reasons to want it: to answer HAT/HOT, and to hold the sim
+// paused. It runs while either is on, and this is the one place that decides.
+// It reconnects on its own, so toggling is safe in any order (including before
+// Prepar3D is running, where it just retries).
+static void updateTerrainPoller() {
+    if (g_respondHatHot.load() || g_alwaysPause.load()) {
+        terrain::start();
+    } else {
+        terrain::stop();
+    }
+}
+
+// The HAT/HOT check box also drives the sim's terrain probe, which is only ever
+// an answer source; the poller above is shared, so it is not switched off while
+// the always-pause watchdog still wants it.
 static void uiSetRespondHatHot(bool on) {
     if (g_respondHatHot.exchange(on) == on) {
         return;  // no change
     }
     if (on) {
-        terrain::start();
         terrain::probe::start();
     } else {
         terrain::probe::stop();
-        terrain::stop();
     }
+    updateTerrainPoller();
 }
 
 // The window range-checks the rate box first; this is belt and braces, because
@@ -847,6 +889,7 @@ int main(int argc, char** argv) {
     g_respondHatHot.store(cfg.respondHatHot);
     g_targetFps.store(cfg.fps);
     g_flowControl.store(cfg.flowControl);
+    g_alwaysPause.store(cfg.alwaysPause);
     g_sending.store(cfg.autoStart);
 
     // The IG does not choose its own mode: it reports back whatever the HOST
@@ -855,13 +898,15 @@ int main(int argc, char** argv) {
     g_stats.hostIgMode.store(static_cast<uint8_t>(cfg.igMode & 0x03u));
 
     // The terrain poller owns every FSUIPC call in this process, so it runs
-    // only while HAT/HOT answering is enabled -- which it is by default, since
-    // a wrong or missing HOT flies the aircraft into the ground. The window's
-    // check box turns it on and off at runtime.
+    // only while something wants it: HAT/HOT answering (on by default, since a
+    // wrong or missing HOT flies the aircraft into the ground) or the
+    // --always-pause watchdog. The window's check box turns answering on and off
+    // at runtime; the watchdog keeps the poller running underneath it.
+    terrain::setAlwaysPause(g_alwaysPause.load());
     if (g_respondHatHot.load()) {
-        terrain::start();
         terrain::probe::start();
     }
+    updateTerrainPoller();
 
     // ---- The offline terrain database (SRTM tiles) ------------------------
     // The HAT/HOT answer may be taken from here when the sim's own probe cannot

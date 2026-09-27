@@ -83,6 +83,12 @@ A drop-in replacement for the Master IG. It plays the IG side of the link:
 - **Fans the downstream stream out** to the extra IG PCs in `client.txt`, byte
   for byte, source-labelled as the HOST (`--no-relay-spoof` labels them as this
   IG instead). Optional, Npcap-backed, passive clients only.
+- **Can hold the sim paused itself** (`--always-pause`, off by default). The
+  FSUIPC poll that answers HAT/HOT also reads Prepar3D's own pause state and
+  sets the pause back whenever it finds the sim running, so the pause the rig
+  depends on does not rest on the vendor program alone. It starts the poller on
+  its own, so it holds the sim even with answering switched off. This is the one
+  write CigiStarter makes to the sim.
 - **Starts on its own** — streams from launch, minimises its window, and leaves
   EXIT as the only way off the link. `--no-auto-start` restores the paused
   window.
@@ -145,6 +151,7 @@ looking to them exactly like the HOST's own.
 | SOF live field    | the HOST's frame counter, echoed at offset 8; offsets 12/16 stay 0 |
 | Sim at the IG PC  | Prepar3D Professional (v6) — its CIGI feature is a Professional Plus extra, so the IG's 8000/8001 are not contested there |
 | Sim driver        | a 3rd-party vendor program holds Prepar3D **paused** throughout, with **slew off**, positioning the sim's aircraft over FSUIPC; the sim's own aircraft altitude can stay at Prepar3D's startup value, so it is not the HOST's — the anchor is the HOST's Entity Control |
+| Pause hold        | `--always-pause` (off by default): the FSUIPC poller reads the sim's own pause state (`0x0264`) and sets the pause back (`0x0262`) whenever it finds the sim running — the only write this program makes to the sim, and it keeps the poller running on its own, answering or not |
 | Terrain source    | P3D's own terrain via the `PdkTerrainProbe` add-on; then an SRTM `.hgt` tileset; then FSUIPC `0x0020` |
 | Entity anchor     | entity-relative HAT/HOT is anchored to the HOST's Entity Control (entity 0), a pose at offset 24/32/40 (lat/lon/alt, CIGI 3.3 layout); FSUIPC only until one has arrived |
 | Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D; free-standing query, no SimObject; optional, and loaded on the bench's Professional Plus v5 and the rig's Professional v6. The answer carries the sim's own surface classification (hard/soft/water, and whether it is an object's *platform*); the answering policy needs no more than the full surface query already gives it — its height carries a platform's deck where the elevation-only call returned sea level — and `TerrainBaker probe` and the window's `Terrain` line show the classification |

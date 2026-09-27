@@ -21,6 +21,12 @@
 //      0x0568  8 bytes  longitude, SINT64, 360/2^64 deg per unit
 //      0x0570  4 bytes  altitude, fractional metres (low half)
 //      0x0574  4 bytes  altitude, integer metres    (high half)
+//      0x0264  2 bytes  pause indicator: 0 = running, 1 = paused (read only)
+//
+//    It can also *hold* the sim paused, which is the one write this program
+//    makes (see setAlwaysPause below): the same round trip that reads the
+//    indicator writes the lever beside it (0x0262, 2 bytes, 1 = pause) whenever
+//    the indicator said the sim was running.
 //
 //    FSUIPC's request buffer is process-global, so exactly one thread may issue
 //    FSUIPC_Read/Process. That is this module's poller thread and nobody else —
@@ -47,6 +53,7 @@ struct Sample {
     double   aircraftAltMeters = 0.0;  // the sim's own aircraft altitude, m MSL
     double   latDeg            = 0.0;  // the sim's aircraft latitude, degrees
     double   lonDeg            = 0.0;  // the sim's aircraft longitude, degrees
+    bool     paused            = false; // the sim's own pause indicator (0x0264)
     uint64_t tick              = 0;    // increments once per successful read
 };
 
@@ -59,6 +66,18 @@ bool start(int pollIntervalMs = 50);
 // poller on and off while the program runs. The cached sample is marked
 // disconnected so callers stop reporting a link that is no longer there.
 void stop();
+
+// Hold the sim paused, no matter what unpauses it. Every poll reads the sim's
+// own pause indicator (0x0264) and, whenever it says the sim is running, writes
+// the lever (0x0262 = 1) back; while the indicator says paused nothing is
+// written. Off by default, and safe to switch at any time.
+//
+// This is the only FSUIPC write this program makes, and it is read-driven: the
+// lever is set at most once per unpause, so the sim is not written to while it
+// is already paused. It has no effect unless the poller is running -- it is the
+// poller that carries it -- but it does not depend on HAT/HOT answering being
+// switched on, so it holds the sim paused even when the answers are off.
+void setAlwaysPause(bool on);
 
 // Copy of the most recent snapshot (thread-safe).
 Sample latest();

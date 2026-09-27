@@ -39,6 +39,10 @@ sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
 6. **Fans the HOST's downstream stream out to the other IG PCs** listed in
    `client.txt`, byte for byte, so several visual channels run off the one link
    the HOST already feeds — see [Fan-out](#fan-out-to-the-other-ig-pcs).
+7. Can **hold the local Prepar3D paused** (`--always-pause`), whatever unpauses
+   it: the same FSUIPC poll that reads the terrain reads the sim's own pause
+   state, and puts the pause back whenever it finds the sim running — see
+   [Holding the sim paused](#holding-the-sim-paused).
 
 ## Requirements
 
@@ -47,13 +51,13 @@ sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
   startup error or `--help` is reported in a message box instead of on stdout.
   The project links with `SubSystem=Windows` plus `EntryPointSymbol=mainCRTStartup`,
   which produces a GUI binary while still allowing a plain `int main(argc, argv)`.
-- Windows system libraries only, plus the **FSUIPC SDK** while HAT/HOT answering
-  is switched on (`Ws2_32.lib` for sockets, `Winmm.lib` for timing,
+- Windows system libraries only, plus the **FSUIPC SDK** while the local sim is
+  being read (`Ws2_32.lib` for sockets, `Winmm.lib` for timing,
   `User32.lib` for the window, `Iphlpapi.lib` for the client MAC lookups, and
-  `FSUIPCuser64.lib` for the aircraft position and the terrain fallback). With
-  answering switched off the program never touches FSUIPC. The terrain
-  database itself needs no library at all — just the `.hgt` tiles (see
-  [Terrain database](#terrain-database)).
+  `FSUIPCuser64.lib` for the aircraft position, the terrain fallback and the
+  pause hold). With answering switched off and no `--always-pause` the program
+  never touches FSUIPC. The terrain database itself needs no library at all —
+  just the `.hgt` tiles (see [Terrain database](#terrain-database)).
 - The preferred terrain source is a Prepar3D that is running the
   **`PdkTerrainProbe`** add-on (`tools\PdkTerrainProbe`). Building it needs the
   Prepar3D PDK headers, vendored in `external\Prepar3D-SDK\inc\PDK\`; *using* it
@@ -127,6 +131,11 @@ CigiStarter.exe [options]
                       that order                                  (default on)
   --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC
                       untouched
+  --always-pause      hold the local Prepar3D paused, whatever unpauses it: the
+                      FSUIPC poller reads the sim's own pause state and sets the
+                      pause back whenever it finds the sim running. Runs the
+                      poller on its own, so it still holds the sim with
+                      --no-respond-hathot                          (default off)
   --flow-control      hold a SOF back while the HOST has not answered the
                       previous one                            (default on)
   --no-flow-control   transmit on the rate alone, without waiting for the HOST
@@ -156,11 +165,12 @@ The options only set the *starting* state, with one exception: the four link
 options (`--host-ip`, `--host-port`, `--ig-ip`, `--ig-port`) and the two relay
 options (`--relay-spoof`, `--no-relay-spoof`) are read once and have no window
 control, because the deployed link never changes and `client.txt` is read once.
-The SOF rate,
-HAT/HOT answering and flow control can all be changed from the window while the
-program runs — see [Operator window](#operator-window). Whether the stream starts
-on launch is a start-up decision only, so `--no-auto-start` is the single way back
-to the old behaviour: a window that waits for the button.
+`--always-pause` is a start-up decision too — the window reports it rather than
+controlling it, since a deployment either holds the sim paused or it does not.
+The SOF rate, HAT/HOT answering and flow control can all be changed from the
+window while the program runs — see [Operator window](#operator-window). Whether
+the stream starts on launch is a start-up decision only, so `--no-auto-start` is
+the single way back to the old behaviour: a window that waits for the button.
 
 One input file matters too: **`client.txt`**, next to the executable, lists the
 other IG PCs to copy the downstream stream to. It is optional and is read once at
@@ -177,6 +187,7 @@ CigiStarter.exe                        # 150 Hz, paced to the HOST, live on laun
 CigiStarter.exe --no-auto-start        # wait for START instead (old behaviour)
 CigiStarter.exe --no-flow-control --fps 100
 CigiStarter.exe --no-relay-spoof       # copies labelled as this IG, not the HOST
+CigiStarter.exe --always-pause         # hold the local Prepar3D paused throughout
 CigiStarter.exe --host-ip 127.0.0.1 --ig-ip 127.0.0.1   # bench test, local HOST
 ```
 
@@ -459,8 +470,9 @@ The fields themselves:
 
 The FSUIPC link is polled by a background thread that owns every FSUIPC call, so
 the SOF pacing is never delayed by an FSUIPC round trip. The poller runs only
-while answering is switched on — the window's check box starts and stops it, and
-while it is off this program makes no FSUIPC calls at all. With a terrain
+while something wants it: answering (the window's check box starts and stops
+that), or the [`--always-pause` hold](#holding-the-sim-paused). With answering
+off and no hold this program makes no FSUIPC calls at all. With a terrain
 database present a missing Prepar3D is no longer fatal to the answer: the
 database still answers, and `Valid = 0` is returned only for points it cannot
 cover.
@@ -642,6 +654,39 @@ client.txt
   every database height. It affects the database only, never the FSUIPC
   fallback.
 
+## Holding the sim paused
+
+The rig runs Prepar3D paused throughout, with the aircraft positioned from
+outside over FSUIPC and slew off. Paused is what the rest of the program depends
+on there: the add-on answers from a thread of its own while Prepar3D's ticks are
+stopped, and Prepar3D's own ground model does not run, so the aircraft stays
+where the positioning program puts it. It is the *vendor program* that keeps it
+that way, though — and it does unpause the sim briefly while it brings Prepar3D
+up.
+
+`--always-pause` makes the IG responsible for the pause instead of trusting
+another program to keep it. It is off by default, and it is the only FSUIPC
+write CigiStarter makes:
+
+- every poll reads the sim's own pause state (`0x0264`), which rides the round
+  trip the terrain reads already make;
+- whenever that reading says the sim is running, the pause is set on the next
+  poll (`0x0262` written as 1). An already-paused sim is never written to, so
+  the writes are one per unpause, not one per poll.
+
+The decision is taken on the *previous* poll's reading, because this poll's own
+reading does not exist until the round trip has returned — by which time the
+write has already gone with it. The sim can therefore run for up to one poll
+interval (50 ms) before it is put back, and that is also how long the vendor
+program's bring-up unpause lasts under it. Nothing needs to interact with this,
+so the window reports it with a `Pause` line rather than a control (see
+[Operator window](#operator-window)).
+
+It does not depend on HAT/HOT answering: it starts the FSUIPC poller itself, so
+`--always-pause --no-respond-hathot` still holds the sim while answering nothing.
+Until FSUIPC can be opened — Prepar3D not up, or FSUIPC not installed — the
+window says there is no link yet, and the pause is asserted as soon as there is.
+
 ## Operator window
 
 CigiStarter is a windowed program, so it is driven with the mouse rather than
@@ -675,6 +720,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  Anchor    : HOST Entity Control S6°32'23.03" E106°45'34.67", 576 ft     |
 |  Terrain   : 82 ft ground under the HOST aircraft (hard)                 |
 |  Sim       : 89 ft ground under the sim aircraft, 99 ft sim aircraft     |
+|  Pause     : held; the sim is paused                                     |
 |                                                                          |
 |  [x] Answer HAT/HOT                       SOF rate: [ 150 ] Hz [ Apply ]   |
 |  [x] Pace SOF to HOST replies (flow control)                             |
@@ -694,8 +740,9 @@ with the window up instead, which is the behaviour the sketch below shows.
   launch and STOP is the live one. The button that would be a no-op is always the
   disabled one.
 - **Answer HAT/HOT** switches HAT/HOT answering on and off, and with it the
-  FSUIPC poller — switching it off means this program makes no FSUIPC calls at
-  all, switching it back on reconnects. It starts **on**, unless
+  FSUIPC poller — unless [`--always-pause`](#holding-the-sim-paused) still wants
+  the poller, in which case only the answering stops and the sim stays held
+  paused. Switching answering back on reconnects. It starts **on**, unless
   `--no-respond-hathot` was given. (The terrain database is indexed at startup
   regardless, so the window can always report it.)
 - **Pace SOF to HOST replies** is the [flow
@@ -761,6 +808,13 @@ with the window up instead, which is the behaviour the sketch below shows.
   altitude at the value Prepar3D started with, so only the position follows.
   With no sim the line reads `Sim : no FSUIPC link to Prepar3D`; with answering
   off the block collapses to `not answered (switched off)`.
+- `Pause` reports the [pause hold](#holding-the-sim-paused): `off
+  (--always-pause holds the sim paused)` when it is not in force, otherwise
+  `held; the sim is paused` — or `held; the sim is running, re-pausing it` in
+  the moment between an unpause and the poll that puts it back, which is
+  normally too brief to see, or `held, but there is no FSUIPC link yet` until
+  the poller can open one. The line is there whether or not answering is on,
+  because the hold keeps the poller running on its own.
 - A `Probe` line appears under `HAT/HOT` when there is something to say about the
   add-on: `add-on not loaded`, `loaded, but it has no terrain service`, a stopped
   tick with the reason behind it, or — while Prepar3D has stopped ticking, which
@@ -942,8 +996,8 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT + flow-control check boxes, SOF rate box) |
 | `cigi.h`           | CIGI 3.3 message IDs, sizes, pack/parse API    |
 | `cigi.cpp`         | explicit little-endian message packing         |
-| `TerrainSource.h`  | FSUIPC-backed aircraft/terrain snapshot API (aircraft position + fallback terrain) |
-| `TerrainSource.cpp`| the FSUIPC poller thread (owns all FSUIPC use) |
+| `TerrainSource.h`  | FSUIPC-backed aircraft/terrain snapshot API (aircraft position + fallback terrain, and the `--always-pause` hold) |
+| `TerrainSource.cpp`| the FSUIPC poller thread (owns all FSUIPC use, including the pause hold's one write) |
 | `TerrainDb.h`      | offline SRTM `.hgt` terrain database API — the HAT/HOT fallback when the sim's own probe cannot answer |
 | `TerrainDb.cpp`    | the `.hgt` reader: tile index, lazy load, bilinear lookup |
 | `TerrainProbe.h`   | API to the sim's own terrain, through the `PdkTerrainProbe` add-on — the preferred HAT/HOT source |

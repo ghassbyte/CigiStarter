@@ -9,8 +9,8 @@
 //
 //  What the operator can change at runtime
 //    - START / STOP of the SOF stream,
-//    - whether HAT/HOT requests are answered (which starts/stops the FSUIPC
-//      terrain poller along with it),
+//    - whether HAT/HOT requests are answered (which stops the FSUIPC terrain
+//      poller unless --always-pause still wants it),
 //    - whether the SOF stream is paced to the HOST's replies (flow control),
 //    - the SOF transmit rate, typed as a whole number of Hz.
 //    The command-line options only seed these controls; whatever the window
@@ -61,6 +61,12 @@ struct Status {
     bool     terrainConnected  = false;  // FSUIPC link up?
     double   groundAltMeters   = 0.0;    // terrain under the aircraft
     double   aircraftAltMeters = 0.0;    // aircraft altitude
+    // --always-pause (TerrainSource.h): the poller is holding the sim paused,
+    // and what the sim's own pause indicator (0x0264) last told it. The flag and
+    // the sim's state are separate readings: held while running is the moment
+    // the watchdog re-asserts, and it should be over within a poll or two.
+    bool     alwaysPause       = false;  // the watchdog is armed
+    bool     simPaused         = false;  // the sim says it is paused
     // Where entity-relative HAT/HOT requests are anchored: the HOST's own
     // Entity Control (the aircraft its flight model is flying) when one has been
     // seen, otherwise the sim link's position. The requests carry no position of

@@ -14,11 +14,11 @@
 //     |  [ START ]  [ STOP ]                                        [ EXIT ] |
 //     +--------------------------------------------------------------------+
 //
-//  The settings rows are live: the check boxes switch HAT/HOT answering (and
-//  with it the FSUIPC poller) and the flow control, and the rate box retunes the
-//  SOF stream, all without stopping anything first. The rate box applies on
-//  Enter, on Apply, and when it loses focus, so a typed value can never be
-//  silently ignored.
+//  The settings rows are live: the check boxes switch HAT/HOT answering (and,
+//  with it, the FSUIPC terrain poller -- unless --always-pause still needs it)
+//  and the flow control, and the rate box retunes the SOF stream, all without
+//  stopping anything first. The rate box applies on Enter, on Apply, and when
+//  it loses focus, so a typed value can never be silently ignored.
 //
 //  There is no X button: SC_CLOSE is deleted from the system menu at creation
 //  and WM_CLOSE is ignored, so DestroyWindow() is only ever reached from the
@@ -42,9 +42,10 @@ constexpr int kClientW   = 660;
 constexpr int kStatusW   = kClientW - 2 * kMargin;
 // Tall enough for the whole status block plus a couple of wrapped lines: the
 // relay line grows with the counters, the terrain block gains a "Probe" line
-// when the add-on is not answering, and a line that wraps (the terrain database
-// summary carries a folder path) must not push a reading out of sight.
-constexpr int kStatusH   = 356;
+// when the add-on is not answering, the Pause line is always there, and a line
+// that wraps (the terrain database summary carries a folder path) must not push
+// a reading out of sight.
+constexpr int kStatusH   = 374;
 constexpr int kSettingsY = kMargin + kStatusH + kMargin;
 constexpr int kRowH      = 24;
 // The flow-control check box gets a row of its own under the HAT/HOT row: there
@@ -415,6 +416,26 @@ void Refresh() {
         std::swprintf(pacing, ARRAYSIZE(pacing), L"paced to the HOST");
     }
 
+    // Whether the sim is being held paused, and what its own indicator says.
+    // It rides the same poll as the terrain sample, so it is shown even when
+    // HAT/HOT answering is off and the watchdog is the only reason the poller
+    // runs. "held" while the sim is running is the watchdog mid-correction, and
+    // should be over within a poll or two.
+    wchar_t pauseLine[160];
+    if (!s.alwaysPause) {
+        std::swprintf(pauseLine, ARRAYSIZE(pauseLine),
+                      L"  Pause     : off (--always-pause holds the sim paused)");
+    } else if (!s.terrainConnected) {
+        std::swprintf(pauseLine, ARRAYSIZE(pauseLine),
+                      L"  Pause     : held, but there is no FSUIPC link yet");
+    } else if (s.simPaused) {
+        std::swprintf(pauseLine, ARRAYSIZE(pauseLine),
+                      L"  Pause     : held; the sim is paused");
+    } else {
+        std::swprintf(pauseLine, ARRAYSIZE(pauseLine),
+                      L"  Pause     : held; the sim is running, re-pausing it");
+    }
+
     wchar_t text[3072];
     std::swprintf(text, ARRAYSIZE(text),
         L"  HOST %hs:%u   ->  SOF destination\r\n"
@@ -430,6 +451,7 @@ void Refresh() {
         L"%s\r\n"
         L"%s\r\n"
         L"\r\n"
+        L"%s\r\n"
         L"%s\r\n",
         g_link->hostIp, static_cast<unsigned>(g_link->hostPort),
         static_cast<unsigned>(g_link->igPort), g_link->igIp,
@@ -442,7 +464,7 @@ void Refresh() {
         static_cast<unsigned long long>(s.entityUpdates),
         static_cast<unsigned>(s.hostIgMode), IgModeName(s.hostIgMode),
         static_cast<unsigned>(s.lastHostFrame),
-        relay, relayNic, terrain);
+        relay, relayNic, terrain, pauseLine);
 
     SetWindowTextW(g_status, text);
 
