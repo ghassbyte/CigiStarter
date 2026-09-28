@@ -22,7 +22,10 @@
 // object still has its own simulation between the writes -- the point of this
 // build is to prove the link end to end on the bench, and the follow-up is a
 // custom ISimObject with no flight model of its own, which is the version that
-// does not have to race the native one at all.
+// does not have to race the native one at all.  Which is why the pose is read
+// back (IBaseObjectV400::GetPosition) each tick and the gap to the commanded
+// pose published: that number is the race, and it is what decides whether the
+// follow-up is optional.
 //
 // See ../../SimLinkIpc.h for the shared-memory contract, ../../SimLink.h for
 // the CigiStarter half, and README.md in this folder for how it is installed.
@@ -78,9 +81,15 @@ bool                   g_haveTitle  = false;
 // the row has not changed, because the object is the sim's own and would other-
 // wise drift back onto its own flight model between writes.  Re-asserting is
 // what holds it on the HOST's pose.
+//
+// `lastWritten` is the pose SetPosition was last given, kept so the next tick's
+// read-back can be measured against it.  That gap -- where the object ended up
+// versus where it was told to be -- is the native flight model's fight.
 struct Slot {
     IBaseObjectV400* base   = nullptr;
     bool             active = false;
+    bool             haveWrite = false;
+    simlink::PdkPose lastWritten{};
 };
 Slot                   g_slots[simlink::kMaxEntities];
 
@@ -126,11 +135,44 @@ void publishDiag() {
     if (g_objects)   v |= simlink::diag::kHasManager;
     if (g_frameSeen) v |= simlink::diag::kHasTick;
     if (!g_haveTitle) v |= simlink::diag::kNoTitle;
+    if (g_shm->positionReads) v |= simlink::diag::kHasReadback;
     g_shm->diag = v;
 }
 
 void publish(long hr) {
     if (g_shm) g_shm->lastError = hr;
+}
+
+//-----------------------------------------------------------------------------
+// The read-back: the pose the sim's object is actually at
+//
+// `held[]` is this add-on's table -- the IG never writes it -- so it is guarded
+// by its own seqlock exactly as the IG's rows are, for the reader's sake.
+//-----------------------------------------------------------------------------
+void publishHeld(int i, const simlink::CigiPose& held,
+                 double driftMeters, double driftDeg, uint32_t entityId) {
+    simlink::Held& h = g_shm->held[i];
+    ++h.seq;
+    h.entityId    = entityId;
+    h.tick        = g_shm->ticks;
+    h.valid       = 1;
+    h.latDeg      = held.latDeg;
+    h.lonDeg      = held.lonDeg;
+    h.altMeters   = held.altMeters;
+    h.rollDeg     = held.rollDeg;
+    h.pitchDeg    = held.pitchDeg;
+    h.yawDeg      = held.yawDeg;
+    h.driftMeters = driftMeters;
+    h.driftDeg    = driftDeg;
+    ++h.seq;
+}
+
+void clearHeld(int i) {
+    simlink::Held& h = g_shm->held[i];
+    if (!h.valid) return;
+    ++h.seq;
+    h.valid = 0;
+    ++h.seq;
 }
 
 //-----------------------------------------------------------------------------
@@ -236,9 +278,31 @@ void retire(int i) {
     IBaseObjectV400* base = s.base;
     s.base   = nullptr;
     s.active = false;
+    s.haveWrite = false;
     if (base) base->Release();
     if (g_objects && id) g_objects->RemoveObject(id);
-    if (g_shm) ++g_shm->objectsRemoved;
+    if (g_shm) {
+        ++g_shm->objectsRemoved;
+
+        // The read-back of an object that no longer exists means nothing, and a
+        // stale row left behind would be read as a drift by the bench.
+        clearHeld(i);
+
+        // The drift words are a maximum for as long as a run is in progress.
+        // When the last object goes the run is over, so the next one starts from
+        // zero rather than inheriting this run's worst case (the region is the
+        // add-on's and outlives any one CigiStarter).
+        bool anyActive = false;
+        for (int j = 0; j < simlink::kMaxEntities; ++j) {
+            if (g_slots[j].active) { anyActive = true; break; }
+        }
+        if (!anyActive) {
+            g_shm->driftMaxMeters = 0.0;
+            g_shm->driftMaxDeg    = 0.0;
+            g_shm->driftSamples   = 0;
+            g_shm->heldValid      = 0;
+        }
+    }
 }
 
 void serviceTick(bool fromSim) {
@@ -259,6 +323,7 @@ void serviceTick(bool fromSim) {
 
     if (g_objects && g_haveTitle) {
         uint32_t applied = 0;
+        uint32_t heldValid = 0;
         for (int i = 0; i < simlink::kMaxEntities; ++i) {
             simlink::Entity e;
             if (!simlink::readEntityRow(g_shm->entities[i], e)) continue;
@@ -297,6 +362,44 @@ void serviceTick(bool fromSim) {
             // CIGI gives metres and degrees; the PDK wants feet and radians, in
             // a (longitude, altitude, latitude) / (pitch, heading, bank) order.
             const simlink::PdkPose p = simlink::toPdkPose(e);
+
+            // First the read-back.  This is the pose the object is *actually* at
+            // now -- after the sim's own simulation has run on it since the last
+            // write -- and the gap to `lastWritten` is how much the native
+            // flight model fought the last write.  It is taken before the write
+            // for exactly that reason: read after, and the object would still be
+            // where we just put it, whatever its flight model is doing.
+            if (g_slots[i].haveWrite) {
+                DXYZ gotLonAltLat = {0.0, 0.0, 0.0};
+                DXYZ gotPhb       = {0.0, 0.0, 0.0};
+                DXYZ gotVelA      = {0.0, 0.0, 0.0};
+                DXYZ gotVelB      = {0.0, 0.0, 0.0};
+                const HRESULT ghr = g_slots[i].base->GetPosition(
+                    gotLonAltLat, gotPhb, gotVelA, gotVelB);
+                if (SUCCEEDED(ghr)) {
+                    const simlink::CigiPose held = simlink::toCigiPose(
+                        gotLonAltLat.dX, gotLonAltLat.dY, gotLonAltLat.dZ,
+                        gotPhb.dX, gotPhb.dY, gotPhb.dZ);
+                    const simlink::PdkPose& c = g_slots[i].lastWritten;
+                    const simlink::CigiPose commanded =
+                        simlink::toCigiPose(c.lonRad, c.altFeet, c.latRad,
+                                            c.pitchRad, c.headingRad, c.bankRad);
+
+                    const double dm = simlink::poseGapMeters(commanded, held);
+                    const double dd = simlink::attitudeGapDeg(commanded, held);
+                    ++g_shm->positionReads;
+                    ++g_shm->driftSamples;
+                    if (dm > g_shm->driftMaxMeters) g_shm->driftMaxMeters = dm;
+                    if (dd > g_shm->driftMaxDeg)    g_shm->driftMaxDeg    = dd;
+                    publishHeld(i, held, dm, dd, e.entityId);
+                    ++heldValid;
+                } else {
+                    ++g_shm->getFails;
+                    publish(ghr);
+                    clearHeld(i);
+                }
+            }
+
             const DXYZ lonAltLat = {p.lonRad, p.altFeet, p.latRad};
             const DXYZ phb       = {p.pitchRad, p.headingRad, p.bankRad};
 
@@ -310,19 +413,23 @@ void serviceTick(bool fromSim) {
                 lonAltLat, phb, zero, zero, /*bIsOnGround*/ FALSE, dt);
             if (SUCCEEDED(hr)) {
                 ++applied;
+                g_slots[i].lastWritten = p;
+                g_slots[i].haveWrite   = true;
             } else {
                 ++g_shm->setFails;
                 publish(hr);
             }
         }
-        g_shm->applied = applied;
+        g_shm->applied   = applied;
+        g_shm->heldValid = heldValid;
     } else {
         // No manager, or no title: drop whatever objects exist so a config that
         // arrives later starts from a clean sim rather than a mixture.
         if (!g_haveTitle) {
             for (int i = 0; i < simlink::kMaxEntities; ++i) retire(i);
         }
-        g_shm->applied = 0;
+        g_shm->applied   = 0;
+        g_shm->heldValid = 0;
     }
 
     ::InterlockedExchange(&g_servicing, 0);
@@ -475,8 +582,12 @@ HRESULT STDMETHODCALLTYPE onObjectRemove(__in IUnknown& obj) {
         IBaseObjectV400* dying = s.base;
         s.base   = nullptr;  // before the release: letting the last reference go
         s.active = false;    // destroys the object, which re-enters here
+        s.haveWrite = false;
         dying->Release();
-        if (g_shm) ++g_shm->objectsRemoved;
+        if (g_shm) {
+            ++g_shm->objectsRemoved;
+            clearHeld(i);    // an object that is gone has no read-back
+        }
         break;
     }
 

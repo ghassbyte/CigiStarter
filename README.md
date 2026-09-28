@@ -726,7 +726,11 @@ the sim is left to be a sim — it just gets told where the entities are.
   the same channel will carry. The object is also the sim's own (created from a
   container title), so it still has a flight model between writes; removing that
   — a custom `ISimObject` with no simulation of its own — changes nothing about
-  the shared-memory contract.
+  the shared-memory contract. The add-on reads each object's pose back
+  (`GetPosition`) and publishes it, so the sim can be seen *holding* the pose
+  rather than merely accepting it: measured on the bench against the AS332 it
+  holds a written pose to 2 cm and 0.1°, but it will not put an object below the
+  ground under it, which is the reason the custom object is still wanted.
 - **Camera.** The per-channel angles of an immersive dome stay where they are, in
   each PC's own `viewgroup.xml`. Attaching the cockpit view to a HOST entity is a
   separate decision and a separate call, and does not change the contract.
@@ -741,10 +745,13 @@ the sim is left to be a sim — it just gets told where the entities are.
   `tools\test-all.ps1` runs it with the terrain probe's.
 - **Testing it with the sim, on this PC.** `tools\test-simlink-e2e.ps1` replays a
   recorded HOST stream into a bench CigiStarter and reads the add-on's own report
-  back out of the running Prepar3D, so the objects it created and the poses it
-  applied are checked here instead of for the first time on the rig. It fails up
+  back out of the running Prepar3D, so the objects it created, the poses it
+  applied and the poses the sim is actually holding are checked here instead of
+  for the first time on the rig. It fails up
   front on a stale `PdkSimLink.dll` or a `title=` that is not in the
-  installation. The mechanism is in `tools\PdkSimLink\README.md`.
+  installation. The mechanism is in `tools\PdkSimLink\README.md`; `-Bin
+  '..\gnd-fly-bank.bin' -Speed 20` is the run that measures the drift on a
+  moving aircraft.
 
 Every PC that renders needs its own Prepar3D with `PdkSimLink` installed. A PC
 that only fans the stream out to others (`client.txt`) or only answers HAT/HOT

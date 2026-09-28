@@ -30,7 +30,10 @@
 //    * an entity id is not silently overwritten when another id hashes to the
 //      same slot;
 //    * a publisher whose add-on is not there does nothing, and a region left
-//      behind by a sim that has stopped ticking is not believed.
+//      behind by a sim that has stopped ticking is not believed;
+//    * the read-back the add-on publishes is in the same units and order as the
+//      pose that was commanded, the drift between the two is measured correctly
+//      (including the heading wrap), and the layout that carries it is pinned.
 //
 //  Build/run:  msbuild test\PdkSimLinkTest.vcxproj /p:Configuration=Release
 //              test\x64\Release\PdkSimLinkTest.exe
@@ -44,6 +47,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -297,6 +301,63 @@ int main(int /*argc*/, char** /*argv*/) {
               approx(p.headingRad, kYaw * d2r) &&
               approx(p.bankRad, kRoll * d2r),
               "pitch/heading/bank go to the PDK's slots -- yaw is the heading, roll the bank");
+    }
+
+    // -- 3b. The read-back: the pose the sim is actually holding --------------
+    // `SetPosition` returning S_OK says the call was accepted, not that the
+    // object stayed.  The add-on reads the object's own pose back
+    // (IBaseObjectV400::GetPosition) and publishes it as a Held row; these are
+    // the pure functions that make that number mean something, and the layout
+    // that carries it.  A drift that is reported in the wrong units or with the
+    // heading wrap unhandled would read as a large number that is not real.
+    std::printf("\nthe read-back\n");
+    {
+        check(simlink::kVersion == 2, "the contract version is 2 (read-back added)");
+        check(sizeof(simlink::Held) == 80, "a Held row is 80 bytes");
+        check(offsetof(simlink::Shared, entities) == 88, "entities[] starts at 88");
+        check(offsetof(simlink::Shared, held) == 4696, "held[] starts at 4696");
+        check(sizeof(simlink::Shared) == 9816,
+              "the region is the header plus both tables");
+
+        // The PDK's units out, and back again: whatever the sim reports has to
+        // be readable in the units the commanded pose is in, or the two cannot
+        // be compared field by field.
+        Entity e{};
+        e.latDeg = kLat; e.lonDeg = kLon; e.altMeters = kAlt;
+        e.rollDeg = kRoll; e.pitchDeg = kPitch; e.yawDeg = kYaw;
+        const simlink::PdkPose p = simlink::toPdkPose(e);
+        const simlink::CigiPose back =
+            simlink::toCigiPose(p.lonRad, p.altFeet, p.latRad,
+                                p.pitchRad, p.headingRad, p.bankRad);
+        check(approx(back.latDeg, kLat) && approx(back.lonDeg, kLon) &&
+              approx(back.altMeters, kAlt),
+              "a pose survives the trip to the PDK's units and back");
+        check(approx(back.rollDeg, kRoll) && approx(back.pitchDeg, kPitch) &&
+              approx(back.yawDeg, kYaw),
+              "and so does the attitude, roll and yaw included");
+
+        // The drift itself: nothing for an object sitting on its commanded pose,
+        // metres for one that has moved -- checked against known offsets, so a
+        // wrong factor cannot quietly read as a plausible number.
+        check(simlink::poseGapMeters(back, back) == 0.0,
+              "an object on its commanded pose has zero drift");
+        simlink::CigiPose moved = back;
+        moved.latDeg = back.latDeg + 0.001;   // ~111.3 m north
+        check(std::fabs(simlink::poseGapMeters(back, moved) - 111.32) < 0.5,
+              "0.001 degrees of latitude is about 111 metres of drift");
+        simlink::CigiPose climbed = back;
+        climbed.altMeters = back.altMeters + 5.0;
+        check(std::fabs(simlink::poseGapMeters(back, climbed) - 5.0) < 1e-9,
+              "a drift straight up is measured on the altitude axis");
+
+        // Heading wraps: 359 and 1 are two degrees apart, not 358.
+        simlink::CigiPose a = back, b = back;
+        a.yawDeg = 359.0; b.yawDeg = 1.0;
+        check(std::fabs(simlink::attitudeGapDeg(a, b) - 2.0) < 1e-9,
+              "the heading wrap is handled: 359 to 1 is two degrees, not 358");
+        b = back; b.pitchDeg = back.pitchDeg + 30.0;
+        check(approx(simlink::attitudeGapDeg(back, b), 30.0),
+              "the largest axis is the one reported");
     }
 
     // -- 4. The HOST's own aircraft ------------------------------------------

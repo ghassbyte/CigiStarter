@@ -150,13 +150,20 @@ Health health() {
     s.createFails    = g_shm->createFails;
     s.setFails       = g_shm->setFails;
     s.applied        = g_shm->applied;
+    s.positionReads  = g_shm->positionReads;
+    s.getFails       = g_shm->getFails;
+    s.driftSamples   = g_shm->driftSamples;
+    s.heldValid      = g_shm->heldValid;
+    s.driftMaxMeters = g_shm->driftMaxMeters;
+    s.driftMaxDeg    = g_shm->driftMaxDeg;
 
     const uint32_t d = g_shm->diag;
     s.diagnosed = (d & diag::kPresent) != 0;
     if (s.diagnosed) {
-        s.hasManager = (d & diag::kHasManager) != 0;
-        s.hasTick    = (d & diag::kHasTick) != 0;
-        s.noTitle    = (d & diag::kNoTitle) != 0;
+        s.hasManager  = (d & diag::kHasManager) != 0;
+        s.hasTick     = (d & diag::kHasTick) != 0;
+        s.noTitle     = (d & diag::kNoTitle) != 0;
+        s.hasReadback = (d & diag::kHasReadback) != 0;
     }
 
     s.ticking = s.alive && tickFresh();

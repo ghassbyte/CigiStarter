@@ -20,8 +20,11 @@
 // This is the other way round. The IG publishes the HOST's *desired* world --
 // where each entity is and how it is oriented -- and an add-on inside Prepar3D
 // applies it on the sim's own frame thread. The IG never touches the sim; it
-// only fills a table. Nothing here is a request for an answer, so there is no
-// response table: the CIGI stream already carries everything there is to know.
+// only fills a table. Nothing here is a request for an answer: the CIGI stream
+// already carries everything there is to know, and nothing of this crosses the
+// wire back to the HOST. The add-on does write back one thing -- the pose the
+// object turned out to be at (`held[]`) -- but that is the sim's own state
+// observed for the bench and the operator window, not an answer to anything.
 //
 // The contract
 // ------------
@@ -36,7 +39,11 @@
 //      the row commands;
 //   3. the header's status words (`alive`, `ticks`, `applied`, the fail
 //      counters and `diag`) are written by the add-on so the operator window can
-//      say whether the entities are actually being rendered, and why not.
+//      say whether the entities are actually being rendered, and why not;
+//   4. the add-on also fills `held[]` and the drift words with the pose each
+//      object was actually found at (`GetPosition`) and how far it had moved
+//      from the pose it was last commanded -- the measurement that says whether
+//      the native flight model is fighting the writer.
 //
 // Units are CIGI's: degrees and metres. The add-on converts to the radians and
 // feet the PDK wants, at the sim boundary. Nothing here is a sim unit.
@@ -56,8 +63,10 @@ namespace simlink {
 
 // 'PSLK' in little-endian byte order, so a hex dump of the region is readable.
 constexpr uint32_t kMagic   = 0x4B4C5350u;  // 'P','S','L','K'
-// 1: the first layout.
-constexpr uint32_t kVersion = 1u;
+// 1: the first layout (commanded poses only).
+// 2: adds the add-on's read-back -- `held[]` and the drift words -- so the sim
+//    can be seen *holding* the pose, not merely accepting it.
+constexpr uint32_t kVersion = 2u;
 
 // Slots in the entity table. CIGI entity IDs are 16-bit, but the HOST in this
 // deployment drives a handful of entities (its capture has three Entity Controls
@@ -117,6 +126,7 @@ constexpr uint32_t kHasManager       = 1u << 24;  // the sim-object manager was 
 constexpr uint32_t kHasTick          = 1u << 25;  // a tick has been delivered
 constexpr uint32_t kNoTitle          = 1u << 26;  // no container title is configured
 constexpr uint32_t kOwnThreadTick    = 1u << 27;  // the newest pass came from the add-on's own thread
+constexpr uint32_t kHasReadback      = 1u << 28;  // a GetPosition read-back has been taken
 constexpr uint32_t kPresent          = 1u << 31;  // the add-on fills this word
 
 inline uint32_t field(uint32_t d, uint32_t shift, uint32_t mask) {
@@ -145,6 +155,36 @@ struct Entity {
     double   yawDeg;             // degrees, true heading
 };
 
+// One read-back row: the pose the sim's object is *actually* at, as the add-on
+// last found it with IBaseObjectV400::GetPosition, plus how far that is from the
+// pose it was last commanded.
+//
+// This is the add-on's table -- it is the only writer, and the IG never touches
+// it -- and it exists because `SetPosition` returning `S_OK` says the call was
+// accepted, not that the object is still there a frame later.  The object this
+// build creates is the sim's own and has its own simulation between writes, so
+// the gap between where it was told to be and where it is is the difference
+// between "the sim took the pose" and "the sim is holding it".  Units are CIGI's
+// again (degrees, metres), converted back at the sim boundary, so held and
+// commanded can be compared field by field.
+//
+// The seqlock is the same discipline as Entity's, for the same reason: a reader
+// can be preempted mid-copy.
+struct Held {
+    volatile uint32_t seq;        // seqlock: odd while the add-on rewrites this row
+    uint32_t entityId;            // the entity this slot was read for
+    uint32_t tick;                // the add-on tick the read was taken on
+    uint32_t valid;               // 1 when a pose was read this pass
+    double   latDeg;              // read back, in CIGI units
+    double   lonDeg;
+    double   altMeters;
+    double   rollDeg;
+    double   pitchDeg;
+    double   yawDeg;
+    double   driftMeters;         // |held - the pose last written| this pass
+    double   driftDeg;            // largest attitude error against that pose
+};
+
 struct Shared {
     uint32_t magic;         // kMagic
     uint32_t version;       // kVersion
@@ -164,7 +204,19 @@ struct Shared {
     volatile uint32_t applied;      // entities positioned on the last tick
     volatile uint32_t diag;         // diagnostic word, see diag::*
 
+    // Also written by the add-on: the read-back, and the drift it shows.  The
+    // drift words are a maximum over the run -- the add-on clears them when the
+    // last of its objects is retired, so a fresh run starts from zero rather
+    // than a previous run's worst case.
+    volatile uint32_t positionReads;   // successful GetPosition calls
+    volatile uint32_t getFails;        // GetPosition calls the sim refused
+    volatile uint32_t driftSamples;    // held-vs-commanded comparisons made
+    volatile uint32_t heldValid;       // rows carrying a fresh read-back last pass
+    volatile double   driftMaxMeters;  // worst |held - last commanded|, metres
+    volatile double   driftMaxDeg;     // worst attitude error, degrees
+
     Entity entities[kMaxEntities];
+    Held   held[kMaxEntities];
 };
 #pragma pack(pop)
 
@@ -172,9 +224,16 @@ struct Shared {
 // field or a differently packed build shifts every row after the first, and the
 // reader would then apply somebody else's pose. Fail the build instead. If one
 // of these has to change, bump kVersion so the two binaries cannot mix.
+//
+//   header   14 u32 (56) + 4 u32 read-back counters (16) + 2 doubles (16) = 88
+//   entities 64 * 72 = 4608, starting at 88
+//   held     64 * 80 = 5120, starting at 88 + 4608 = 4696
+//            sizeof(Shared) = 4696 + 5120 = 9816
 static_assert(sizeof(Entity) == 72, "Entity must stay 72 bytes");
-static_assert(offsetof(Shared, entities) == 56, "entities[] must start at 56");
-static_assert(sizeof(Shared) == 56 + kMaxEntities * 72,
-              "Shared must be the header plus the entity table");
+static_assert(sizeof(Held) == 80, "Held must stay 80 bytes");
+static_assert(offsetof(Shared, entities) == 88, "entities[] must start at 88");
+static_assert(offsetof(Shared, held) == 4696, "held[] must start at 4696");
+static_assert(sizeof(Shared) == 9816,
+              "Shared must be the header plus the entity and held tables");
 
 } // namespace simlink

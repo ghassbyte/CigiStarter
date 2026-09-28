@@ -94,6 +94,9 @@ not yet:
   normal sim object, so between the add-on's writes its flight model runs. This
   is the thing the follow-up (a custom `ISimObject` with no flight model of its
   own) removes; nothing about the shared-memory contract changes when it does.
+  Measured, though (see *The read-back* below), the sim does not drift a pose it
+  is given — the reason the follow-up is still wanted is that a stock object is
+  clamped to the ground under it, not that it wanders.
 * **Pose only.** Time of day, weather and effects are the next things the same
   channel will carry. The table has room and `kVersion` guards a half-updated
   pair.
@@ -220,10 +223,41 @@ tell *why* nothing is moving, not just that it is not:
 | `applied` | entities positioned on the add-on's last tick |
 | `objectsCreated` / `objectsRemoved` | objects made for entities, and taken back out |
 | `createFails` / `setFails` | creates the sim refused, and moves it refused |
+| `positionReads` / `getFails` | poses read back with `GetPosition`, and reads it refused |
+| `heldValid` | rows carrying a fresh read-back on the last tick |
+| `driftMaxMeters` / `driftMaxDeg` | worst gap between where an object *was* and where it was last written, over the run |
 | `diag` bit 24 | the sim-object manager was obtained |
 | `diag` bit 25 | a tick has been delivered |
 | `diag` bit 26 | `PdkSimLink.ini` has no title |
 | `diag` bit 27 | the newest pass came from the add-on's own thread (unused here) |
+| `diag` bit 28 | a `GetPosition` read-back has been taken |
+
+## The read-back
+
+`SetPosition` returning `S_OK` means the sim accepted the pose, not that it kept
+it. So before each write the add-on asks the object where it actually is
+(`IBaseObjectV400::GetPosition`), publishes that as a `Held` row (`SimLinkIpc.h`,
+its own table and seqlock), and measures the gap to the pose it last wrote into
+`driftMaxMeters` and `driftMaxDeg`. `held[]` is the add-on's; CigiStarter only
+reads it.
+
+Measured on the bench against the AS332 (2026-09-28), feeding the capture's own
+positions:
+
+* a fixed pose, and a 30 m/s climb, are held to **0.02 m** — for as long as the
+  command is fed and after it stops;
+* roll, pitch and yaw are held to **<0.1°** on every axis, the heading wrap
+  included;
+* an object is **clamped to the ground under it**: at the capture's positions the
+  sim's terrain is 456.4 m and 210.9 m, and commanding below that leaves the
+  object standing on the surface. On `gnd-fly-bank.bin`, whose command goes to
+  178.9 m and −0.3 m, that showed as 277 m / 211 m of "drift" — the sim refusing
+  to put the object underground, not the flight model moving it.
+
+So the native flight model does **not** drift a pose it is given; the custom
+`ISimObject` is still wanted because a stock object cannot be placed below the
+sim's own ground, and because a write is not always applied before the next
+read-back (a fast replay shows attitude transients).
 
 CigiStarter's window shows the summary on its `SimLink` line, and says which of
 the above it is when the writer is off.
@@ -290,6 +324,8 @@ sim:
   double, which proves CigiStarter's publish path end to end and not just
   compiled;
 * the aircraft's pose changes over the run rather than being written once;
+* the sim's object is read back (`GetPosition`), on the pose that was written, so
+  "the sim accepted it" becomes "the sim is holding it";
 * stopping the IG retires every row and the add-on takes its objects back out
   (`2 created, 2 removed`), so a stopped IG does not leave containers parked in
   the sim -- and, because the removal path is where the sim's heap was once
@@ -304,19 +340,20 @@ capture's poses perfectly, and failed on the way out -- which is the only kind o
 failure that a contract harness, running without the sim, can never see.
 
 The objects it creates come from the container title in `PdkSimLink.ini`, so keep
-that set to something small while bringing the link up. What it still cannot say
-is whether the sim *holds* the pose between writes: the counters say
-`SetPosition` succeeded, not that the object stayed there. The PDK's
-`IBaseObjectV400::GetPosition` exists, and reading the object's own pose back
-into the region is the next thing this test should check; until then that part
-remains the rig's question.
+that set to something small while bringing the link up. It also reads each
+object's pose back and reports the drift against what was written (see *The
+read-back* above), so `-Bin '..\gnd-fly-bank.bin' -Speed 20` is the run that
+measures whether the sim is holding the pose on a moving aircraft rather than
+merely accepting it.
 
 ## What to check on the rig
 
 The bench answers the link; these need the sim, the HOST and the flight model:
 
-* how the native flight model behaves between writes -- the drift the read-back
-  above is meant to measure;
+* how the native flight model behaves between writes -- answered on the bench for
+  the AS332 (no drift in the air; clamped to the ground below it), so what is
+  left for the rig is whether the same holds for its own model and whether any
+  object is ever commanded below the sim's terrain in the deployed sorties;
 * that the sign and order of roll/pitch/yaw are right -- a level aircraft proves
   nothing, so roll it;
 * how many entities the HOST actually drives, and whether the entities that are

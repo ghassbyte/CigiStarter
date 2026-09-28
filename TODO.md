@@ -4,8 +4,8 @@ What is still open, in the order it should be picked up. `README.md` is the
 manual, `agents.md` is the network view, and `tools\*\README.md` is the detail on
 each tool — this file is only the work that is not finished.
 
-Last updated 2026-09-28, branch `feature/pdk-simlink` (both branches are still at
-`d32d796`; **nothing from the entity-writer work is committed yet**).
+Last updated 2026-09-28, branch `feature/pdk-simlink`. Item 1 (the read-back) is
+done and measured; the change is in the working tree, uncommitted.
 
 ---
 
@@ -13,40 +13,63 @@ Last updated 2026-09-28, branch `feature/pdk-simlink` (both branches are still a
 
 The entity writer **works end to end on this PC**. A recorded HOST capture
 replayed into a bench CigiStarter makes the running Prepar3D create one sim
-object per driven entity and move it to the pose the HOST sent: 22/22 checks,
+object per driven entity and move it to the pose the HOST sent: 26/26 checks,
 `created 2, removed 2`, sim still alive afterwards.
 
+**Item 1 is answered** (2026-09-28, against the AS332 — see 1 below): in the air
+the sim holds the written pose to ~2 cm and ~0.1°, on a static command and on a
+moving one. The native flight model does not fight the writer. The one thing it
+does do is **clamp an object to its own ground**: a commanded altitude below the
+sim's terrain is held on the surface, which is what the 277 m "drift" on
+`gnd-fly-bank.bin` turned out to be.
+
 What is **not** done: nothing has been on the rig, the object is still a stock
-sim object with its own flight model, and the aircraft's own rotor and lights are
-still unsolved (see 2 and 3).
+sim object (now for a reason other than drift — see 2), and the aircraft's own
+rotor and lights are still unsolved (see 2 and 3).
 
 ---
 
-## 1. Prove the sim is *holding* the pose — do this first
+## 1. Prove the sim is *holding* the pose — **done, 2026-09-28**
 
 `SetPosition` returning `S_OK` says the call was accepted, not that the object is
-still there a frame later. A stock object runs its own flight model between our
-writes, which is the whole reason the rig's old bridge used pause or slew.
+still there a frame later. The add-on now reads each object's pose back
+(`IBaseObjectV400::GetPosition`) before it overwrites it, publishes it as a
+`Held` row in `SimLinkIpc.h` (**`kVersion` is now 2**) and reports the gap to the
+pose it last wrote as `driftMaxMeters` / `driftMaxDeg`. `test-simlink-e2e.ps1`
+checks the read-back is being taken and reports the drift.
 
-* Add `IBaseObjectV400::GetPosition` to the writer and publish the read-back pose
-  into the shared region. **This bumps `SimLinkIpc.h`'s `kVersion`.**
-* Then the e2e test can assert the sim agrees with what we wrote, and measure how
-  far it drifts between ticks on a moving capture.
+Measured on the bench with `title=AS-332 Bond Helicopters`, feeding the capture's
+own positions:
 
-**Done when:** `tools\test-simlink-e2e.ps1` compares written vs read-back pose and
-reports the drift, on a capture where the aircraft is actually moving
-(`gnd-fly-bank.bin` is 194 s of ground run and bank).
+| Command | Result |
+|---|---|
+| a fixed pose at 1000 m | held exactly, 0.02 m, for as long as it is fed and after |
+| a 30 m/s climb, 1000 → 1300 m | held exactly, 0.02 m, the whole way |
+| roll 30°, pitch 10°, yaw 180/359/270° | held to <0.1°, wrap included |
+| **any altitude below the sim's ground** | **clamped to the terrain** |
 
-**This measurement decides the next decision:** how much the native flight model
-fights the writer. If it drifts, item 2 is not optional.
+The last row is the finding that mattered. At entity 0's position the sim's
+ground is 456.4 m; at entity 3's it is 210.9 m. The capture commands 178.9 m and
+−0.3 m respectively, so both objects sat on the ground and the run reported
+277 m / 211 m of "drift" — which is not the flight model moving the object, it is
+the sim refusing to put it underground.
+
+**Consequence:** the native flight model does not drift a pose it is given, so
+item 2 is no longer forced by drift. It is still wanted for the ground clamp (a
+physics-free object can be placed anywhere) and for the transients a fast replay
+shows when a write has not been applied before the next read-back.
 
 ## 2. Replace the stock object with a custom `ISimObject` (no flight model)
 
-The plan of record was a follow-up; the rotor work has made it required.
+The plan of record was a follow-up; the rotor work has made it required, and item
+1 added a second reason (the ground clamp) while removing the first (drift).
 
 * A container title keeps its own physics. A custom `ISimObject` in the
   `SimpleHelicopter` pattern has none, so the pose we write is the pose that
   stays.
+* **It can be placed below the sim's own ground.** The stock AS332 is clamped to
+  the terrain under it (item 1), so a command below the sim's elevation is not
+  honoured; an object with no ground contact resolves that.
 * **A rotor can only turn in an unpaused, non-slew sim** (proven on the bench:
   pause freezes the rotor clock; slew freezes it too while the clock runs). So
   the pose has to be owned *without* pausing or slewing — which is exactly what
@@ -55,7 +78,8 @@ The plan of record was a follow-up; the rotor work has made it required.
   object type plus a title/`ISimObject` switch in `PdkSimLink.ini`.
 
 **Done when:** the e2e test runs with the custom object, `GetPosition` matches
-with no drift, and the sim is never paused or in slew.
+with no drift *and* an altitude below the sim's terrain is where the command puts
+it, and the sim is never paused or in slew.
 
 ## 3. Decide the light-command path — **a decision, not a task**
 
@@ -179,6 +203,7 @@ Read these before changing anything near them.
 | **Object lifetime in the writer** | `retire()` must take the id, forget the pointer, `Release()`, and *then* `RemoveObject(id)`. The other order corrupts the sim's heap and Prepar3D dies ~a minute later in `ucrtbase.dll` (`0xc0000409`), reading as `created 2, removed 0` |
 | **A loaded DLL cannot be replaced** | Deploy, then restart Prepar3D. The e2e test's hash check enforces it |
 | **Pause and slew kill the rotor** | Proven on the bench. A live rotor needs an unpaused, non-slew sim |
+| **The sim clamps an object to its ground** | A stock sim object will not go below the terrain under it, so a commanded altitude below the sim's own elevation is held on the surface instead. On `gnd-fly-bank.bin` that read as 277 m of "drift" from the writer when the object was simply standing on ground 456 m higher than the command. The read-back reports it; compare the commanded altitude before blaming the object |
 | **SimConnect cannot write `L:` vars** | The AS332's lights live in `L:switch ...` and the panel's own servo reverts everything else |
 | **Only `ROTOR RPM PCT:1` is writable** | The other rotor variables are read-only |
 | **The add-on owns the shared region** | CigiStarter only opens it, and its counters persist across IG runs — compare **deltas**, never absolutes |

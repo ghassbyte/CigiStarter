@@ -90,7 +90,9 @@ A drop-in replacement for the Master IG. It plays the IG side of the link:
   (attitude as well as position) and published into shared memory
   (`SimLinkIpc.h`, `SimLink.h`); the `PdkSimLink` add-on inside the local
   Prepar3D creates a sim object per entity and moves it to the commanded pose on
-  the sim's own frame tick. One-way, and the IG never touches the sim.
+  the sim's own frame tick. One-way, and the IG never touches the sim; the add-on
+  does publish the pose it finds each object at (the read-back), which is the
+  sim's own state rather than an answer to anything.
   `--no-sim-link` turns it off. This is the rendering path in this IG PC; the
   vendor program that used to drive the sim's own aircraft over FSUIPC is what
   it replaces.
@@ -159,7 +161,8 @@ looking to them exactly like the HOST's own.
 | Terrain source    | P3D's own terrain via the `PdkTerrainProbe` add-on; then an SRTM `.hgt` tileset; then FSUIPC `0x0020` |
 | Entity anchor     | entity-relative HAT/HOT is anchored to the HOST's Entity Control (entity 0), a pose at offset 24/32/40 (lat/lon/alt, CIGI 3.3 layout); FSUIPC only until one has arrived |
 | Entity writer     | the HOST's entities, rendered by the `tools\PdkSimLink` PDK add-on inside the local Prepar3D: it creates a sim object per entity and moves it to the pose CigiStarter published. On by default; `--no-sim-link` leaves the sim alone |
-| Sim link contract | `SimLinkIpc.h`, a private mapping `Local\CigiStarter.SimLink.v1` with its own `kVersion`: 64 entity rows (degrees + metres, per-row seqlock) plus the add-on's status words. One-way — nothing goes back to the HOST — and deliberately separate from `TerrainProbeIpc.h`, so writer and terrain work cannot break each other |
+| Sim link contract | `SimLinkIpc.h`, a private mapping `Local\CigiStarter.SimLink.v1` with its own `kVersion` (2): 64 entity rows (degrees + metres, per-row seqlock), 64 read-back rows (`held[]`) plus the drift words the add-on fills with the pose each object is actually at, and the add-on's status words. One-way — nothing goes back to the HOST — and deliberately separate from `TerrainProbeIpc.h`, so writer and terrain work cannot break each other |
+| Entity hold | Measured on the bench against the AS332: the sim holds a written pose to 2 cm and 0.1 deg, moving or still, but **clamps an object to its own ground** — a commanded altitude below the sim's terrain leaves it standing on the surface. The custom physics-free object (item 2 of `TODO.md`) is wanted for that, not for drift |
 | Entity writer cut | pose only (position and attitude); time of day, weather and effects are next. The object is created from a container title in `PdkSimLink.ini`, so it is the sim's own and still simulates between writes; a custom `ISimObject` with no flight model is the follow-up and changes no part of the contract |
 | Entity state      | the HOST marks the entities it drives **Active (1)**, the CIGI Common Library's numbering (`Standby=0, Active=1, Remove/Destroyed=2`): entities 0 and 3 carry state 1 and a moving pose in every frame of every capture, and entity 5, the all-zero placeholder, carries Remove (2). Read the field the other way round and the writer renders nothing at all — every pose still arrives perfectly, which is why it was caught against the captures rather than on the rig |
 | Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D; free-standing query, no SimObject; optional, and loaded on the bench's Professional Plus v5 and the rig's Professional v6. The answer carries the sim's own surface classification (hard/soft/water, and whether it is an object's *platform*); the answering policy needs no more than the full surface query already gives it — its height carries a platform's deck where the elevation-only call returned sea level — and `TerrainBaker probe` and the window's `Terrain` line show the classification |

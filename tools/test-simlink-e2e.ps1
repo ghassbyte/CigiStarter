@@ -30,15 +30,25 @@
     it positioned on the last tick, and whether any create or SetPosition call
     failed. Every one of those is checked here.
 
-    What is *not* proved, and why
-      The counters above say SetPosition succeeded; they do not say the sim
-      still holds the pose a frame later. The object this build creates is the
-      sim's own (a container title from PdkSimLink.ini) and it has its own
-      simulation between writes, so it can be pulled off the commanded pose --
-      which is the whole reason the follow-up is a custom ISimObject with no
-      flight model. Reading it back (IBaseObjectV400::GetPosition, which exists)
-      is what would turn this from "the sim accepted it" into "the sim is
-      holding it", and that is the next thing to add here.
+    The read-back
+      SetPosition succeeding says the sim accepted the pose, not that it is
+      still there a frame later. The object this build creates is the sim's own
+      and has its own simulation between writes, so it can be pulled off the
+      commanded pose -- which is the whole reason the follow-up is a custom
+      ISimObject with no flight model. PdkSimLink reads each object's actual pose
+      back (IBaseObjectV400::GetPosition) and publishes it, and this test
+      compares that against the pose that was written and reports the drift at
+      its worst over the run.
+
+      Measured on the bench against the AS332 (2026-09-28): in the air the
+      object tracks the command to about 2 cm of position and 0.1 deg of
+      attitude, on a static pose and on a moving one -- the native flight model
+      does not fight the writer. The one large number this test can show is the
+      sim's own ground: an object is clamped to the terrain under it, so a
+      commanded altitude below the sim's terrain is held on the surface and
+      reads as drift (up to ~277 m in this capture, whose command goes below
+      the sim's ground). That is why the drift is reported rather than failed
+      on, and why the commanded altitude is printed beside it.
 
     Prepar3D must be running with the current PdkSimLink.dll loaded, and the
     DLL must be the build in this tree: the add-on is loaded once, at sim
@@ -117,9 +127,14 @@ if (-not $Bin) {
 #
 #   header   magic 0, version 4, capacity 8, simPid 12, alive 16, lastError 20,
 #            ticks 24, frameTicks 28, objectsCreated 32, objectsRemoved 36,
-#            createFails 40, setFails 44, applied 48, diag 52
-#   entities[64] at 56, each row 72 bytes: seq 0, entityId 4, enabled 8,
+#            createFails 40, setFails 44, applied 48, diag 52,
+#            positionReads 56, getFails 60, driftSamples 64, heldValid 68,
+#            driftMaxMeters 72 (f64), driftMaxDeg 80 (f64)
+#   entities[64] at 88, each row 72 bytes: seq 0, entityId 4, enabled 8,
 #            flags 12, state 16, lat 24, lon 32, alt 40, roll 48, pitch 56, yaw 64
+#   held[64] at 4696, each row 80 bytes: seq 0, entityId 4, tick 8, valid 12,
+#            lat 16, lon 24, alt 32, roll 40, pitch 48, yaw 56,
+#            driftMeters 64, driftDeg 72
 #-----------------------------------------------------------------------------
 Add-Type @"
 using System;
@@ -171,11 +186,18 @@ function Get-WriterHealth {
         SetFails        = Region-U32 44
         Applied         = Region-U32 48
         Diag            = $d
+        PositionReads   = Region-U32 56
+        GetFails        = Region-U32 60
+        DriftSamples    = Region-U32 64
+        HeldValid       = Region-U32 68
+        DriftMaxMeters  = Region-F64 72
+        DriftMaxDeg     = Region-F64 80
         Diagnosed       = (($d -shr 31) -band 1) -eq 1
         HasManager      = (($d -shr 24) -band 1) -eq 1
         HasTick         = (($d -shr 25) -band 1) -eq 1
         NoTitle         = (($d -shr 26) -band 1) -eq 1
         OwnThreadTick   = (($d -shr 27) -band 1) -eq 1
+        HasReadback     = (($d -shr 28) -band 1) -eq 1
         DiagCreateFails = [int](($d -shr 16) -band 0xFF)
         DiagSetFails    = [int](($d -shr 8)  -band 0xFF)
     }
@@ -184,7 +206,7 @@ function Get-WriterHealth {
 # One entity row, read under its seqlock: a row caught mid-rewrite is not
 # believed, exactly as the add-on reads it.
 function Get-EntityRow([int]$slot) {
-    $o = 56 + 72 * $slot
+    $o = 88 + 72 * $slot
     for ($try = 0; $try -lt 200; $try++) {
         $before = Region-U32 $o
         if ($before -band 1) { Start-Sleep -Milliseconds 1; continue }
@@ -217,6 +239,44 @@ function Get-LiveRows {
     return ,$rows
 }
 
+# One read-back row, as the add-on publishes it (held[]): the pose the sim's
+# object was actually found at, and how far that was from the pose it was last
+# written.  Read under its own seqlock, the same way the add-on reads the IG's
+# rows.
+function Get-HeldRow([int]$slot) {
+    $o = 4696 + 80 * $slot
+    for ($try = 0; $try -lt 200; $try++) {
+        $before = Region-U32 $o
+        if ($before -band 1) { Start-Sleep -Milliseconds 1; continue }
+        $row = [pscustomobject]@{
+            Slot         = $slot
+            Seq          = $before
+            EntityId     = Region-U32 ($o + 4)
+            Tick         = Region-U32 ($o + 8)
+            Valid        = Region-U32 ($o + 12)
+            Lat          = Region-F64 ($o + 16)
+            Lon          = Region-F64 ($o + 24)
+            Alt          = Region-F64 ($o + 32)
+            Roll         = Region-F64 ($o + 40)
+            Pitch        = Region-F64 ($o + 48)
+            Yaw          = Region-F64 ($o + 56)
+            DriftMeters  = Region-F64 ($o + 64)
+            DriftDeg     = Region-F64 ($o + 72)
+        }
+        if ((Region-U32 $o) -eq $before) { return $row }
+    }
+    return $null
+}
+
+function Get-HeldRows {
+    $rows = @()
+    for ($i = 0; $i -lt 64; $i++) {
+        $r = Get-HeldRow $i
+        if ($null -ne $r -and $r.Valid -ne 0) { $rows += $r }
+    }
+    return ,$rows
+}
+
 # Where is the container title the add-on will create from?  A title that is not
 # in the installation is the one misconfiguration that makes a run look half
 # successful -- the add-on loads, ticks, reports the object manager, and creates
@@ -228,6 +288,23 @@ function Find-SimTitle([string]$Title, [string]$InstallRoot) {
         (Join-Path $InstallRoot 'SimObjects'),
         (Join-Path $env:USERPROFILE 'Documents\Prepar3D v6 Add-ons')
     )
+    # Aircraft added to the sim as packages (the AS332 the rig flies is one) live
+    # at a path registered in add-ons.cfg rather than under the install's own
+    # SimObjects tree, so follow those package paths too -- otherwise a title
+    # that is perfectly valid is reported as missing.
+    $cfgs = @(
+        (Join-Path $env:PROGRAMDATA 'Lockheed Martin\Prepar3D v6\add-ons.cfg'),
+        (Join-Path $env:APPDATA     'Lockheed Martin\Prepar3D v6\add-ons.cfg')
+    )
+    foreach ($c in $cfgs) {
+        if (-not (Test-Path $c)) { continue }
+        foreach ($line in @(Get-Content $c -ErrorAction SilentlyContinue | Select-String -Pattern '^\s*PATH\s*=')) {
+            $p = ($line.ToString() -replace '^\s*PATH\s*=\s*', '').Trim()
+            if (-not $p) { continue }
+            if (-not [IO.Path]::IsPathRooted($p)) { $p = Join-Path $InstallRoot $p }
+            if (Test-Path $p) { $roots += $p }
+        }
+    }
     $pattern = ('(?im)^\s*title\s*=\s*"?{0}"?\s*$' -f [regex]::Escape($Title))
     foreach ($root in $roots) {
         if (-not (Test-Path $root)) { continue }
@@ -478,7 +555,7 @@ try {
 
     $h = Get-WriterHealth
     Assert 'the region speaks the contract this build expects' `
-        ($h.Magic -eq 0x4B4C5350 -and $h.Version -eq 1 -and $h.Capacity -eq 64) `
+        ($h.Magic -eq 0x4B4C5350 -and $h.Version -eq 2 -and $h.Capacity -eq 64) `
         ("magic 0x{0:X8}, version {1}, capacity {2}" -f $h.Magic, $h.Version, $h.Capacity)
 
     Assert 'the add-on obtained the sim object manager' $h.HasManager `
@@ -598,6 +675,55 @@ Run-Test 'the HOST entities reach the sim' {
         ("create failures {0} -> {1}" -f $before.CreateFails, $after.CreateFails)
     Assert 'no pose was refused by the sim' ($after.SetFails -eq $before.SetFails) `
         ("SetPosition failures {0} -> {1}, last HRESULT 0x{2:X8}" -f $before.SetFails, $after.SetFails, $after.LastError)
+
+    # The read-back.  SetPosition succeeding says the sim accepted the pose, not
+    # that it kept it: the object is the sim's own and has its own simulation
+    # between writes.  PdkSimLink reads each object's actual pose back with
+    # GetPosition and publishes it, so these checks are the difference between
+    # "the sim took the pose" and "the sim is holding it".
+    Assert 'the add-on is reading the objects back from the sim' `
+        ($after.PositionReads -gt $before.PositionReads) `
+        ("GetPosition {0} -> {1}, failures {2}" -f $before.PositionReads, $after.PositionReads, $after.GetFails)
+    Assert 'no read-back was refused by the sim' ($after.GetFails -eq $before.GetFails) `
+        ("GetPosition failures {0} -> {1}, last HRESULT 0x{2:X8}" -f $before.GetFails, $after.GetFails, $after.LastError)
+
+    $held = Get-HeldRows
+    Assert 'a read-back row exists for every object being driven' `
+        ($held.Count -ge $wanted.Count) ("{0} held row(s), {1} driven" -f $held.Count, $wanted.Count)
+
+    $heldAgrees = ($held.Count -gt 0)
+    foreach ($h in $held) {
+        $cmd = Get-EntityRow $h.Slot
+        if ($null -eq $cmd -or $cmd.Enabled -eq 0 -or $cmd.EntityId -ne $h.EntityId) { $heldAgrees = $false }
+    }
+    Assert 'each read-back row belongs to the entity in that slot' $heldAgrees `
+        'held[] and entities[] agree on the slot and the id'
+
+    # THE MEASUREMENT.  This is the number the whole test exists for: how far the
+    # native object wandered from the pose it was last written, at its worst,
+    # while the aircraft was moving.  It is reported rather than asserted -- a
+    # large value is a finding about the sim's own objects, not a failure of the
+    # link, and it is what decides whether a physics-free ISimObject is needed.
+    Write-Host ''
+    Write-Host '  the read-back (held vs last commanded)'
+    foreach ($h in ($held | Sort-Object Slot)) {
+        Write-Host ("    slot {0,2}  id {1,-6}  held      lat {2:F6} lon {3:F6} alt {4,8:F1}  rpy {5:F1}/{6:F1}/{7:F1}   drift {8:F2} m / {9:F2} deg" -f `
+            $h.Slot, $h.EntityId, $h.Lat, $h.Lon, $h.Alt, $h.Roll, $h.Pitch, $h.Yaw, $h.DriftMeters, $h.DriftDeg)
+        $cmd = Get-EntityRow $h.Slot
+        if ($null -ne $cmd) {
+            Write-Host ("    {0,24}commanded lat {1:F6} lon {2:F6} alt {3,8:F1}  rpy {4:F1}/{5:F1}/{6:F1}" -f `
+                '', $cmd.Lat, $cmd.Lon, $cmd.Alt, $cmd.Roll, $cmd.Pitch, $cmd.Yaw)
+        }
+    }
+    Write-Host ("    worst over the run: {0:F2} m, {1:F2} deg   ({2} comparisons)" -f `
+        $after.DriftMaxMeters, $after.DriftMaxDeg, $after.DriftSamples)
+    if ($after.DriftMaxMeters -lt 0.5 -and $after.DriftMaxDeg -lt 0.5) {
+        Write-Host '    => the object stays on the pose it is written, to a few centimetres'
+    } else {
+        Write-Host '    => the object left the pose it was written.  Check the commanded altitude above:'
+        Write-Host '       the sim clamps an object to its own ground, so a command below the sim''s'
+        Write-Host '       terrain is held on the surface and reads as drift without being one.'
+    }
 
     # The rows themselves: the pose the sim was told is the pose the HOST sent.
     $rows = Get-LiveRows

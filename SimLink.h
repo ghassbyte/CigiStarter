@@ -59,9 +59,16 @@ struct Health {
     uint32_t createFails    = 0;      // CreateObject/GetObject failures
     uint32_t setFails       = 0;      // SetPosition failures
     uint32_t applied        = 0;      // entities positioned on the last tick
+    uint32_t positionReads  = 0;      // successful GetPosition read-backs
+    uint32_t getFails       = 0;      // GetPosition calls the sim refused
+    uint32_t driftSamples   = 0;      // held-vs-commanded comparisons made
+    uint32_t heldValid      = 0;      // rows carrying a fresh read-back last tick
+    double   driftMaxMeters = 0.0;    // worst |held - last commanded| this run
+    double   driftMaxDeg    = 0.0;    // worst attitude error this run
     bool     diagnosed      = false;  // the add-on fills the diagnostic word
     bool     hasManager     = false;  // the sim-object manager was obtained
     bool     hasTick         = false; // a tick has been delivered
+    bool     hasReadback    = false;  // a pose has been read back from the sim
     bool     noTitle        = false;  // PdkSimLink.ini has no container title
 };
 

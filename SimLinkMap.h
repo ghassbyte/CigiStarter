@@ -17,6 +17,7 @@
 // decides what the objects should be and where they should go.
 //-----------------------------------------------------------------------------
 
+#include <cmath>
 #include <cstdint>
 
 #include "SimLinkIpc.h"
@@ -98,6 +99,61 @@ inline PdkPose toPdkPose(const Entity& e) {
     p.headingRad = e.yawDeg    * kDegToRad;
     p.bankRad    = e.rollDeg   * kDegToRad;
     return p;
+}
+
+// A pose back in CIGI's own units, which is how the read-back has to be
+// published: the commanded pose and the held pose are then compared field by
+// field in the same units, and neither side has to remember the PDK's order.
+struct CigiPose {
+    double latDeg    = 0.0;
+    double lonDeg    = 0.0;
+    double altMeters = 0.0;
+    double rollDeg   = 0.0;
+    double pitchDeg  = 0.0;
+    double yawDeg    = 0.0;
+};
+
+// The reverse of toPdkPose: the PDK's two vectors -- (longitude, altitude,
+// latitude) and (pitch, heading, bank) -- back to degrees and metres. Passed as
+// plain doubles so this header keeps its distance from the PDK's Types.h.
+inline CigiPose toCigiPose(double lonRad, double altFeet, double latRad,
+                           double pitchRad, double headingRad, double bankRad) {
+    CigiPose c;
+    c.latDeg    = latRad     / kDegToRad;
+    c.lonDeg    = lonRad     / kDegToRad;
+    c.altMeters = altFeet    / kMetersToFt;
+    c.pitchDeg  = pitchRad   / kDegToRad;
+    c.yawDeg    = headingRad / kDegToRad;
+    c.rollDeg   = bankRad    / kDegToRad;
+    return c;
+}
+
+// How far apart two poses are, in metres.  This is the drift measurement, so it
+// has to be honest at the scale of a few metres and cheap enough to run every
+// tick: the equirectangular approximation on a spherical earth, which is exact
+// to well under a metre over the distances a between-writes drift can reach.
+constexpr double kMetersPerDegLat = 111320.0;  // mean metres per degree of latitude
+
+inline double poseGapMeters(const CigiPose& a, const CigiPose& b) {
+    const double mPerDegLon = kMetersPerDegLat * std::cos(a.latDeg * kDegToRad);
+    const double dNorth = (b.latDeg    - a.latDeg)    * kMetersPerDegLat;
+    const double dEast  = (b.lonDeg    - a.lonDeg)    * mPerDegLon;
+    const double dUp    =  b.altMeters - a.altMeters;
+    return std::sqrt(dNorth * dNorth + dEast * dEast + dUp * dUp);
+}
+
+// The largest single-axis attitude error, in degrees.  Heading wraps -- 359 and
+// 1 are two degrees apart, not 358 -- and a wrap that is not handled would show
+// a two-degree drift as a 358-degree one.
+inline double attitudeGapDeg(const CigiPose& a, const CigiPose& b) {
+    double dRoll  = std::fabs(b.rollDeg  - a.rollDeg);
+    double dPitch = std::fabs(b.pitchDeg - a.pitchDeg);
+    double dYaw   = std::fabs(b.yawDeg   - a.yawDeg);
+    if (dYaw > 180.0) dYaw = 360.0 - dYaw;
+    double m = dRoll;
+    if (dPitch > m) m = dPitch;
+    if (dYaw   > m) m = dYaw;
+    return m;
 }
 
 } // namespace simlink
