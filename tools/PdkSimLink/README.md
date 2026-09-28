@@ -83,20 +83,58 @@ The removal callback also clears the slot of any entity object the sim took out
 on its own -- the world culling it, or the user deleting it -- because the next
 tick would otherwise `SetPosition()` through a freed object.
 
-## First cut: what this build is and is not
+## The object: the sim's own, or ours
 
-This is the **spike**: create a sim object with the sim's own object manager
-(`ISimObjectManagerV540::CreateObject`) and move it each frame with
-`IBaseObjectV520/V400::SetPosition`. It proves the link end to end. What it is
-not yet:
+`CreateObject(title)` hands back whatever the container title describes, and there
+are two kinds of title, both created and moved the same way
+(`IBaseObjectV400::SetPosition` each frame):
 
-* **The native object still has its own simulation.** A container title is a
-  normal sim object, so between the add-on's writes its flight model runs. This
-  is the thing the follow-up (a custom `ISimObject` with no flight model of its
-  own) removes; nothing about the shared-memory contract changes when it does.
-  Measured, though (see *The read-back* below), the sim does not drift a pose it
-  is given — the reason the follow-up is still wanted is that a stock object is
-  clamped to the ground under it, not that it wanders.
+* **A stock title** (any aircraft or object the sim already has). Its own
+  simulation runs between the add-on's writes. Measured on the bench (see *The
+  read-back*), that simulation does **not** drift a pose it is given — but the
+  object is clamped to the terrain under it, so a commanded altitude below the
+  sim's ground is held on the surface instead; and holding a pose with a stock
+  object is what makes pause or slew tempting, which is what freezes a rotor.
+
+* **`CigiStarter.Entity`, the physics-free object** (`CigiEntity.h`, shipped in
+  `SimObjects\CigiEntity\sim.cfg`). Its `[General] CategoryId` is a GUID this DLL
+  registers with `RegisterSimulationCategory()` at load, so Prepar3D hands the
+  object's behaviour to `CigiEntity` — an `ISimObject` that registers **no
+  simulation** and has no `[contact_points]`. Nothing moves it between writes and
+  nothing clamps it, so the pose written is the pose that stays and a command
+  below the sim's terrain is simply where the object goes. It needs no pause and
+  no slew either: the sim runs at its own rate while the HOST owns the pose.
+
+Which one is in play is reported rather than assumed from the title: each tick
+the add-on asks the object for its category
+(`IBaseObjectV430::GetCategoryId`) and compares the GUID, and the answer is `diag`
+bit 29 (`kPhysicsFree`). A title that quietly fell back to the sim's own object
+therefore shows up as one, and not as a silent mixture.
+
+The physics-free object ships with **no model folder**, so it is not drawn: pose,
+read-back and placement all work without one. Give its container a `model\` folder
+to make it visible — a copy of the model, or a directory junction to it when the
+model lives in another package. The writer sees no difference. On the bench, for
+example, every entity is given the AS332's body this way:
+
+```powershell
+$c = "$env:USERPROFILE\Documents\Prepar3D v6 Add-ons\PdkSimLink\SimObjects\CigiEntity"
+$a = "D:\Addon P3D\Nemeth Designs - Eurocopter AS332 MK2\Simobjects\Rotorcraft\ND_AS332"
+New-Item -ItemType Junction -Path "$c\model"       -Target "$a\Model"
+New-Item -ItemType Junction -Path "$c\Texture.red" -Target "$a\Texture.red"
+# then set texture=red in "$c\sim.cfg"
+```
+
+Junctions need no elevation, and keeping the shipped container generic leaves the
+question of *which* model each entity type shows to the content side (TODO.md item
+7) rather than baking one aircraft into the link.
+
+## What this build is and is not
+
+This **works end to end on the bench**: a replayed capture makes Prepar3D create
+one object per driven entity and hold every one of them on the commanded pose,
+below the sim's own ground included. What it is not yet:
+
 * **Pose only.** Time of day, weather and effects are the next things the same
   channel will carry. The table has room and `kVersion` guards a half-updated
   pair.
@@ -123,8 +161,16 @@ given. `title` is the string Prepar3D's own Vehicle Select shows -- an object's
 loaded and reports itself (the operator window says
 `PdkSimLink.ini has no title to create from`), but creates nothing.
 
-Use a simple, cheap object while bringing the link up, then change it once the
-entities move acceptably.
+Two titles are meaningful, and it is the *object* that differs, not this file:
+
+| `title` | The object |
+|---|---|
+| `CigiStarter.Entity` | the physics-free object that ships with this add-on (see *The object* above) — no flight model, no ground contact |
+| any stock title | the sim's own object, with its own simulation and its ground clamp |
+
+The default for a working link is `CigiStarter.Entity`. Point it at a stock title
+only for a like-for-like comparison on the bench: it is the object that used to
+be clamped to the terrain, and it shows what the terrain clamp costs.
 
 ## Building
 
@@ -163,11 +209,16 @@ by that. Build it where the SDK is, and ferry the DLL.
 
 ## Installing on the IG PC
 
-1. Put the DLL, `add-on.xml` and `PdkSimLink.ini` in Prepar3D's default add-on
-   discovery folder, one level deep:
+1. Put the DLL, `add-on.xml`, `PdkSimLink.ini` and the `SimObjects\` folder (the
+   physics-free object's container) in Prepar3D's default add-on discovery
+   folder, one level deep:
 
    ```
    %USERPROFILE%\Documents\Prepar3D v6 Add-ons\PdkSimLink\
+       PdkSimLink.dll
+       add-on.xml
+       PdkSimLink.ini
+       SimObjects\CigiEntity\sim.cfg
    ```
 
    (use `...\Prepar3D v5 Add-ons\` on v5). The Documents folder is the one
@@ -231,6 +282,8 @@ tell *why* nothing is moving, not just that it is not:
 | `diag` bit 26 | `PdkSimLink.ini` has no title |
 | `diag` bit 27 | the newest pass came from the add-on's own thread (unused here) |
 | `diag` bit 28 | a `GetPosition` read-back has been taken |
+| `diag` bit 29 | the objects are the add-on's physics-free ones (asked of each object's category, not assumed from the title) |
+| `diag` bit 30 | at least one object reports itself paused or in slew |
 
 ## The read-back
 
@@ -254,10 +307,25 @@ positions:
   178.9 m and −0.3 m, that showed as 277 m / 211 m of "drift" — the sim refusing
   to put the object underground, not the flight model moving it.
 
-So the native flight model does **not** drift a pose it is given; the custom
-`ISimObject` is still wanted because a stock object cannot be placed below the
-sim's own ground, and because a write is not always applied before the next
-read-back (a fast replay shows attitude transients).
+So the native flight model does **not** drift a pose it is given. What it does
+instead is clamp an object to the ground — and that is exactly what the
+physics-free object removes.
+
+Measured the same way against `CigiStarter.Entity`, on the same
+`gnd-fly-bank.bin` capture that clamped the stock object by up to 277 m:
+
+* the pose is held **exactly** — 0.00 m and 0.00° over every comparison, static
+  and moving;
+* **a command below the sim's terrain is where the object goes**: entity 0 held
+  at 178.9 m where the terrain under it is 456.4 m, and entity 3 at −0.3 m where
+  its terrain is 210.9 m, both with the same zero drift;
+* the sim was never paused or in slew (`diag` bit 30 stayed clear), so a rotor
+  has an unpaused, non-slew sim to turn in (TODO.md item 4).
+
+The write-before-read race a fast replay could show is gone with it: nothing
+moves the object between the write and the next tick's read, so there is no gap
+to measure. That is the whole of item 2 — the pose is owned without fighting the
+sim, and without pausing it.
 
 CigiStarter's window shows the summary on its `SimLink` line, and says which of
 the above it is when the writer is off.
@@ -326,6 +394,10 @@ sim:
 * the aircraft's pose changes over the run rather than being written once;
 * the sim's object is read back (`GetPosition`), on the pose that was written, so
   "the sim accepted it" becomes "the sim is holding it";
+* which object is in play is reported (`diag` bit 29), and when it is the
+  physics-free one the drift is **asserted** to be zero rather than merely
+  reported — the capture that clamped the stock object by 277 m is the proof;
+* no object is paused or in slew (`diag` bit 30);
 * stopping the IG retires every row and the add-on takes its objects back out
   (`2 created, 2 removed`), so a stopped IG does not leave containers parked in
   the sim -- and, because the removal path is where the sim's heap was once
@@ -339,12 +411,12 @@ above. The first run it ever made created its objects and carried them on the
 capture's poses perfectly, and failed on the way out -- which is the only kind of
 failure that a contract harness, running without the sim, can never see.
 
-The objects it creates come from the container title in `PdkSimLink.ini`, so keep
-that set to something small while bringing the link up. It also reads each
-object's pose back and reports the drift against what was written (see *The
-read-back* above), so `-Bin '..\gnd-fly-bank.bin' -Speed 20` is the run that
-measures whether the sim is holding the pose on a moving aircraft rather than
-merely accepting it.
+The objects it creates come from the container title in `PdkSimLink.ini`; with
+`CigiStarter.Entity` they are the physics-free ones. It reads each object's pose
+back and reports the drift against what was written (see *The read-back* above),
+so `-Bin '..\gnd-fly-bank.bin' -Speed 20` is the run that measures whether the sim
+is holding the pose on a moving aircraft rather than merely accepting it — and
+that the command below the sim's own ground is honoured.
 
 ## What to check on the rig
 
@@ -353,7 +425,10 @@ The bench answers the link; these need the sim, the HOST and the flight model:
 * how the native flight model behaves between writes -- answered on the bench for
   the AS332 (no drift in the air; clamped to the ground below it), so what is
   left for the rig is whether the same holds for its own model and whether any
-  object is ever commanded below the sim's terrain in the deployed sorties;
+  object is ever commanded below the sim's terrain in the deployed sorties. The
+  physics-free object makes the clamp moot where it is used, but the rig still has
+  to show that the custom category registers and its objects create and hold on
+  v6 **Professional** (TODO.md item 8);
 * that the sign and order of roll/pitch/yaw are right -- a level aircraft proves
   nothing, so roll it;
 * how many entities the HOST actually drives, and whether the entities that are

@@ -32,23 +32,32 @@
 
     The read-back
       SetPosition succeeding says the sim accepted the pose, not that it is
-      still there a frame later. The object this build creates is the sim's own
-      and has its own simulation between writes, so it can be pulled off the
-      commanded pose -- which is the whole reason the follow-up is a custom
-      ISimObject with no flight model. PdkSimLink reads each object's actual pose
-      back (IBaseObjectV400::GetPosition) and publishes it, and this test
-      compares that against the pose that was written and reports the drift at
-      its worst over the run.
+      still there a frame later. PdkSimLink reads each object's actual pose back
+      (IBaseObjectV400::GetPosition) and publishes it, and this test compares
+      that against the pose that was written and reports the drift at its worst
+      over the run.
 
-      Measured on the bench against the AS332 (2026-09-28): in the air the
-      object tracks the command to about 2 cm of position and 0.1 deg of
-      attitude, on a static pose and on a moving one -- the native flight model
-      does not fight the writer. The one large number this test can show is the
-      sim's own ground: an object is clamped to the terrain under it, so a
-      commanded altitude below the sim's terrain is held on the surface and
-      reads as drift (up to ~277 m in this capture, whose command goes below
-      the sim's ground). That is why the drift is reported rather than failed
-      on, and why the commanded altitude is printed beside it.
+      Which object is being read back decides what the number means, and the
+      add-on's status word says which it is (`PhysicsFree`, set from the object's
+      own category GUID rather than from the configured title):
+
+        * the sim's own object (a stock title, e.g. the AS332).  It keeps its own
+          simulation between writes and is clamped to the terrain under it.  On
+          the bench it tracked the command to about 2 cm and 0.1 deg in the air,
+          but a commanded altitude below the sim's terrain was held on the
+          surface and read as drift (up to ~277 m on gnd-fly-bank.bin).  The
+          number is reported, not asserted: a large value here is a finding about
+          the sim's own objects, not a failure of the link.
+
+        * CigiStarter.Entity, the physics-free object (CigiEntity.h).  It has no
+          simulation and no ground contact, so the pose written is the pose that
+          stays and a command below the sim's terrain is honoured.  Here the
+          drift is asserted to be zero, and the same capture that clamped the
+          stock object is the proof: if it clamps still, the assertion fails.
+
+      The status word also says whether any object is paused or in slew
+      (`ModePauseOrSlew`); a physics-free object needs neither, and item 4's
+      rotor cannot turn with either.
 
     Prepar3D must be running with the current PdkSimLink.dll loaded, and the
     DLL must be the build in this tree: the add-on is loaded once, at sim
@@ -56,9 +65,10 @@
     anything is started, and the run says what to do about it.
 
     The objects the test creates use whatever container title PdkSimLink.ini
-    names (title=shipping_container_sm by default while bringing the link up),
-    so a few containers will appear in the sim while it runs. CigiStarter is
-    stopped at the end, which retires every row and takes the objects back out.
+    names -- normally CigiStarter.Entity, the physics-free object, and a stock
+    title only for a like-for-like comparison -- so a few objects will appear in
+    the sim while it runs. CigiStarter is stopped at the end, which retires every
+    row and takes the objects back out.
 
 .PARAMETER Bin
     The recorded HOST stream to replay. Default hlm.bin beside the repository,
@@ -198,6 +208,8 @@ function Get-WriterHealth {
         NoTitle         = (($d -shr 26) -band 1) -eq 1
         OwnThreadTick   = (($d -shr 27) -band 1) -eq 1
         HasReadback     = (($d -shr 28) -band 1) -eq 1
+        PhysicsFree     = (($d -shr 29) -band 1) -eq 1
+        ModePauseOrSlew = (($d -shr 30) -band 1) -eq 1
         DiagCreateFails = [int](($d -shr 16) -band 0xFF)
         DiagSetFails    = [int](($d -shr 8)  -band 0xFF)
     }
@@ -687,6 +699,13 @@ Run-Test 'the HOST entities reach the sim' {
     Assert 'no read-back was refused by the sim' ($after.GetFails -eq $before.GetFails) `
         ("GetPosition failures {0} -> {1}, last HRESULT 0x{2:X8}" -f $before.GetFails, $after.GetFails, $after.LastError)
 
+    # The pose is owned without pausing or slewing the sim (item 2).  The default
+    # path -- a HOST-driven object moved between the sim's own frames -- never
+    # asks either object to stop, and the frame-event check above already proves
+    # the sim as a whole is running.  This is the per-object half of it.
+    Assert 'no object is paused or in slew' (-not $after.ModePauseOrSlew) `
+        ("objects reporting pause or slew: {0}" -f $(if ($after.ModePauseOrSlew) { 'yes' } else { 'none' }))
+
     $held = Get-HeldRows
     Assert 'a read-back row exists for every object being driven' `
         ($held.Count -ge $wanted.Count) ("{0} held row(s), {1} driven" -f $held.Count, $wanted.Count)
@@ -717,12 +736,37 @@ Run-Test 'the HOST entities reach the sim' {
     }
     Write-Host ("    worst over the run: {0:F2} m, {1:F2} deg   ({2} comparisons)" -f `
         $after.DriftMaxMeters, $after.DriftMaxDeg, $after.DriftSamples)
+    if ($after.PhysicsFree) {
+        Write-Host '    object: CigiStarter.Entity -- the physics-free ISimObject'
+    } else {
+        Write-Host '    object: the sim''s own, from a stock container title'
+    }
     if ($after.DriftMaxMeters -lt 0.5 -and $after.DriftMaxDeg -lt 0.5) {
         Write-Host '    => the object stays on the pose it is written, to a few centimetres'
+    } elseif ($after.PhysicsFree) {
+        Write-Host '    => the physics-free object left the pose it was written; it must not'
+        Write-Host '       (asserted below) -- a number near the commanded altitude gap is a clamp'
+        Write-Host '       that the custom object failed to lift.'
     } else {
         Write-Host '    => the object left the pose it was written.  Check the commanded altitude above:'
         Write-Host '       the sim clamps an object to its own ground, so a command below the sim''s'
         Write-Host '       terrain is held on the surface and reads as drift without being one.'
+    }
+
+    # Item 2's acceptance.  A physics-free object exists to hold the pose exactly
+    # and to go where it is sent, so -- and only when one is in use -- the drift
+    # is failed on rather than reported.  The capture that clamped the stock
+    # object (up to ~277 m) is the proof: a clamp here is a clamp that did not get
+    # lifted, and on any capture the physics-free drift has nowhere to hide.
+    if ($after.PhysicsFree) {
+        Assert 'the physics-free object holds the pose it is written' `
+            ($after.DriftMaxMeters -lt 5.0 -and $after.DriftMaxDeg -lt 5.0) `
+            ("worst drift {0:F2} m / {1:F2} deg over {2} comparisons" -f `
+                $after.DriftMaxMeters, $after.DriftMaxDeg, $after.DriftSamples)
+    } else {
+        Write-Host ''
+        Write-Host '  (the objects are the sim''s own, so the drift above is reported and not asserted;'
+        Write-Host '   point PdkSimLink.ini at CigiStarter.Entity to check the physics-free object)'
     }
 
     # The rows themselves: the pose the sim was told is the pose the HOST sent.

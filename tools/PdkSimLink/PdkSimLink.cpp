@@ -17,15 +17,21 @@
 // moves the sim object that belongs to each entity to the pose the HOST
 // commanded. CigiStarter never touches the sim.
 //
-// First cut: pose only, and the object is created with the sim's own object
-// manager from a container title configured next to this DLL. That native
-// object still has its own simulation between the writes -- the point of this
-// build is to prove the link end to end on the bench, and the follow-up is a
-// custom ISimObject with no flight model of its own, which is the version that
-// does not have to race the native one at all.  Which is why the pose is read
-// back (IBaseObjectV400::GetPosition) each tick and the gap to the commanded
-// pose published: that number is the race, and it is what decides whether the
-// follow-up is optional.
+// The object is created with the sim's own object manager from a container
+// title configured next to this DLL, and there are two kinds of container it can
+// be given:
+//
+//   * the sim's own (any stock title, an aircraft): it keeps its own simulation
+//     between the writes, so it can be pulled off the commanded pose, and it is
+//     clamped to the ground under it;
+//   * one of ours, carrying this DLL's category GUID (CigiEntity.h): a custom
+//     ISimObject with no simulation and no contact with the ground, so the pose
+//     written is the pose that stays and a command below the sim's terrain is
+//     where the object goes.
+//
+// The pose is read back (IBaseObjectV400::GetPosition) each tick either way, and
+// the gap to the commanded pose is published, because that number is what says
+// which of the two is happening on this installation.
 //
 // See ../../SimLinkIpc.h for the shared-memory contract, ../../SimLink.h for
 // the CigiStarter half, and README.md in this folder for how it is installed.
@@ -41,6 +47,7 @@
 #include <initguid.h>
 #include <IEventService.h>
 
+#include "CigiEntity.h"   // the physics-free ISimObject a container can be routed to
 #include "SimLinkIpc.h"
 #include "SimLinkMap.h"   // the PDK-free half: what to render, and into what units
 
@@ -67,6 +74,13 @@ using ObjectManager = P3D::ISimObjectManagerV540;
 #endif
 ObjectManager*         g_objects = nullptr;
 
+// The physics-free object (CigiEntity.h).  Registering the category is what makes
+// a container carrying our CategoryId ours to drive.  These two are recomputed
+// each tick from what the objects themselves report -- not from what the
+// configuration hoped -- so `diag` says what is actually happening.
+volatile LONG          g_physicsFreeObjects = 0;
+volatile LONG          g_modePauseOrSlew    = 0;
+
 // The container title every entity object is created from.  There is no title
 // that is guaranteed to exist in an arbitrary installation, so this is a deploy-
 // ment input: PdkSimLink.ini beside the DLL, [simlink] title=<name>.  With no
@@ -78,17 +92,23 @@ bool                   g_haveTitle  = false;
 // One created object per entity slot.
 //
 // `seq` is deliberately not cached: the pose is re-asserted every tick even when
-// the row has not changed, because the object is the sim's own and would other-
-// wise drift back onto its own flight model between writes.  Re-asserting is
-// what holds it on the HOST's pose.
+// the row has not changed.  With the sim's own object that is what holds it on
+// the HOST's pose against its own flight model; with ours it is only a
+// re-assertion of a pose nothing else would move.
 //
 // `lastWritten` is the pose SetPosition was last given, kept so the next tick's
 // read-back can be measured against it.  That gap -- where the object ended up
-// versus where it was told to be -- is the native flight model's fight.
+// versus where it was told to be -- is the native flight model's fight, and is
+// zero when the object is one of ours.
+//
+// `physicsFree` is what the object itself reports its category to be (see
+// isOurCategory), so the status word is a fact about the object and not an
+// assumption about the title that created it.
 struct Slot {
     IBaseObjectV400* base   = nullptr;
     bool             active = false;
     bool             haveWrite = false;
+    bool             physicsFree = false;
     simlink::PdkPose lastWritten{};
 };
 Slot                   g_slots[simlink::kMaxEntities];
@@ -136,6 +156,8 @@ void publishDiag() {
     if (g_frameSeen) v |= simlink::diag::kHasTick;
     if (!g_haveTitle) v |= simlink::diag::kNoTitle;
     if (g_shm->positionReads) v |= simlink::diag::kHasReadback;
+    if (g_physicsFreeObjects) v |= simlink::diag::kPhysicsFree;
+    if (g_modePauseOrSlew)    v |= simlink::diag::kModePauseOrSlew;
     g_shm->diag = v;
 }
 
@@ -279,6 +301,7 @@ void retire(int i) {
     s.base   = nullptr;
     s.active = false;
     s.haveWrite = false;
+    s.physicsFree = false;
     if (base) base->Release();
     if (g_objects && id) g_objects->RemoveObject(id);
     if (g_shm) {
@@ -305,6 +328,23 @@ void retire(int i) {
     }
 }
 
+// Is this the physics-free object, or the sim's own?  Asked of the object rather
+// than assumed from the title: the category GUID is the same one the sim routed
+// the container by, so a title that happens to be a stock object reports itself
+// as one and the status word stays honest.
+bool isOurCategory(IBaseObjectV400* base) {
+    IBaseObjectV430* b430 = nullptr;
+    if (FAILED(base->QueryInterface(IID_IBaseObjectV430,
+                                    reinterpret_cast<void**>(&b430))) || !b430) {
+        return false;
+    }
+    GUID cat = {};
+    const bool ours = SUCCEEDED(b430->GetCategoryId(cat)) &&
+                      ::IsEqualGUID(cat, CigiEntity::CategoryId());
+    b430->Release();
+    return ours;
+}
+
 void serviceTick(bool fromSim) {
     if (!g_shm) return;
     if (::InterlockedExchange(&g_servicing, 1) != 0) return;
@@ -324,6 +364,8 @@ void serviceTick(bool fromSim) {
     if (g_objects && g_haveTitle) {
         uint32_t applied = 0;
         uint32_t heldValid = 0;
+        uint32_t physicsFree = 0;
+        bool     modePauseOrSlew = false;
         for (int i = 0; i < simlink::kMaxEntities; ++i) {
             simlink::Entity e;
             if (!simlink::readEntityRow(g_shm->entities[i], e)) continue;
@@ -356,7 +398,18 @@ void serviceTick(bool fromSim) {
                 }
                 g_slots[i].base   = base;   // GetObject handed us a reference
                 g_slots[i].active = true;
+                g_slots[i].physicsFree = isOurCategory(base);
                 ++g_shm->objectsCreated;
+            }
+
+            // What this object is and what it is doing, for the status word.  A
+            // sim object in pause or slew is exactly the state the deployed rig's
+            // vendor program used to hold the pose in -- and the state item 4's
+            // rotor cannot turn in -- so it is worth reporting whether it is
+            // happening at all.
+            if (g_slots[i].physicsFree) ++physicsFree;
+            if (g_slots[i].base->GetMode() & (SIMOBJECT_MODE_PAUSE | SIMOBJECT_MODE_SLEW)) {
+                modePauseOrSlew = true;
             }
 
             // CIGI gives metres and degrees; the PDK wants feet and radians, in
@@ -422,6 +475,8 @@ void serviceTick(bool fromSim) {
         }
         g_shm->applied   = applied;
         g_shm->heldValid = heldValid;
+        ::InterlockedExchange(&g_physicsFreeObjects, static_cast<LONG>(physicsFree));
+        ::InterlockedExchange(&g_modePauseOrSlew, modePauseOrSlew ? 1 : 0);
     } else {
         // No manager, or no title: drop whatever objects exist so a config that
         // arrives later starts from a clean sim rather than a mixture.
@@ -430,6 +485,8 @@ void serviceTick(bool fromSim) {
         }
         g_shm->applied   = 0;
         g_shm->heldValid = 0;
+        ::InterlockedExchange(&g_physicsFreeObjects, 0);
+        ::InterlockedExchange(&g_modePauseOrSlew, 0);
     }
 
     ::InterlockedExchange(&g_servicing, 0);
@@ -583,6 +640,7 @@ HRESULT STDMETHODCALLTYPE onObjectRemove(__in IUnknown& obj) {
         s.base   = nullptr;  // before the release: letting the last reference go
         s.active = false;    // destroys the object, which re-enters here
         s.haveWrite = false;
+        s.physicsFree = false;
         dying->Release();
         if (g_shm) {
             ++g_shm->objectsRemoved;
@@ -632,6 +690,17 @@ STDMETHODIMP_(void) DLLStart(__in __notnull IPdk* pPdk)
     }
 
     if (g_objects) {
+        // The physics-free object: a container whose sim.cfg carries this GUID as
+        // [General] CategoryId is routed to CigiEntity, and every entity object
+        // is created as one when the configured title is that container.  A stock
+        // title simply never matches the GUID and goes on to the sim's own
+        // implementation exactly as before, so this registration costs the stock
+        // path nothing.  Registered before the callbacks so a container loaded
+        // with the config has somewhere to go.
+        const HRESULT catHr = g_objects->RegisterSimulationCategory(
+            CigiEntity::CategoryId(), L"CigiStarter Entity", &CigiEntity::New);
+        if (FAILED(catHr)) publish(catHr);
+
         g_objects->RegisterOnObjectCreateCallback(onObjectCreate);
         g_objects->RegisterOnObjectRemoveCallback(onObjectRemove);
     }

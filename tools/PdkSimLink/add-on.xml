@@ -18,4 +18,11 @@
         <Path>PdkSimLink.dll</Path>
         <DLLType>PDK</DLLType>
     </AddOn.Component>
+    <!-- The physics-free object the entities can be created as, when
+         PdkSimLink.ini names its title (CigiEntity.h says what it is).  A stock
+         title needs none of this, but the component is harmless if unused. -->
+    <AddOn.Component>
+        <Category>SimObjects</Category>
+        <Path>SimObjects</Path>
+    </AddOn.Component>
 </SimBase.Document>

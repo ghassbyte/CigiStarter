@@ -127,6 +127,8 @@ constexpr uint32_t kHasTick          = 1u << 25;  // a tick has been delivered
 constexpr uint32_t kNoTitle          = 1u << 26;  // no container title is configured
 constexpr uint32_t kOwnThreadTick    = 1u << 27;  // the newest pass came from the add-on's own thread
 constexpr uint32_t kHasReadback      = 1u << 28;  // a GetPosition read-back has been taken
+constexpr uint32_t kPhysicsFree      = 1u << 29;  // the objects are the add-on's own: no flight model and no ground contact
+constexpr uint32_t kModePauseOrSlew  = 1u << 30;  // at least one object reports itself paused or in slew
 constexpr uint32_t kPresent          = 1u << 31;  // the add-on fills this word
 
 inline uint32_t field(uint32_t d, uint32_t shift, uint32_t mask) {

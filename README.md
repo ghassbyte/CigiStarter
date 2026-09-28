@@ -717,20 +717,25 @@ the sim is left to be a sim — it just gets told where the entities are.
 - **Switch.** On by default, because an IG that is not rendering the HOST's world
   is not doing its job; **`--no-sim-link`** leaves the local Prepar3D alone (a
   bench run, or a PC that is only answering HAT/HOT).
-- **Installing it.** `PdkSimLink.dll`, `add-on.xml` and `PdkSimLink.ini` go in
-  Prepar3D's add-on discovery folder, exactly like the terrain probe; the
-  `.ini` names the container title entities are created from, and until it is set
-  the add-on is loaded but creates nothing. `tools\PdkSimLink\README.md` is the
-  full procedure, including how the two editions' SDKs differ.
+- **Installing it.** `PdkSimLink.dll`, `add-on.xml`, `PdkSimLink.ini` and the
+  `SimObjects\` container go in Prepar3D's add-on discovery folder, exactly like
+  the terrain probe; the `.ini` names the container title entities are created
+  from, and until it is set the add-on is loaded but creates nothing.
+  `tools\PdkSimLink\README.md` is the full procedure, including how the two
+  editions' SDKs differ.
+- **The object.** The container that ships with it, `CigiStarter.Entity`, is a
+  **physics-free `ISimObject`** (`tools\PdkSimLink\CigiEntity.h`): it registers no
+  simulation and has no ground contact, so the pose written is the pose that
+  stays, a command below the sim's terrain is where the object goes, and the sim
+  is never paused or slewed to hold it. A stock container title still works and
+  still creates the sim's own object — its own flight model and its ground clamp —
+  which is the like-for-like comparison the bench uses. The add-on also reads each
+  object's pose back (`GetPosition`) and publishes it, so the sim can be seen
+  *holding* the pose rather than merely accepting it.
 - **This cut is pose only.** Time of day, weather and effects are the next things
-  the same channel will carry. The object is also the sim's own (created from a
-  container title), so it still has a flight model between writes; removing that
-  — a custom `ISimObject` with no simulation of its own — changes nothing about
-  the shared-memory contract. The add-on reads each object's pose back
-  (`GetPosition`) and publishes it, so the sim can be seen *holding* the pose
-  rather than merely accepting it: measured on the bench against the AS332 it
-  holds a written pose to 2 cm and 0.1°, but it will not put an object below the
-  ground under it, which is the reason the custom object is still wanted.
+  the same channel will carry. The object ships with no model, so nothing is
+  drawn until its container is given one — a content decision per entity type, not
+  part of the link.
 - **Camera.** The per-channel angles of an immersive dome stay where they are, in
   each PC's own `viewgroup.xml`. Attaching the cockpit view to a HOST entity is a
   separate decision and a separate call, and does not change the contract.
@@ -1097,6 +1102,8 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `external\HostEmulator_Win32_v3.3.3\` | the CIGI Host Emulator 3.3.3, the HOST side of a bench link (not linked by anything) |
 | `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source, and the sampler `TerrainBaker` uses) |
 | `tools\PdkSimLink\` | the PDK add-on that renders the HOST's entities: creates a sim object per entity and moves it to the pose CigiStarter publishes |
+| `tools\PdkSimLink\CigiEntity.h` | the physics-free `ISimObject` the entities are created as (no simulation, no ground contact) |
+| `tools\PdkSimLink\SimObjects\CigiEntity\` | the container that routes to it (`[General] CategoryId`; model-free) |
 | `tools\PdkSimLink\test\` | the contract harness for the writer: drives both halves without Prepar3D |
 | `tools\test-simlink.ps1` | builds and runs the writer's contract harness, with a PASS/FAIL verdict |
 | `tools\test-all.ps1` | builds and runs every SDK-free contract harness (writer + terrain probe + capture converter) |

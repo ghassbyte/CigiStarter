@@ -4,8 +4,9 @@ What is still open, in the order it should be picked up. `README.md` is the
 manual, `agents.md` is the network view, and `tools\*\README.md` is the detail on
 each tool — this file is only the work that is not finished.
 
-Last updated 2026-09-28, branch `feature/pdk-simlink`. Item 1 (the read-back) is
-done and measured; the change is in the working tree, uncommitted.
+Last updated 2026-09-28, branch `feature/pdk-simlink`. Items 1 (the read-back)
+and 2 (the physics-free object) are done and measured; the changes are in the
+working tree, uncommitted.
 
 ---
 
@@ -13,19 +14,22 @@ done and measured; the change is in the working tree, uncommitted.
 
 The entity writer **works end to end on this PC**. A recorded HOST capture
 replayed into a bench CigiStarter makes the running Prepar3D create one sim
-object per driven entity and move it to the pose the HOST sent: 26/26 checks,
+object per driven entity and move it to the pose the HOST sent: 28/28 checks,
 `created 2, removed 2`, sim still alive afterwards.
 
-**Item 1 is answered** (2026-09-28, against the AS332 — see 1 below): in the air
-the sim holds the written pose to ~2 cm and ~0.1°, on a static command and on a
-moving one. The native flight model does not fight the writer. The one thing it
-does do is **clamp an object to its own ground**: a commanded altitude below the
-sim's terrain is held on the surface, which is what the 277 m "drift" on
-`gnd-fly-bank.bin` turned out to be.
+**Items 1 and 2 are answered** (2026-09-28):
 
-What is **not** done: nothing has been on the rig, the object is still a stock
-sim object (now for a reason other than drift — see 2), and the aircraft's own
-rotor and lights are still unsolved (see 2 and 3).
+* against a stock title (the AS332) the sim holds a written pose to ~2 cm and
+  ~0.1° and does not fight the writer, but it **clamps the object to its own
+  ground** — a commanded altitude below the terrain is held on the surface, which
+  is what the 277 m "drift" on `gnd-fly-bank.bin` was (item 1, see 1 below);
+* against the **physics-free object** (`CigiStarter.Entity`) the pose is held
+  exactly — 0.00 m / 0.00° — an altitude below the sim's terrain is where the
+  command puts it, and the sim is never paused or in slew (item 2, see 2 below).
+
+What is **not** done: nothing has been on the rig; the objects ship with no model,
+so nothing is drawn yet (see 2); and the aircraft's own rotor and lights are still
+unsolved (see 3 and 4).
 
 ---
 
@@ -59,27 +63,42 @@ item 2 is no longer forced by drift. It is still wanted for the ground clamp (a
 physics-free object can be placed anywhere) and for the transients a fast replay
 shows when a write has not been applied before the next read-back.
 
-## 2. Replace the stock object with a custom `ISimObject` (no flight model)
+## 2. Replace the stock object with a custom `ISimObject` (no flight model) — **done, 2026-09-28**
 
-The plan of record was a follow-up; the rotor work has made it required, and item
+The plan of record was a follow-up; the rotor work had made it required, and item
 1 added a second reason (the ground clamp) while removing the first (drift).
 
-* A container title keeps its own physics. A custom `ISimObject` in the
-  `SimpleHelicopter` pattern has none, so the pose we write is the pose that
-  stays.
-* **It can be placed below the sim's own ground.** The stock AS332 is clamped to
-  the terrain under it (item 1), so a command below the sim's elevation is not
-  honoured; an object with no ground contact resolves that.
-* **A rotor can only turn in an unpaused, non-slew sim** (proven on the bench:
-  pause freezes the rotor clock; slew freezes it too while the clock runs). So
-  the pose has to be owned *without* pausing or slewing — which is exactly what
-  a physics-free object gives.
-* Nothing in the shared-memory contract changes when this lands; it is a new
-  object type plus a title/`ISimObject` switch in `PdkSimLink.ini`.
+`tools\PdkSimLink\CigiEntity.h` is that object: an `ISimObjectV400` that registers
+**no simulation** and has no `[contact_points]`. The DLL registers it with the sim
+at load (`RegisterSimulationCategory`), and the shipped container
+`SimObjects\CigiEntity\sim.cfg` carries the same GUID as its `[General]
+CategoryId`, which is what routes `CreateObject("CigiStarter.Entity")` there. A
+stock title never matches the GUID and goes on to the sim's own object exactly as
+before, so the stock path is untouched and still testable for comparison.
 
-**Done when:** the e2e test runs with the custom object, `GetPosition` matches
-with no drift *and* an altitude below the sim's terrain is where the command puts
-it, and the sim is never paused or in slew.
+Nothing in the shared-memory contract changed; the only additions are two `diag`
+bits — 29 (`kPhysicsFree`, asked of each object's own category with
+`GetCategoryId`, not assumed from the title) and 30 (`kModePauseOrSlew`).
+
+Measured on the bench with `title=CigiStarter.Entity`, replaying
+`gnd-fly-bank.bin` — the same capture that clamped the stock AS332 by 277 m:
+
+| Command | Result |
+|---|---|
+| every pose on the capture | held **exactly**: 0.00 m / 0.00° over 4330 comparisons |
+| entity 0 commanded 178.9 m (terrain under it 456.4 m) | held at 178.9 m — **below the sim's ground** |
+| entity 3 commanded −0.3 m (terrain under it 210.9 m) | held at −0.3 m — **below the sim's ground** |
+| paused or slewed? | never — `diag` bit 30 stayed clear |
+
+The e2e test now **asserts** zero drift when `kPhysicsFree` is set; for a stock
+object it is still only reported, because there a large number is a finding about
+the sim's own object rather than a fault in the link.
+
+**Left for item 7:** the container ships with no `model\` folder, so the object is
+not drawn. The bench container gives it the AS332's body by junctioning the payware
+`Model\` and `Texture.red\` into the deployed folder (and `texture=red`); the repo
+keeps the container model-free because *which* model each entity type shows is
+item 7's job, not the link's.
 
 ## 3. Decide the light-command path — **a decision, not a task**
 
@@ -180,12 +199,16 @@ Everything the local harness cannot reach:
 .\tools\test-simlink-e2e.ps1
 ```
 
-Deploying a new writer build (the add-on is loaded once, at sim startup):
+Deploying a new writer build (the add-on is loaded once, at sim startup). The
+DLL, `add-on.xml` and the `SimObjects\` container all go together now; the title
+lives in the deployed `PdkSimLink.ini`:
 
 ```powershell
-Copy-Item "tools\PdkSimLink\bin\Release-v6\PdkSimLink.dll" `
-    "$env:USERPROFILE\Documents\Prepar3D v6 Add-ons\PdkSimLink\PdkSimLink.dll" -Force
-# then start Prepar3D
+$dst = "$env:USERPROFILE\Documents\Prepar3D v6 Add-ons\PdkSimLink"
+Copy-Item "tools\PdkSimLink\bin\Release-v6\PdkSimLink.dll" $dst -Force
+Copy-Item "tools\PdkSimLink\add-on.xml"                    $dst -Force
+Copy-Item "tools\PdkSimLink\SimObjects"                    $dst -Recurse -Force
+# set title=CigiStarter.Entity in $dst\PdkSimLink.ini, then start Prepar3D
 ```
 
 The e2e test fails up front if the loaded DLL is not this tree's build, so a
@@ -203,7 +226,8 @@ Read these before changing anything near them.
 | **Object lifetime in the writer** | `retire()` must take the id, forget the pointer, `Release()`, and *then* `RemoveObject(id)`. The other order corrupts the sim's heap and Prepar3D dies ~a minute later in `ucrtbase.dll` (`0xc0000409`), reading as `created 2, removed 0` |
 | **A loaded DLL cannot be replaced** | Deploy, then restart Prepar3D. The e2e test's hash check enforces it |
 | **Pause and slew kill the rotor** | Proven on the bench. A live rotor needs an unpaused, non-slew sim |
-| **The sim clamps an object to its ground** | A stock sim object will not go below the terrain under it, so a commanded altitude below the sim's own elevation is held on the surface instead. On `gnd-fly-bank.bin` that read as 277 m of "drift" from the writer when the object was simply standing on ground 456 m higher than the command. The read-back reports it; compare the commanded altitude before blaming the object |
+| **The sim clamps an object to its ground** | A stock sim object will not go below the terrain under it, so a commanded altitude below the sim's own elevation is held on the surface instead. On `gnd-fly-bank.bin` that read as 277 m of "drift" from the writer when the object was simply standing on ground 456 m higher than the command. The read-back reports it; compare the commanded altitude before blaming the object. The physics-free object (item 2) is placed below it — that is what it is for |
+| **A container's `CategoryId` must match the DLL's GUID** | `CigiEntity.h` registers one GUID and `SimObjects\CigiEntity\sim.cfg` names it as `[General] CategoryId`. Ship the two out of step and every `CreateObject()` fails: the object is never ours, and the e2e test shows it as create failures rather than as a wrong pose |
 | **SimConnect cannot write `L:` vars** | The AS332's lights live in `L:switch ...` and the panel's own servo reverts everything else |
 | **Only `ROTOR RPM PCT:1` is writable** | The other rotor variables are read-only |
 | **The add-on owns the shared region** | CigiStarter only opens it, and its counters persist across IG runs — compare **deltas**, never absolutes |

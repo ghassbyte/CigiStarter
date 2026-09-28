@@ -319,6 +319,23 @@ int main(int /*argc*/, char** /*argv*/) {
         check(sizeof(simlink::Shared) == 9816,
               "the region is the header plus both tables");
 
+        // The status word is a contract too.  The two object-kind bits are what
+        // a reader uses to tell the physics-free object from the sim's own, and
+        // the e2e test decodes them by number, so pin both the number and the
+        // fact that they do not overlap the packed counters -- a bit moved by
+        // one would otherwise read as a plausible, wrong status.
+        const uint32_t packedFields =
+            simlink::diag::kObjectsMask |
+            (simlink::diag::kSetFailsMask    << simlink::diag::kSetFailsShift) |
+            (simlink::diag::kCreateFailsMask << simlink::diag::kCreateFailsShift);
+        check((simlink::diag::kPhysicsFree     & packedFields) == 0 &&
+              (simlink::diag::kModePauseOrSlew & packedFields) == 0 &&
+              (simlink::diag::kPhysicsFree & simlink::diag::kModePauseOrSlew) == 0,
+              "the object-kind status bits do not collide with the counters");
+        check(simlink::diag::kPhysicsFree == (1u << 29) &&
+              simlink::diag::kModePauseOrSlew == (1u << 30),
+              "the object-kind status bits are the numbers the reader was told");
+
         // The PDK's units out, and back again: whatever the sim reports has to
         // be readable in the units the commanded pose is in, or the two cannot
         // be compared field by field.
