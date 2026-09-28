@@ -56,7 +56,10 @@ On a bench there is no flight model: a **CIGI Host Emulator**
 CigiStarter, to send the requests and watch the answers. It stands in for the
 HOST only as far as this program is concerned — it produces none of the flight
 data above — and `README.md`, [Bench testing](README.md#bench-testing), has its
-setup and the automated tests built on it.
+setup and the automated tests built on it. It is driven by its `.def` tables and
+a script, and reads no `.bin`; `tools\BinToScenario` rewrites a recorded stream
+as the script that replays the same sortie on it, so the flight data above can be
+watched against CigiStarter without a `.bin` player in the loop.
 
 ### Master IG — `192.168.70.70`
 The original Image Generator that CigiStarter replaces. In the capture it is the
@@ -83,6 +86,14 @@ A drop-in replacement for the Master IG. It plays the IG side of the link:
 - **Fans the downstream stream out** to the extra IG PCs in `client.txt`, byte
   for byte, source-labelled as the HOST (`--no-relay-spoof` labels them as this
   IG instead). Optional, Npcap-backed, passive clients only.
+- **Puts the HOST's world on screen** — every Entity Control message is decoded
+  (attitude as well as position) and published into shared memory
+  (`SimLinkIpc.h`, `SimLink.h`); the `PdkSimLink` add-on inside the local
+  Prepar3D creates a sim object per entity and moves it to the commanded pose on
+  the sim's own frame tick. One-way, and the IG never touches the sim.
+  `--no-sim-link` turns it off. This is the rendering path in this IG PC; the
+  vendor program that used to drive the sim's own aircraft over FSUIPC is what
+  it replaces.
 - **Starts on its own** — streams from launch, minimises its window, and leaves
   EXIT as the only way off the link. `--no-auto-start` restores the paused
   window.
@@ -144,15 +155,22 @@ looking to them exactly like the HOST's own.
 | HAT/HOT resp ids  | 102 (`0x66`) / 103 (`0x67`)  |
 | SOF live field    | the HOST's frame counter, echoed at offset 8; offsets 12/16 stay 0 |
 | Sim at the IG PC  | Prepar3D Professional (v6) — its CIGI feature is a Professional Plus extra, so the IG's 8000/8001 are not contested there |
-| Sim driver        | a 3rd-party vendor program holds Prepar3D **paused** throughout, with **slew off**, positioning the sim's aircraft over FSUIPC; the sim's own aircraft altitude can stay at Prepar3D's startup value, so it is not the HOST's — the anchor is the HOST's Entity Control |
+| Sim driver        | the **deployed** rig still runs a 3rd-party vendor program that holds Prepar3D **paused**, with **slew off**, positioning the sim's own aircraft over FSUIPC; the sim's own aircraft altitude can stay at Prepar3D's startup value, so it is not the HOST's — the anchor is the HOST's Entity Control. The entity writer above is its replacement, and needs the sim **running**, not paused |
 | Terrain source    | P3D's own terrain via the `PdkTerrainProbe` add-on; then an SRTM `.hgt` tileset; then FSUIPC `0x0020` |
 | Entity anchor     | entity-relative HAT/HOT is anchored to the HOST's Entity Control (entity 0), a pose at offset 24/32/40 (lat/lon/alt, CIGI 3.3 layout); FSUIPC only until one has arrived |
+| Entity writer     | the HOST's entities, rendered by the `tools\PdkSimLink` PDK add-on inside the local Prepar3D: it creates a sim object per entity and moves it to the pose CigiStarter published. On by default; `--no-sim-link` leaves the sim alone |
+| Sim link contract | `SimLinkIpc.h`, a private mapping `Local\CigiStarter.SimLink.v1` with its own `kVersion`: 64 entity rows (degrees + metres, per-row seqlock) plus the add-on's status words. One-way — nothing goes back to the HOST — and deliberately separate from `TerrainProbeIpc.h`, so writer and terrain work cannot break each other |
+| Entity writer cut | pose only (position and attitude); time of day, weather and effects are next. The object is created from a container title in `PdkSimLink.ini`, so it is the sim's own and still simulates between writes; a custom `ISimObject` with no flight model is the follow-up and changes no part of the contract |
+| Entity state      | the HOST marks the entities it drives **Active (1)**, the CIGI Common Library's numbering (`Standby=0, Active=1, Remove/Destroyed=2`): entities 0 and 3 carry state 1 and a moving pose in every frame of every capture, and entity 5, the all-zero placeholder, carries Remove (2). Read the field the other way round and the writer renders nothing at all — every pose still arrives perfectly, which is why it was caught against the captures rather than on the rig |
 | Terrain probe     | `tools\PdkTerrainProbe`, a PDK DLL loaded by Prepar3D; free-standing query, no SimObject; optional, and loaded on the bench's Professional Plus v5 and the rig's Professional v6. The answer carries the sim's own surface classification (hard/soft/water, and whether it is an object's *platform*); the answering policy needs no more than the full surface query already gives it — its height carries a platform's deck where the elevation-only call returned sea level — and `TerrainBaker probe` and the window's `Terrain` line show the classification |
 | Terrain database  | `.hgt` tiles in `terrain\` by default or `--terrain-dir`; from `tools\get_terrain.ps1` or a `tools\TerrainBaker` bake |
 | Extra IG PCs      | `client.txt` beside the executable, `address[:port]`, read once at startup |
 | Fan-out           | one Npcap-injected copy per client, source address/port spoofed as the HOST by default (`--no-relay-spoof` sends this IG's) |
 | Fan-out adapter   | found automatically: this IG's adapter, else the one the route to the HOST leaves by |
 | Bench HOST        | the CIGI Host Emulator in `external\`, on the IG PC, in place of the flight model; `tools\test-hathot-emulator.ps1` drives it |
+| Recorded sortie   | a `.bin` capture is a recording, and the emulator reads none; `tools\BinToScenario` rewrites one as the emulator script that replays it — entities, time of day and the warm-up environment; `tools\bin-to-scenario.ps1` builds and runs it |
+| Contract tests    | `tools\test-all.ps1` builds and runs every SDK-free harness — the entity writer's, the terrain probe's and the capture converter's — with no Prepar3D and no SDK; `tools\test-simlink.ps1` is the writer's alone |
+| Local e2e test    | `tools\test-simlink-e2e.ps1` is the only check that reaches inside the sim: it replays a recorded `.bin` HOST stream into a bench CigiStarter and reads PdkSimLink's status words and entity rows back out of the running Prepar3D, so the objects it creates and the poses it applies are proved on this PC. It fails up front on a stale `PdkSimLink.dll` (the add-on is loaded once, at sim startup) or a `title=` the installation does not have |
 | Elevation         | none requested (`asInvoker`); the fan-out needs Npcap, not elevation |
 | Reference SOF rate | ~100 Hz (~10 ms, an 8/12 ms alternation) |
 | HOST frame rate   | ~53 Hz — its IG Control counter advances 0.54 per datagram, i.e. the HOST is asked for about twice the frames it has |

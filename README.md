@@ -11,6 +11,10 @@ runway's flattening and any added scenery are included without anything being
 pre-mapped, falling back to an offline **SRTM terrain database** and then to the
 sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
 
+The work still open — the entity writer, the rotor and the lights, and the rig
+confirmations — is kept in [`TODO.md`](TODO.md), which is the file to read first
+when picking this back up. `agents.md` is the network view of the link.
+
 ## What it does
 
 1. Binds a UDP socket on the downstream port (`8000`) where the HOST sends
@@ -31,12 +35,19 @@ sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
    add-on needs no matching pass. An offline **SRTM terrain database**, and then
    the sim again over FSUIPC, are the fallbacks — see
    [HAT/HOT answering](#hathot-answering).
-5. Runs as a small window with **START** / **STOP** / **EXIT**. It starts
+5. **Puts the HOST's world on screen.** Every Entity Control is decoded — attitude
+   as well as position — and published for the `PdkSimLink` add-on inside the
+   local Prepar3D, which creates a sim object per entity and moves it to the
+   commanded pose on the sim's own frame tick. The IG never touches the sim, and
+   nothing goes back to the HOST — see
+   [Rendering the HOST's world](#rendering-the-hosts-world). `--no-sim-link`
+   switches it off.
+6. Runs as a small window with **START** / **STOP** / **EXIT**. It starts
    transmitting on launch and the window minimises itself, so a deployment needs
    no click at all before the link is live; `--no-auto-start` restores the
    paused, window-up behaviour — see
    [Operator window](#operator-window).
-6. **Fans the HOST's downstream stream out to the other IG PCs** listed in
+7. **Fans the HOST's downstream stream out to the other IG PCs** listed in
    `client.txt`, byte for byte, so several visual channels run off the one link
    the HOST already feeds — see [Fan-out](#fan-out-to-the-other-ig-pcs).
 
@@ -60,6 +71,11 @@ sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
   needs only the built DLL and its `add-on.xml`. It is a separate project rather
   than part of `CigiStarter.sln`, so a machine without the SDK still builds the
   IG. Without it the HAT/HOT answer falls back to the database exactly as before.
+- The IG PC that **renders** the HOST's world also runs the **`PdkSimLink`**
+  add-on (`tools\PdkSimLink`), built and shipped the same way as the terrain
+  probe. CigiStarter only publishes the entities; without the add-on it still
+  runs the link, and the window's `SimLink` line says so — see
+  [Rendering the HOST's world](#rendering-the-hosts-world).
 - **Npcap** is needed only for the [fan-out](#fan-out-to-the-other-ig-pcs). It is
   loaded at run time rather than linked, so the program still builds and runs
   without it. The Npcap *SDK* (headers) is needed to build and is vendored in
@@ -98,6 +114,18 @@ The output is `x64\Release\CigiStarter.exe`.
 The SDKs the solution links against are vendored in `external\`, so the build
 needs nothing installed beyond Visual Studio / Build Tools.
 
+The two add-ons (`tools\PdkTerrainProbe`, `tools\PdkSimLink`) are built
+separately, because they need the sim's SDK. Each has a console harness that
+tests the contract either side of it **without** Prepar3D at all, and
+`tools\test-all.ps1` builds and runs them both, exiting 0 only when they pass:
+
+```
+.\tools\test-all.ps1
+```
+
+`tools\test-simlink.ps1` is the writer's harness on its own, which is the loop to
+run while editing it.
+
 ## Usage
 
 The deployment's link addresses and ports are the defaults, hardcoded in
@@ -130,6 +158,10 @@ CigiStarter.exe [options]
   --flow-control      hold a SOF back while the HOST has not answered the
                       previous one                            (default on)
   --no-flow-control   transmit on the rate alone, without waiting for the HOST
+  --sim-link          publish the HOST's entities into the local Prepar3D,
+                      through the PdkSimLink add-on, so the sim renders the
+                      world the HOST is flying                  (default on)
+  --no-sim-link       do not publish; leave the local Prepar3D alone
   --auto-start        transmit as soon as the program starts, and minimise the
                       window                                  (default on)
   --no-auto-start     start with the stream stopped and the window up, so START
@@ -153,9 +185,11 @@ CigiStarter.exe [options]
 ```
 
 The options only set the *starting* state, with one exception: the four link
-options (`--host-ip`, `--host-port`, `--ig-ip`, `--ig-port`) and the two relay
-options (`--relay-spoof`, `--no-relay-spoof`) are read once and have no window
-control, because the deployed link never changes and `client.txt` is read once.
+options (`--host-ip`, `--host-port`, `--ig-ip`, `--ig-port`), the two relay
+options (`--relay-spoof`, `--no-relay-spoof`) and `--sim-link` / `--no-sim-link`
+are read once and have no window control, because the deployed link never changes,
+`client.txt` is read once, and whether the sim renders the HOST's world is a
+deployment decision rather than something to toggle mid-run.
 The SOF rate,
 HAT/HOT answering and flow control can all be changed from the window while the
 program runs — see [Operator window](#operator-window). Whether the stream starts
@@ -212,6 +246,24 @@ On this machine Prepar3D (Professional Plus) holds 8000 for its own CIGI, so the
 bench link runs on **8010/8011** instead — see
 [Terrain from the sim](#terrain-from-the-sim) for why. Only the four numbers
 change; everything else is the same.
+
+### Running a recorded sortie on the emulator
+
+The emulator has no flight model of its own, and it cannot read the `.bin`
+captures: it runs definition tables (`.def`) and a script. `tools\BinToScenario`
+is the bridge — it decodes a recorded HOST→IG stream and writes a `.scp` that
+drives the emulator through the same scenario (the same entities in the same
+places, the same time of day, the same warm-up environment), so a real sortie can
+be run against CigiStarter with no `.bin` player in the loop:
+
+```
+.\tools\bin-to-scenario.ps1 -Bin 'E:\03_project\Super Puma\Visual\Local\hlm.bin'
+```
+
+Then load the `.scp` from the emulator's script dialog and run the exercise. What
+is carried over, and what is deliberately left out (IG Control, rates,
+articulated parts and view angles), is in `tools\BinToScenario\README.md`, and
+every script's own header repeats it for that capture.
 
 ### Local bench, one command
 
@@ -642,6 +694,62 @@ client.txt
   every database height. It affects the database only, never the FSUIPC
   fallback.
 
+## Rendering the HOST's world
+
+Answering HAT/HOT keeps the HOST's aircraft flying; this is the other half of an
+IG's job — drawing what the HOST is flying. The HOST owns the whole world (an
+Entity Control per entity per frame, with roll/pitch/yaw and lat/lon/alt), and
+the sim PCs are what put it on screen.
+
+CigiStarter does not drive Prepar3D itself. It **publishes** each entity's
+commanded pose into a block of shared memory (`SimLinkIpc.h`, `SimLink.h`), and
+an add-on inside the sim — `tools\PdkSimLink`, `PdkSimLink.dll` — reads it on
+Prepar3D's own frame tick and moves a sim object to it. The link is one-way: the
+CIGI stream already carries everything the sim needs, so nothing of this goes
+back to the HOST, and the IG never touches the sim.
+
+That is the difference from the vendor program it replaces. That one repositioned
+the sim's **own** aircraft over FSUIPC, which is a fight: the flight model keeps
+simulating between writes, the sim's own aircraft is never quite where the HOST
+thinks it is, and time, weather and effects have to be reconciled by hand. Here
+the sim is left to be a sim — it just gets told where the entities are.
+
+- **Switch.** On by default, because an IG that is not rendering the HOST's world
+  is not doing its job; **`--no-sim-link`** leaves the local Prepar3D alone (a
+  bench run, or a PC that is only answering HAT/HOT).
+- **Installing it.** `PdkSimLink.dll`, `add-on.xml` and `PdkSimLink.ini` go in
+  Prepar3D's add-on discovery folder, exactly like the terrain probe; the
+  `.ini` names the container title entities are created from, and until it is set
+  the add-on is loaded but creates nothing. `tools\PdkSimLink\README.md` is the
+  full procedure, including how the two editions' SDKs differ.
+- **This cut is pose only.** Time of day, weather and effects are the next things
+  the same channel will carry. The object is also the sim's own (created from a
+  container title), so it still has a flight model between writes; removing that
+  — a custom `ISimObject` with no simulation of its own — changes nothing about
+  the shared-memory contract.
+- **Camera.** The per-channel angles of an immersive dome stay where they are, in
+  each PC's own `viewgroup.xml`. Attaching the cockpit view to a HOST entity is a
+  separate decision and a separate call, and does not change the contract.
+- **The `SimLink` line** in the operator window says whether the add-on is
+  loaded and applying, and why not when it is not.
+- **Testing it without the sim.** `tools\test-simlink.ps1` builds and runs a
+  harness that drives both halves of the contract — CigiStarter's publisher and
+  the add-on's PDK-free half — with no Prepar3D and no SDK. It is the check that
+  entity 0 is drawn rather than skipped, that an Active entity is drawn while a
+  Standby or Remove one means "take the object out", that the pose crosses in the
+  PDK's units and order, and that a row caught mid-rewrite is never believed.
+  `tools\test-all.ps1` runs it with the terrain probe's.
+- **Testing it with the sim, on this PC.** `tools\test-simlink-e2e.ps1` replays a
+  recorded HOST stream into a bench CigiStarter and reads the add-on's own report
+  back out of the running Prepar3D, so the objects it created and the poses it
+  applied are checked here instead of for the first time on the rig. It fails up
+  front on a stale `PdkSimLink.dll` or a `title=` that is not in the
+  installation. The mechanism is in `tools\PdkSimLink\README.md`.
+
+Every PC that renders needs its own Prepar3D with `PdkSimLink` installed. A PC
+that only fans the stream out to others (`client.txt`) or only answers HAT/HOT
+needs only the terrain probe.
+
 ## Operator window
 
 CigiStarter is a windowed program, so it is driven with the mouse rather than
@@ -668,6 +776,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |                                                                          |
 |  Relay     : 4 clients, 4 reachable, 1567 datagrams forwarded            |
 |  Relay NIC : Killer E2600 Gigabit Ethernet Controller                    |
+|  SimLink   : 3 entities applied, 3 objects in the sim                    |
 |                                                                          |
 |  TerrainDB : 2 tile(s), 1 in memory, 25 MB                               |
 |  HAT/HOT   : answering from the sim's own terrain                        |
@@ -780,6 +889,14 @@ with the window up instead, which is the behaviour the sketch below shows.
   — it is on whenever `client.txt` says so. With `--no-relay-spoof` the `Relay
   NIC` line also names the address the copies carry, because it is then this
   IG's rather than the HOST's, and nothing else on the window would say so.
+- `SimLink` reports the writer that puts the HOST's entities into the local
+  Prepar3D ([Rendering the HOST's world](#rendering-the-hosts-world)): how many
+  entities it positioned on the add-on's last tick, and how many sim objects it
+  holds for them. While it is off the line says why instead — `add-on not
+  loaded`, `loaded, but PdkSimLink.ini has no title to create from`, a tick that
+  is not running, or an object the sim refused — and `disabled with
+  --no-sim-link` when the publisher was switched off at the command line.
+  `tools\PdkSimLink\README.md` lists every diagnostic.
 
 ## Fan-out to the other IG PCs
 
@@ -924,6 +1041,18 @@ defaults; see [Usage](#usage) for the bench-test overrides.
   timer so that the rate it is asked for is the rate it sends, and
   [flow control](#sof-rate-and-flow-control) then keeps that stream inside what
   the HOST can absorb.
+- The **Entity Control** (id 2, 48 bytes) is the pose everything else is anchored
+  to and the pose the sim renders: `roll` / `pitch` / `yaw` as little-endian
+  **floats** at offsets 12/16/20 (degrees), and `latitude` / `longitude` /
+  `altitude` as little-endian **doubles** at 24/32/40 (degrees, degrees, metres
+  MSL). The doubles are the layout the HAT/HOT anchor has always used — the
+  capture's read back as the aircraft's own Atang-to-Halim track; the attitude
+  floats are the same CIGI 3.3 layout and are what
+  [the sim link](#rendering-the-hosts-world) feeds the entities, so a bench run
+  with a *rolled* aircraft is what confirms their sign and order (a level one
+  proves nothing). Entity 0 is the HOST's own aircraft; the HOST also sends rows
+  for entities it is not driving, whose all-zero pose means "no position" and is
+  neither anchored to nor rendered (`cigi::poseUsable`).
 - HAT/HOT responses use the CIGI 3.3 layouts: the 16-byte Response (102) carries
   a single `Height` double at offset 8, and the 40-byte Extended Response (103)
   carries `HAT` at offset 8 and `HOT` at offset 16. **Both** have a 3-byte
@@ -949,6 +1078,10 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `TerrainProbe.h`   | API to the sim's own terrain, through the `PdkTerrainProbe` add-on — the preferred HAT/HOT source |
 | `TerrainProbe.cpp` | CigiStarter's half of the shared-memory link to `PdkTerrainProbe.dll` |
 | `TerrainProbeIpc.h`| the shared-memory contract between CigiStarter and the add-on |
+| `SimLink.h`        | API to the sim's rendering path, through the `PdkSimLink` add-on — publishes the HOST's entities for the sim to draw |
+| `SimLink.cpp`      | CigiStarter's half of the shared-memory link to `PdkSimLink.dll` |
+| `SimLinkIpc.h`     | the shared-memory contract between CigiStarter and the entity writer |
+| `SimLinkMap.h`     | the add-on's PDK-free half: which rows to render, the seqlock read, and the CIGI→PDK units |
 | `Relay.h`          | fan-out API: start/stop, per-datagram copy, status snapshot |
 | `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
@@ -956,6 +1089,14 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `external\`        | vendored third-party code: the build-time SDKs (FSUIPC, Npcap, Prepar3D PDK headers) and the CIGI Host Emulator the bench tests drive |
 | `external\HostEmulator_Win32_v3.3.3\` | the CIGI Host Emulator 3.3.3, the HOST side of a bench link (not linked by anything) |
 | `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source, and the sampler `TerrainBaker` uses) |
+| `tools\PdkSimLink\` | the PDK add-on that renders the HOST's entities: creates a sim object per entity and moves it to the pose CigiStarter publishes |
+| `tools\PdkSimLink\test\` | the contract harness for the writer: drives both halves without Prepar3D |
+| `tools\test-simlink.ps1` | builds and runs the writer's contract harness, with a PASS/FAIL verdict |
+| `tools\test-all.ps1` | builds and runs every SDK-free contract harness (writer + terrain probe + capture converter) |
+| `tools\test-simlink-e2e.ps1` | replays a recorded HOST stream into a bench CigiStarter and checks the writer's objects and poses inside the running Prepar3D |
+| `tools\BinToScenario\` | the converter that rewrites a recorded `.bin` CIGI stream as a CIGI Host Emulator script (`.scp`), so a real sortie can be run on the native emulator |
+| `tools\BinToScenario\test\` | the contract harness for the converter: decodes synthetic captures, no sim and no `.bin` on disk |
+| `tools\bin-to-scenario.ps1` | builds the converter and runs it over one or more captures |
 | `tools\get_terrain.ps1` | option 1: downloads generic SRTM tiles for `terrain\` |
 | `tools\capture-hat-hot.ps1` | bench aid: captures the CIGI link and prints every HAT/HOT request and answer |
 | `tools\test-hathot-emulator.ps1` | bench aid: drives the Host Emulator through the HAT/HOT checks and prints a PASS/FAIL verdict; `-Local` is the whole bench on one PC |
