@@ -42,6 +42,14 @@ namespace simlink {
 // add-on is not there. Safe to call from the CIGI receive thread.
 void publish(const cigi::EntityControl& e);
 
+// Publish the HOST's own eye (a CIGI View Control): the viewpoint the HOST wants
+// its view drawn from, relative to the entity the view is attached to.  Without
+// it the sim's camera can only sit on that entity's reference point -- which is
+// where the aircraft's centre of gravity is, not where the pilot's eye is, and
+// the difference is what a cockpit view is.  Same contract and the same lazy
+// re-open as publish(), and safe to call from the same thread.
+void publishView(const cigi::ViewControl& v);
+
 // A picture of the writer for the operator window and a bench readout: whether
 // the add-on is there, whether it is applying, and why not.  Everything here is
 // advisory -- no decision is taken from it -- and it degrades to zeros when the
@@ -70,6 +78,7 @@ struct Health {
     bool     hasTick         = false; // a tick has been delivered
     bool     hasReadback    = false;  // a pose has been read back from the sim
     bool     noTitle        = false;  // PdkSimLink.ini has no container title
+    bool     viewCarried    = false;  // the HOST's own eye has been published
 };
 
 Health health();

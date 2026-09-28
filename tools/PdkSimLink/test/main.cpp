@@ -312,12 +312,15 @@ int main(int /*argc*/, char** /*argv*/) {
     // heading wrap unhandled would read as a large number that is not real.
     std::printf("\nthe read-back\n");
     {
-        check(simlink::kVersion == 2, "the contract version is 2 (read-back added)");
+        check(simlink::kVersion == 3, "the contract version is 3 (the HOST's eye added)");
         check(sizeof(simlink::Held) == 80, "a Held row is 80 bytes");
         check(offsetof(simlink::Shared, entities) == 88, "entities[] starts at 88");
         check(offsetof(simlink::Shared, held) == 4696, "held[] starts at 4696");
-        check(sizeof(simlink::Shared) == 9816,
-              "the region is the header plus both tables");
+        check(sizeof(simlink::View) == 64, "a View row is 64 bytes");
+        check(offsetof(simlink::Shared, view) == 9816,
+              "the view is appended after held[], so the tables keep their offsets");
+        check(sizeof(simlink::Shared) == 9880,
+              "the region is the header plus all three tables");
 
         // The status word is a contract too.  The two object-kind bits are what
         // a reader uses to tell the physics-free object from the sim's own, and
@@ -375,6 +378,113 @@ int main(int /*argc*/, char** /*argv*/) {
         b = back; b.pitchDeg = back.pitchDeg + 30.0;
         check(approx(simlink::attitudeGapDeg(back, b), 30.0),
               "the largest axis is the one reported");
+    }
+
+    // -- 3c. The HOST's own eye ----------------------------------------------
+    // The sim's view is a camera, not an object: the entity it rides can be
+    // moved perfectly and the picture stays where it was until the camera is
+    // moved too. The HOST says where to move it in a View Control, and the
+    // captures carry exactly one, identical in every frame of every one of them
+    // -- the pilot's seat, which is what makes this a cockpit view rather than a
+    // picture drawn from the airframe's reference point.
+    std::printf("\nthe HOST's own eye (View Control)\n");
+    {
+        // The bytes one of the captures carries, written out by hand rather than
+        // read from a file: 10 20 | 00 00 | 01 | 3F | 00 00 | 2.8 | 0.05 | -0.5
+        // | 0 | 0 | 358.
+        uint8_t msg[cigi::kViewControlSize];
+        std::memset(msg, 0, sizeof(msg));
+        msg[0] = static_cast<uint8_t>(cigi::MsgViewControl);
+        msg[1] = static_cast<uint8_t>(cigi::kViewControlSize);
+        putU16(msg + 2, 0);
+        msg[4] = 1;
+        msg[5] = 0x3F;
+        putU16(msg + 6, 0);
+        putF32(msg + 8,   2.8f);
+        putF32(msg + 12,  0.05f);
+        putF32(msg + 16, -0.5f);
+        putF32(msg + 20,  0.0f);
+        putF32(msg + 24,  0.0f);
+        putF32(msg + 28,  358.0f);
+
+        cigi::ViewControl v;
+        check(cigi::parseViewControl(msg, sizeof(msg), v),
+              "a well-formed View Control is decoded");
+        check(v.entityId == 0, "the entity it is attached to comes from offset 6");
+        // The row carries single-precision floats, so 2.8 lands as 2.799999952;
+        // this is the decode, not the arithmetic, and its tolerance is the
+        // float's own.
+        check(std::fabs(v.xOffset - 2.8) < 1e-6 && std::fabs(v.yOffset - 0.05) < 1e-6 &&
+              std::fabs(v.zOffset + 0.5) < 1e-6,
+              "the offsets are the floats at 8/12/16");
+        check(approx(v.yawDeg, 358.0) && v.rollDeg == 0.0f && v.pitchDeg == 0.0f,
+              "the angles are the floats at 20/24/28");
+        check(!cigi::parseViewControl(msg, sizeof(msg) - 1, v),
+              "a truncated view is refused");
+        msg[0] = 99;
+        check(!cigi::parseViewControl(msg, sizeof(msg), v),
+              "a message with the wrong id is refused");
+
+        // Through the region, which is how the camera actually gets it: the
+        // decode above is CigiStarter's half, this is the row the add-on reads.
+        simlink::publishView(v);
+        simlink::View row{};
+        check(simlink::readViewRow(fake.shm()->view, row) && row.valid != 0,
+              "publishing a view puts a valid row in the region");
+        check(row.entityId == v.entityId && approx(row.zOffset, -0.5) &&
+              approx(row.yawDeg, 358.0),
+              "with the fields the camera reads");
+        check(simlink::health().viewCarried,
+              "and the writer reports the eye as carried");
+
+        // Where that eye ends up. The offset is a body offset, so it has to be
+        // rotated by the *entity's* attitude: 2.8 m out the nose is a different
+        // place on the globe for every heading, and skipping the rotation would
+        // look right on a north heading and wrong on every other one.
+        Entity e{};
+        e.latDeg = 0.0; e.lonDeg = 0.0; e.altMeters = 100.0;
+        e.rollDeg = e.pitchDeg = e.yawDeg = 0.0;   // level, pointing north
+        simlink::CigiPose eye = simlink::viewEyePose(e, row);
+        check(approx(eye.latDeg, 2.8 / simlink::kMetersPerDegLat),
+              "pointing north, the eye is 2.8 m north of the reference point");
+        check(approx(eye.lonDeg, 0.05 / simlink::kMetersPerDegLat),
+              "and 5 cm -- the lateral offset -- to the east");
+        check(approx(eye.altMeters, 100.5),
+              "and half a metre up: Z is out the bottom in CIGI's body frame");
+        check(approx(eye.yawDeg, 358.0), "turned two degrees left of the nose");
+
+        e.yawDeg = 90.0;   // pointing east
+        eye = simlink::viewEyePose(e, row);
+        check(approx(eye.latDeg, -0.05 / simlink::kMetersPerDegLat),
+              "pointing east, 2.8 m is due east and the 5 cm lateral offset is due south -- the offset turns with the aircraft");
+        check(approx(eye.lonDeg, 2.8 / simlink::kMetersPerDegLat),
+              "so it is the longitude that moves");
+
+        e.yawDeg = 359.0;
+        eye = simlink::viewEyePose(e, row);
+        check(approx(eye.yawDeg, 357.0),
+              "a view is relative to the entity, and the heading wraps");
+
+        // The invariant that catches a wrong rotation without a reference
+        // answer: whatever the attitude, the eye is exactly the offset's length
+        // from the reference point -- sqrt(2.8^2 + 0.05^2 + 0.5^2) m.
+        const double span = std::sqrt(2.8 * 2.8 + 0.05 * 0.05 + 0.5 * 0.5);
+        const double yaws[4]   = {0.0, 37.0, 180.0, 271.75};
+        const double rolls[4]  = {0.0, 0.0, -62.0, 12.5};
+        const double pitchs[4] = {0.0, 0.0, 41.0, -3.25};
+        bool sameSpan = true;
+        for (int i = 0; i < 4; ++i) {
+            e.latDeg = kLat; e.lonDeg = kLon; e.altMeters = kAlt;
+            e.rollDeg = rolls[i]; e.pitchDeg = pitchs[i]; e.yawDeg = yaws[i];
+            const simlink::CigiPose p = simlink::viewEyePose(e, row);
+            simlink::CigiPose ref;
+            ref.latDeg = e.latDeg;
+            ref.lonDeg = e.lonDeg;
+            ref.altMeters = e.altMeters;
+            if (std::fabs(simlink::poseGapMeters(ref, p) - span) > 0.02) sameSpan = false;
+        }
+        check(sameSpan,
+              "the eye is the offset's length from the reference point at every attitude");
     }
 
     // -- 4. The HOST's own aircraft ------------------------------------------
@@ -445,6 +555,10 @@ int main(int /*argc*/, char** /*argv*/) {
         // what the IG wrote on the way out.
         check(readSlot(fake, 4, e) && e.enabled == 0,
               "stop() retires the row, so the add-on removes the object");
+
+        simlink::View view{};
+        check(simlink::readViewRow(fake.shm()->view, view) && view.valid == 0,
+              "and takes the eye back, so a stopped IG leaves no stale viewpoint");
         simlink::start();  // re-open for the sections that follow
     }
 

@@ -413,9 +413,10 @@ void Refresh() {
                                             : s.simLinkNote.c_str());
     } else {
         std::swprintf(simlink, ARRAYSIZE(simlink),
-                      L"  SimLink   : %u entit%s applied, %u object%s in the sim",
+                      L"  SimLink   : %u entit%s applied, %u object%s in the sim%s",
                       s.simLinkApplied, s.simLinkApplied == 1 ? L"y" : L"ies",
-                      s.simLinkObjects, s.simLinkObjects == 1 ? L"" : L"s");
+                      s.simLinkObjects, s.simLinkObjects == 1 ? L"" : L"s",
+                      s.simLinkEye ? L", eye from the HOST" : L"");
     }
 
     // How the transmit loop is pacing, and -- when flow control is holding

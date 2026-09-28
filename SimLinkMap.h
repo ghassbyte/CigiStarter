@@ -156,4 +156,67 @@ inline double attitudeGapDeg(const CigiPose& a, const CigiPose& b) {
     return m;
 }
 
+// Read the HOST's own eye under its seqlock, the same way an entity row is
+// read, so a camera that catches the row half-rewritten keeps the pose it had
+// rather than jumping to a mix of two views.
+inline bool readViewRow(const View& row, View& out) {
+    const uint32_t before = row.seq;
+    if (before & 1u) return false;
+    out = row;
+    return row.seq == before;
+}
+
+// Where the HOST wants its eye, given the entity its view is attached to.
+//
+// The offsets are body offsets from the entity's reference point, so they have
+// to be rotated out of the body frame by that entity's own attitude before they
+// can be added to a latitude and longitude -- which is what makes this more
+// than arithmetic on the row: 2.8 m out the nose is a different place on the
+// globe for every heading, and skipping the rotation would leave the eye on the
+// reference point whenever the aircraft was level and drift away from it as
+// soon as it was not.
+//
+// The angles are the other way round: the view's roll, pitch and yaw are
+// *relative* to the entity, so they are simply added to it.  Heading wraps.
+//
+// The entity attitude is also what the offset is rotated by, not the view's own
+// angles: the HOST places the eye a fixed distance along the aircraft, and then
+// points it.  The two are the same thing for the captures, whose view is turned
+// two degrees; they are not the same thing in general.
+inline CigiPose viewEyePose(const Entity& e, const View& v) {
+    CigiPose c;
+    c.rollDeg  = e.rollDeg  + v.rollDeg;
+    c.pitchDeg = e.pitchDeg + v.pitchDeg;
+    c.yawDeg   = e.yawDeg   + v.yawDeg;
+
+    c.yawDeg = std::fmod(c.yawDeg, 360.0);
+    if (c.yawDeg < 0.0) c.yawDeg += 360.0;
+
+    const double roll  = e.rollDeg  * kDegToRad;
+    const double pitch = e.pitchDeg * kDegToRad;
+    const double yaw   = e.yawDeg   * kDegToRad;
+
+    const double cr = std::cos(roll),  sr = std::sin(roll);
+    const double cp = std::cos(pitch), sp = std::sin(pitch);
+    const double cy = std::cos(yaw),   sy = std::sin(yaw);
+
+    const double x = v.xOffset, y = v.yOffset, z = v.zOffset;
+
+    // Body (X out the nose, Y out the right wing, Z out the bottom) into north,
+    // east and down.
+    const double north = cp * cy * x + (sr * sp * cy - cr * sy) * y +
+                         (cr * sp * cy + sr * sy) * z;
+    const double east  = cp * sy * x + (sr * sp * sy + cr * cy) * y +
+                         (cr * sp * sy - sr * cy) * z;
+    const double down  = -sp * x + sr * cp * y + cr * cp * z;
+
+    // The same small-area approximation poseGapMeters() measures with, so the
+    // two cannot disagree about what a metre away means.
+    c.latDeg    = e.latDeg + north / kMetersPerDegLat;
+    c.lonDeg    = e.lonDeg + east /
+                  (kMetersPerDegLat * std::cos(e.latDeg * kDegToRad));
+    c.altMeters = e.altMeters - down;   // down is positive, altitude is up
+    return c;
+}
+
 } // namespace simlink

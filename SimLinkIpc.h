@@ -44,6 +44,11 @@
 //      object was actually found at (`GetPosition`) and how far it had moved
 //      from the pose it was last commanded -- the measurement that says whether
 //      the native flight model is fighting the writer.
+//   5. the IG also writes `view` -- the HOST's own eye, from its View Control
+//      message -- because the sim's view is a *camera*, not an object: the
+//      entity the camera rides can be moved perfectly and the picture stays
+//      where it was until the camera is moved too, and the HOST says where to
+//      move it.  One row, because every capture carries exactly one view.
 //
 // Units are CIGI's: degrees and metres. The add-on converts to the radians and
 // feet the PDK wants, at the sim boundary. Nothing here is a sim unit.
@@ -66,7 +71,12 @@ constexpr uint32_t kMagic   = 0x4B4C5350u;  // 'P','S','L','K'
 // 1: the first layout (commanded poses only).
 // 2: adds the add-on's read-back -- `held[]` and the drift words -- so the sim
 //    can be seen *holding* the pose, not merely accepting it.
-constexpr uint32_t kVersion = 2u;
+// 3: adds `view`, the HOST's own eye (a CIGI View Control), so the picture can
+//    be flown from the cockpit the HOST is flying rather than from the entity's
+//    own reference point.  It is appended after `held[]`, so the two existing
+//    tables keep the offsets they had and a reader written against version 2
+//    still finds them where it expects them.
+constexpr uint32_t kVersion = 3u;
 
 // Slots in the entity table. CIGI entity IDs are 16-bit, but the HOST in this
 // deployment drives a handful of entities (its capture has three Entity Controls
@@ -187,6 +197,32 @@ struct Held {
     double   driftDeg;            // largest attitude error against that pose
 };
 
+// The HOST's own eye: one View Control message, in CIGI's units, exactly as it
+// arrives.  The offsets and angles are relative to the entity the view is
+// attached to (`entityId`), so the add-on combines the two -- see
+// SimLinkMap.h's viewEyePose() -- and nothing here is absolute.
+//
+// It is a single row and not a table because the captures carry a single view:
+// the reference HOST sent one View Control per frame, byte-identical for the
+// whole sortie.  `valid` is 0 until one has arrived, which is how a camera gets
+// the entity's own reference point (the behaviour before this existed) rather
+// than a pose from an all-zero row.
+//
+// The seqlock is the same discipline as Entity's, for the same reason: a reader
+// can be preempted mid-copy.
+struct View {
+    volatile uint32_t seq;        // seqlock: odd while the IG rewrites this row
+    uint32_t valid;               // 1 once a View Control has been published
+    uint32_t entityId;            // the entity the view is attached to
+    uint32_t viewId;              // the view / view group the HOST named
+    double   xOffset;             // metres, +X out the nose
+    double   yOffset;             // metres, +Y out the right wing
+    double   zOffset;             // metres, +Z out the bottom
+    double   rollDeg;             // degrees, relative to the entity
+    double   pitchDeg;            // degrees, relative to the entity
+    double   yawDeg;              // degrees, relative to the entity
+};
+
 struct Shared {
     uint32_t magic;         // kMagic
     uint32_t version;       // kVersion
@@ -219,6 +255,11 @@ struct Shared {
 
     Entity entities[kMaxEntities];
     Held   held[kMaxEntities];
+
+    // Appended last on purpose: the two tables above keep the offsets they had
+    // at kVersion 2, so the change is visible in the version and in the size,
+    // not in the middle of the region.
+    View   view;
 };
 #pragma pack(pop)
 
@@ -230,12 +271,15 @@ struct Shared {
 //   header   14 u32 (56) + 4 u32 read-back counters (16) + 2 doubles (16) = 88
 //   entities 64 * 72 = 4608, starting at 88
 //   held     64 * 80 = 5120, starting at 88 + 4608 = 4696
-//            sizeof(Shared) = 4696 + 5120 = 9816
+//   view     4 u32 (16) + 6 doubles (48) = 64, starting at 4696 + 5120 = 9816
+//            sizeof(Shared) = 9816 + 64 = 9880
 static_assert(sizeof(Entity) == 72, "Entity must stay 72 bytes");
 static_assert(sizeof(Held) == 80, "Held must stay 80 bytes");
+static_assert(sizeof(View) == 64, "View must stay 64 bytes");
 static_assert(offsetof(Shared, entities) == 88, "entities[] must start at 88");
 static_assert(offsetof(Shared, held) == 4696, "held[] must start at 4696");
-static_assert(sizeof(Shared) == 9816,
-              "Shared must be the header plus the entity and held tables");
+static_assert(offsetof(Shared, view) == 9816, "view must start at 9816");
+static_assert(sizeof(Shared) == 9880,
+              "Shared must be the header plus the entity, held and view tables");
 
 } // namespace simlink

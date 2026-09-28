@@ -167,6 +167,7 @@ struct Stats {
     std::atomic<uint64_t> messages{0};
     std::atomic<uint64_t> igControl{0};
     std::atomic<uint64_t> entityControl{0};
+    std::atomic<uint64_t> viewControl{0};
     std::atomic<uint64_t> hatHotReq{0};
     std::atomic<uint32_t> lastHostFrame{0};
     // Downstream datagrams that came from the HOST, i.e. answers to our SOFs.
@@ -792,6 +793,7 @@ static gui::Status uiStatus() {
     s.simLink        = wanted && s.simLinkNote.empty();
     s.simLinkObjects = writer.objectsCreated;
     s.simLinkApplied = writer.applied;
+    s.simLinkEye     = writer.viewCarried;
     return s;
 }
 
@@ -1020,6 +1022,22 @@ int main(int argc, char** argv) {
                             if (g_simLinkEnabled.load() && cigi::poseUsable(ent)) {
                                 simlink::publish(ent);
                             }
+                        }
+                        break;
+                    }
+                    case cigi::MsgViewControl: {
+                        g_stats.viewControl.fetch_add(1);
+                        // Where the HOST wants its own eye. The IG is the only
+                        // party that can put the picture there, and it has to be
+                        // told: the entity objects the sim link creates are not
+                        // the sim's user aircraft, so the sim's view stays where
+                        // the user left it however well they move. Published for
+                        // the PdkSimLink add-on, which flies the camera from it
+                        // (SimLink.h, SimLinkIpc.h).
+                        cigi::ViewControl v;
+                        if (g_simLinkEnabled.load() &&
+                            cigi::parseViewControl(msg, msgSize, v)) {
+                            simlink::publishView(v);
                         }
                         break;
                     }

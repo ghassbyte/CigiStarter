@@ -148,11 +148,21 @@ LinkCallback*          g_frameCb = nullptr;
 //-----------------------------------------------------------------------------
 // The camera
 //
-// CigiStarter's shared table is one-way and says nothing about the view. The
-// HOST's own View Control is a static definition (byte-identical in every frame
-// of the captures) and the sim's view never leaves the user's own aircraft while
-// the entity objects are separate, non-user objects -- so an entity can move
-// perfectly and the picture stays still. This is what flies the picture.
+// The sim's view never leaves the user's own aircraft while the entity objects
+// are separate, non-user objects -- so an entity can move perfectly and the
+// picture stays still. This is what flies the picture.
+//
+// Where the eye goes comes from the HOST.  CigiStarter publishes the HOST's own
+// View Control (`view` in the shared region, SimLinkIpc.h): one static
+// definition in every capture, 2.8 m forward of entity 0's reference point, half
+// a metre above it and 5 cm right, turned two degrees -- the pilot's seat, not
+// the airframe reference point a position-only camera has to sit on.  Two
+// degrees and two metres is the whole difference between "the picture is drawn
+// from the aircraft" and a cockpit view, and only the HOST knows which its view
+// is.  In CIGI's body frame (+X nose, +Y right wing, +Z down) the offset has to
+// be rotated by the entity's attitude before it becomes a latitude and
+// longitude; SimLinkMap.h's viewEyePose() is that arithmetic, and the contract
+// test drives it without a simulator.
 //
 // The sim's camera is a per-window service. A ViewGroup renders its channels
 // from the window's *active* camera and applies each channel's frustum on top,
@@ -179,7 +189,9 @@ LinkCallback*          g_frameCb = nullptr;
 // and only the drawing is gone.  Measured on the bench, 2026-09-29: with the
 // AS332 junctioned into the entities' container, the same parked pose that had
 // shown the inside of a fuselage showed the apron, the hangars and the
-// mountains instead.
+// mountains instead.  The airframe is therefore deliberately not drawn: the
+// cockpit view here is the HOST's eyepoint and the world it sees, not a
+// modelled cabin around it.
 //-----------------------------------------------------------------------------
 IWindowPluginSystemV440* g_windows  = nullptr;
 class CameraPlugin;
@@ -665,6 +677,18 @@ bool readCameraEntity(simlink::Entity& e) {
     return simlink::entityWanted(e);
 }
 
+// The HOST's own eye, read the same way and with the same discipline as the row
+// above: only when one has arrived, never from a torn row, and only when it is
+// attached to the entity this camera is riding.  A view attached to some *other*
+// entity is not this camera's view, and applying its offsets here would put the
+// eye where the HOST wants it for a different aircraft.
+bool readCameraView(const simlink::Entity& e, simlink::View& v) {
+    if (!g_shm) return false;
+    if (!simlink::readViewRow(g_shm->view, v)) return false;
+    if (!v.valid) return false;
+    return v.entityId == e.entityId;
+}
+
 // The window plugin.  OnPreCameraUpdate is the documented place for values the
 // camera's own update then uses for its position and orientation, which is why
 // the pose is applied there and not on the frame event -- set it earlier and the
@@ -701,6 +725,24 @@ public:
         simlink::Entity e;
         if (!readCameraEntity(e)) return;
 
+        // Where the eye goes.  The entity's own reference point is a point on
+        // the airframe the HOST chose, not a viewpoint; the HOST's View Control
+        // says where its eye is, and in every capture that is the pilot's seat.
+        // With no View Control -- or one attached to a different entity -- the
+        // camera stays on the reference point, which is what this did before the
+        // eye was carried at all.
+        simlink::CigiPose eye;
+        eye.latDeg    = e.latDeg;
+        eye.lonDeg    = e.lonDeg;
+        eye.altMeters = e.altMeters;
+        eye.rollDeg   = e.rollDeg;
+        eye.pitchDeg  = e.pitchDeg;
+        eye.yawDeg    = e.yawDeg;
+
+        simlink::View v;
+        const bool haveView = readCameraView(e, v);
+        if (haveView) eye = simlink::viewEyePose(e, v);
+
         // SetPBH is on the V400 base, but SetLLA only arrived in V430 -- and a
         // Fixed-origin camera is positioned with SetLLA, so ask for the newer
         // interface rather than assuming it.  If the sim will not give it, the
@@ -716,16 +758,18 @@ public:
         // and the PDK's SetPBH is (pitch, bank, heading), so roll and heading
         // swap places.  Getting that wrong flies the picture mirrored, which is
         // exactly the kind of thing that looks right until it is banked.
-        cam->SetLLA(e.latDeg, e.lonDeg, e.altMeters);
-        cam->SetPBH(static_cast<float>(e.pitchDeg),
-                    static_cast<float>(e.rollDeg),
-                    static_cast<float>(e.yawDeg));
+        cam->SetLLA(eye.latDeg, eye.lonDeg, eye.altMeters);
+        cam->SetPBH(static_cast<float>(eye.pitchDeg),
+                    static_cast<float>(eye.rollDeg),
+                    static_cast<float>(eye.yawDeg));
 
         // The bench trace.  GetLLA/GetPBH read the camera *back* out of the sim,
         // so the log shows the commanded pose and the pose the camera is actually
         // on -- the camera has no status word in the shared region, and a camera
         // that silently refuses SetLLA looks identical to one that has moved.
-        // Sampled about once a second; camera_log is off in normal operation.
+        // Both poses are printed when there is a view, because the whole of the
+        // cockpit fix is the difference between them.  Sampled about once a
+        // second; camera_log is off in normal operation.
         if (g_camLog) {
             static unsigned tick = 0;
             if ((tick++ % 60u) == 0u) {
@@ -739,13 +783,17 @@ public:
                     const LPCWSTR n = pWindow->GetWindowName();
                     if (n) wcsncpy_s(name, n, _TRUNCATE);
                 }
-                wchar_t line[512] = L"";
+                wchar_t line[640] = L"";
                 swprintf_s(line,
-                           L"camera '%s' cmd %.6f %.6f %.2f | %.2f %.2f %.2f "
-                           L"reads %.6f %.6f %.2f | %.2f %.2f %.2f",
+                           L"camera '%s' ent %.6f %.6f %.2f | %.2f %.2f %.2f "
+                           L"eye %.6f %.6f %.2f | %.2f %.2f %.2f "
+                           L"reads %.6f %.6f %.2f | %.2f %.2f %.2f %s",
                            name, e.latDeg, e.lonDeg, e.altMeters,
                            e.pitchDeg, e.rollDeg, e.yawDeg,
-                           lla[0], lla[1], lla[2], pbh[0], pbh[1], pbh[2]);
+                           eye.latDeg, eye.lonDeg, eye.altMeters,
+                           eye.pitchDeg, eye.rollDeg, eye.yawDeg,
+                           lla[0], lla[1], lla[2], pbh[0], pbh[1], pbh[2],
+                           haveView ? L"(view applied)" : L"(no view: on the entity)");
                 camLog(line);
             }
         }

@@ -10,14 +10,14 @@
       PdkSimLink       the HOST's entities -> sim objects (SimLinkIpc.h)
       PdkTerrainProbe  the sim's terrain -> HAT/HOT answers (TerrainProbeIpc.h)
 
-    and one tool whose input is a file, not a peer, so it can be driven the same
-    way:
-
-      BinToScenario    a recorded .bin CIGI stream -> a Host Emulator .scp
-
     This is the one command that runs them all: it builds each harness and runs
     it, prints every harness's own output, and exits 0 only when they all pass.
     Run it before a commit, or in a loop while editing.
+
+    The live half -- a replayed capture into a running Prepar3D -- is
+    tools\test-simlink-e2e.ps1, and the by-hand version of that is
+    tools\play-bin.ps1; neither is part of this, because both need the sim and
+    its add-on loaded.
 
     Close Prepar3D before running it: a harness plays the sim's half of the
     shared region, so it must be the only writer of it.
@@ -67,11 +67,6 @@ $suites = @(
         Name    = 'PdkTerrainProbe'
         Project = 'tools\PdkTerrainProbe\test\PdkTerrainProbeTest.vcxproj'
         Exe     = 'tools\PdkTerrainProbe\test\{0}\{1}\PdkTerrainProbeTest.exe'
-    },
-    [pscustomobject]@{
-        Name    = 'BinToScenario'
-        Project = 'tools\BinToScenario\test\BinToScenarioTest.vcxproj'
-        Exe     = 'tools\BinToScenario\test\{0}\{1}\BinToScenarioTest.exe'
     }
 )
 

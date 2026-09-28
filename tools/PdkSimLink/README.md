@@ -34,6 +34,8 @@ share one block of memory, described in `../../SimLinkIpc.h`:
         |    pose: lat/lon/alt + roll/pitch/yaw   |    creates a sim object for an
         |    (from a CIGI Entity Control)         |    entity it has not seen before
         |                                         |    and moves it to the pose
+        |  writes view  --------------------->     |  and puts the window's camera
+        |    the HOST's own eye + its angles       |    at that eye, if `camera=` is set
         |  <----- status words                   |
         |    alive, ticks, applied, diag          |
 ```
@@ -142,7 +144,8 @@ below the sim's own ground included. What it is not yet:
   non-user objects, so on their own they move without moving the picture: in
   Prepar3D the view belongs to a *window*, and an object the add-on created is
   not that window's camera. `[simlink] camera=<entity id>` puts every 3D view
-  onto a Fixed-origin camera definition and applies that entity's pose to it
+  onto a Fixed-origin camera definition and applies the HOST's own eye for that
+  entity to it
   every frame — `SetLLA` (lat/lon in degrees, altitude in metres) and `SetPBH`
   (pitch, bank, heading) — so the HOST's own aircraft flies the picture. The
   per-channel angles of an immersive dome are untouched: a ViewGroup renders its
@@ -198,9 +201,9 @@ matters. With `camera` blank there is no own ship and every entity uses `title`.
 
 | Key | Meaning |
 |---|---|
-| `camera` | the CIGI entity id the sim's view should ride — normally `0`, the HOST's own aircraft. Blank or absent leaves the sim's view alone, which is the default. |
+| `camera` | the CIGI entity id the sim's view should ride — normally `0`, the HOST's own aircraft. The eye is the HOST's own (its View Control), not the entity's reference point: see *The eye is the HOST's* below. Blank or absent leaves the sim's view alone, which is the default. |
 | `camera_view` | the camera definition every 3D view is put onto before it is driven. Must be Fixed-origin. Default `Cigi View`. |
-| `camera_log` | `1` writes `PdkSimLink.camera.log` beside the DLL: what the camera is told and what it reports back. Default `0`. |
+| `camera_log` | `1` writes `PdkSimLink.camera.log` beside the DLL: about a line a second per driven view, each with the entity's pose, the eye that becomes the camera, and what the camera reports back. Default `0`. |
 
 **Why it is needed at all.** An entity object the add-on created is a *non-user*
 object, so moving it does not move the picture. Prepar3D's view belongs to a
@@ -215,12 +218,12 @@ the world rather than relative to something else — applies to cameras whose
 `Origin` is `Fixed`, and to no others. Prepar3D already ships one for this job:
 `Cigi View` in `cameras.cfg` (`Origin = Fixed`, `MenuHidden`, `CycleHidden`,
 `HideUserAircraft`) is its own CIGI out-the-window camera. `camera_view` puts
-each 3D view onto it and then applies the entity's pose every frame.
+each 3D view onto it and then applies the HOST's eye for the entity every frame.
 
 **How it is driven.** In the window plugin's `OnPreCameraUpdate` — the documented
 place for values the camera's own update then uses for its position and
 orientation — `SetLLA(lat, lon, alt)` and `SetPBH(pitch, bank, heading)` are
-called with the entity's row. CIGI carries roll/pitch/yaw and the PDK wants
+called every frame. CIGI carries roll/pitch/yaw and the PDK wants
 pitch/bank/heading, so roll and heading swap places; the contract test covers the
 conversion so the two halves cannot disagree. The definition switch itself
 happens on the frame event and not inside that callback, because
@@ -230,6 +233,23 @@ Each window is switched once, and a window that renames itself when its
 definition changes (a view is named after its definition, so `Cockpit - View 00`
 becomes `Cigi View - View 00`) is recognised as the same window rather than a new
 one.
+
+**The eye is the HOST's, and it is not the entity's reference point.** The HOST
+says where its own viewpoint is in a CIGI **View Control**, and in every capture
+that is one static definition: 2.8 m forward of entity 0's reference point, 5 cm
+to the right, half a metre up, level, turned two degrees — the pilot's seat. CigiStarter
+decodes it and publishes it beside the entity rows (`SimLink.h`; the `view` row
+that `kVersion` 3 added), and the add-on applies it instead of the entity's own
+pose whenever the view is attached to the entity the camera rides. The offsets
+are *body* offsets (`+X` out the nose, `+Y` out the right wing, `+Z` out the
+bottom — the frame the entity-relative HAT/HOT requests use), so they are rotated
+out of the body frame by the entity's own attitude before they become a latitude
+and longitude, and the view's angles are added to the entity's with the heading
+wrapping: `SimLinkMap.h`'s `viewEyePose()`, driven by the contract test without a
+simulator. With no View Control, or one attached to another entity, the camera
+stays on the reference point exactly as it did before the eye was carried.
+Because the eye is then inside the aircraft, the entity it rides must not be
+drawn — see below.
 
 **The view's own aircraft is not drawn.** The entity the camera rides has the eye
 *inside* it, and Prepar3D draws an entity object the add-on created like any other
@@ -243,15 +263,21 @@ camera's entity is made from `own_ship_title`, a container that carries no model
 while every other entity still draws from `title`.
 
 **Measured on the bench, 2026-09-29** (`camera=0`, `camera_log=1`, a replay of
-`gnd-fly-bank.bin`): every sample's `GetLLA`/`GetPBH` read back the commanded
-pose exactly — e.g. commanded `-6.546065 106.753881 318.72 | -2.31 0.60 276.93`
-read back identical, with the heading returned as the equivalent `-83.07` once it
-crossed 180°. The first sample read `0.0 0.0 1.00`, the definition's own fixed
-point, and every sample after the first `SetLLA` matched the entity row, so the
-pose is the entity's and not the definition's. The window reports
-`CAMERA_SYSTEM_ORIGIN_FIXED` after the switch. What the bench cannot show is the
-dome itself — one monitor, no Immersive Display Pro — so the per-channel angles
-are proved only where the ViewGroup is.
+`gnd-fly-bank.bin`): every sample's `GetLLA`/`GetPBH` read back the eye exactly —
+e.g. the entity at `-6.542806 106.757343 201.76 | -14.22 -12.58 110.90` becomes
+the eye `-6.542814 106.757367 201.56 | -14.22 -12.58 109.90` and the camera
+reports exactly that, with a heading of 270.25 returning as the equivalent
+`-89.75` once it crossed 180°. The first sample read `0.0 0.0 1.00`, the
+definition's own fixed point, and every sample after the first `SetLLA` matched
+the eye, so the pose is the HOST's and not the definition's. The window reports
+`CAMERA_SYSTEM_ORIGIN_FIXED` after the switch. The picture was looked at the same
+time: the parked pose shows the apron, the hangars and the mountains — the world
+from the eye, with no hull across it — and a mid-sortie pose at 292 m shows the
+terrain below the horizon from the pilot's seat. What the bench cannot show is
+the dome itself — one monitor, no Immersive Display Pro — so the per-channel
+angles are proved only where the ViewGroup is, and a level aircraft cannot tell a
+2° bank from a 2° turn, which is why the sign and order of the View Control's
+angles are still on the rig list (`..\..\TODO.md`, 8).
 
 **What was deliberately not done.** An "AI-object camera" (the pilot's eye inside
 another aircraft) was the first choice and is not reachable from a PDK add-on:

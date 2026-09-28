@@ -294,6 +294,31 @@ function Get-HeldRows {
     return ,$rows
 }
 
+# The HOST's own eye, as the IG publishes it for the camera: one row, appended
+# after held[] (SimLinkIpc.h, kVersion 3), read under the same seqlock.  The
+# offsets are the row's 4 u32 header then its 6 doubles.
+function Get-ViewRow {
+    $o = 9816
+    for ($try = 0; $try -lt 200; $try++) {
+        $before = Region-U32 $o
+        if ($before -band 1) { Start-Sleep -Milliseconds 1; continue }
+        $row = [pscustomobject]@{
+            Seq      = $before
+            Valid    = Region-U32 ($o + 4)
+            EntityId = Region-U32 ($o + 8)
+            ViewId   = Region-U32 ($o + 12)
+            X        = Region-F64 ($o + 16)
+            Y        = Region-F64 ($o + 24)
+            Z        = Region-F64 ($o + 32)
+            Roll     = Region-F64 ($o + 40)
+            Pitch    = Region-F64 ($o + 48)
+            Yaw      = Region-F64 ($o + 56)
+        }
+        if ((Region-U32 $o) -eq $before) { return $row }
+    }
+    return $null
+}
+
 # Where is the container title the add-on will create from?  A title that is not
 # in the installation is the one misconfiguration that makes a run look half
 # successful -- the add-on loads, ticks, reports the object manager, and creates
@@ -353,6 +378,32 @@ function Read-BinFile([string]$path) {
         $recs.Add([pscustomobject]@{ Delta = $delta; Payload = $payload })
     }
     return $recs
+}
+
+# A View Control (id 16), the HOST's own eye, re-derived from cigi.h the same
+# way the entity rows above are: 32 bytes, the entity it is attached to at 6 and
+# six single-precision floats from 8.
+function Get-ViewControls([byte[]]$p) {
+    $out = New-Object System.Collections.Generic.List[object]
+    $i = 0
+    while ($i + 2 -le $p.Length) {
+        $id = $p[$i]; $size = $p[$i + 1]
+        if ($size -lt 2 -or ($i + $size) -gt $p.Length) { $i++; continue }
+        if ($id -eq 16 -and $size -ge 32) {
+            $out.Add([pscustomobject]@{
+                ViewId   = [BitConverter]::ToUInt16($p, $i + 2)
+                EntityId = [BitConverter]::ToUInt16($p, $i + 6)
+                X        = [double]([BitConverter]::ToSingle($p, $i + 8))
+                Y        = [double]([BitConverter]::ToSingle($p, $i + 12))
+                Z        = [double]([BitConverter]::ToSingle($p, $i + 16))
+                Roll     = [double]([BitConverter]::ToSingle($p, $i + 20))
+                Pitch    = [double]([BitConverter]::ToSingle($p, $i + 24))
+                Yaw      = [double]([BitConverter]::ToSingle($p, $i + 28))
+            })
+        }
+        $i += $size
+    }
+    return ,$out
 }
 
 # Walk one datagram's CIGI messages, as cigi::forEachMessage does: a frame that
@@ -590,7 +641,7 @@ try {
 
     $h = Get-WriterHealth
     Assert 'the region speaks the contract this build expects' `
-        ($h.Magic -eq 0x4B4C5350 -and $h.Version -eq 2 -and $h.Capacity -eq 64) `
+        ($h.Magic -eq 0x4B4C5350 -and $h.Version -eq 3 -and $h.Capacity -eq 64) `
         ("magic 0x{0:X8}, version {1}, capacity {2}" -f $h.Magic, $h.Version, $h.Capacity)
 
     Assert 'the add-on obtained the sim object manager' $h.HasManager `
@@ -651,6 +702,7 @@ Run-Test 'the HOST entities reach the sim' {
     # different id is not overwritten (SimLink.cpp) -- so the expectation is
     # built the same way the publisher builds the table.
     $lastBySlot = @{}
+    $lastView = $null
     $sampled = @()
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $target = 0.0
@@ -673,6 +725,10 @@ Run-Test 'the HOST entities reach the sim' {
                 }
             }
         }
+
+        # The HOST's own eye comes on the same stream and is what the picture is
+        # flown from, so the last one seen is kept to check against the row.
+        foreach ($v in (Get-ViewControls $rec.Payload)) { $lastView = $v }
 
         if (($sent % $every) -eq 0) {
             $row = Get-EntityRow (Get-SlotOf 0)
@@ -832,6 +888,34 @@ Run-Test 'the HOST entities reach the sim' {
         (($lastBySlot.ContainsKey($aircraft)) -and ($lastBySlot[$aircraft].EntityId -eq 0)) `
         'entity 0 is the aircraft the whole picture is arranged around'
 
+    # The HOST's own eye (a View Control). The sim's view is a camera and not an
+    # object, so the camera can only be where the HOST put it if the view crossed
+    # the same link the poses did -- a wrong offset in the region shows up here as
+    # a camera in the wrong place, which no pose check can see.
+    $view = Get-ViewRow
+    Assert 'the HOST''s own eye crossed the link' `
+        ($lastView -ne $null -and $null -ne $view -and $view.Valid -ne 0) `
+        ("the capture carried {0} view(s); the region's row valid={1}" -f `
+            $(if ($null -eq $lastView) { 0 } else { 1 }), $(if ($null -eq $view) { 'unreadable' } else { $view.Valid }))
+    if ($null -ne $lastView -and $null -ne $view -and $view.Valid -ne 0) {
+        Write-Host ("    the HOST's eye: entity {0}  xyz {1:F2}/{2:F2}/{3:F2} m  rpy {4:F1}/{5:F1}/{6:F1}" -f `
+            $view.EntityId, $view.X, $view.Y, $view.Z, $view.Roll, $view.Pitch, $view.Yaw)
+        Assert 'the eye in the region is the eye the HOST sent' `
+            ($view.EntityId -eq $lastView.EntityId -and
+             (Compare-Number $view.X     $lastView.X     1e-6) -and
+             (Compare-Number $view.Y     $lastView.Y     1e-6) -and
+             (Compare-Number $view.Z     $lastView.Z     1e-6) -and
+             (Compare-Number $view.Roll  $lastView.Roll  1e-6) -and
+             (Compare-Number $view.Pitch $lastView.Pitch 1e-6) -and
+             (Compare-Number $view.Yaw   $lastView.Yaw   1e-6)) `
+            ("sent entity {0} xyz {1:F2}/{2:F2}/{3:F2} rpy {4:F1}/{5:F1}/{6:F1}" -f `
+                $lastView.EntityId, $lastView.X, $lastView.Y, $lastView.Z,
+                $lastView.Roll, $lastView.Pitch, $lastView.Yaw)
+        Assert 'the eye is attached to the entity the camera rides' `
+            ($view.EntityId -eq 0) `
+            ("attached to entity {0}; the camera is on entity 0" -f $view.EntityId)
+    }
+
     # Movement: entity 0's published pose has to change over the run, or the
     # table is being filled once and left.
     $distinct = @($sampled | ForEach-Object { '{0:F6}/{1:F6}/{2:F2}' -f $_.Lat, $_.Lon, $_.Alt } | Select-Object -Unique)
@@ -853,6 +937,13 @@ if ($script:startedCigi -and -not $KeepRunning) {
         $rows = Get-LiveRows
         Assert 'no entity row is left enabled' ($rows.Count -eq 0) `
             ("{0} row(s) still live" -f $rows.Count)
+
+        # The eye goes with them, or a stopped IG would leave the camera holding
+        # the last viewpoint of a run that is over.
+        $view = Get-ViewRow
+        Assert 'the HOST''s eye is taken back too' `
+            ($null -ne $view -and $view.Valid -eq 0) `
+            ("the region's view row valid={0}" -f $(if ($null -eq $view) { 'unreadable' } else { $view.Valid }))
 
         $end = Get-WriterHealth
         $made   = $end.ObjectsCreated - $before.ObjectsCreated

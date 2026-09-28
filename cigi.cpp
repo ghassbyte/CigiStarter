@@ -201,4 +201,43 @@ bool poseUsable(const EntityControl& e) {
            (e.latDeg != 0.0 || e.lonDeg != 0.0 || e.altMeters != 0.0);
 }
 
+//-----------------------------------------------------------------------------
+// View Control (32 bytes)
+//
+//   off  len  field
+//   0    1    message id      = 0x10 (16)
+//   1    1    message size    = 32
+//   2    2    view ID / view group ID   (uint16 LE)
+//   4    1    view type                 (1 in every capture)
+//   5    1    flags                     (0x3F in every capture)
+//   6    2    entity ID                 (the entity the view is attached to)
+//   8    4    X offset          (float LE, metres, out the nose)
+//   12   4    Y offset          (float LE, metres, out the right wing)
+//   16   4    Z offset          (float LE, metres, out the bottom)
+//   20   4    roll              (float LE, degrees)
+//   24   4    pitch             (float LE, degrees)
+//   28   4    yaw               (float LE, degrees)
+//
+// The field layout is re-derived from the captures, where this message is
+// identical in every frame -- see the header for what that definition reads as,
+// and for the one caveat about the order of the three angles.
+//-----------------------------------------------------------------------------
+bool parseViewControl(const uint8_t* msg, size_t size, ViewControl& out) {
+    if (size < kViewControlSize ||
+        msg[0] != static_cast<uint8_t>(MsgViewControl)) {
+        return false;
+    }
+    out.viewId   = readU16LE(msg + 2);
+    out.viewType = msg[4];
+    out.flags    = msg[5];
+    out.entityId = readU16LE(msg + 6);
+    out.xOffset  = readF32LE(msg + 8);
+    out.yOffset  = readF32LE(msg + 12);
+    out.zOffset  = readF32LE(msg + 16);
+    out.rollDeg  = readF32LE(msg + 20);
+    out.pitchDeg = readF32LE(msg + 24);
+    out.yawDeg   = readF32LE(msg + 28);
+    return true;
+}
+
 } // namespace cigi

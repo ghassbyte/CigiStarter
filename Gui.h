@@ -125,6 +125,11 @@ struct Status {
     bool        simLink        = false;
     uint32_t    simLinkObjects = 0;   // sim objects created for entities
     uint32_t    simLinkApplied = 0;   // entities positioned on the last tick
+    // The HOST's own eye (a View Control) has been published and the camera is
+    // therefore being flown from it rather than from the entity's reference
+    // point. False while no View Control has arrived, which is the same picture
+    // this IG produced before the eye was carried at all.
+    bool        simLinkEye     = false;
     std::string simLinkNote;
 };
 

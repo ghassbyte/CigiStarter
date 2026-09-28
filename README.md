@@ -247,23 +247,39 @@ bench link runs on **8010/8011** instead — see
 [Terrain from the sim](#terrain-from-the-sim) for why. Only the four numbers
 change; everything else is the same.
 
-### Running a recorded sortie on the emulator
+### Replaying a recorded sortie
 
-The emulator has no flight model of its own, and it cannot read the `.bin`
-captures: it runs definition tables (`.def`) and a script. `tools\BinToScenario`
-is the bridge — it decodes a recorded HOST→IG stream and writes a `.scp` that
-drives the emulator through the same scenario (the same entities in the same
-places, the same time of day, the same warm-up environment), so a real sortie can
-be run against CigiStarter with no `.bin` player in the loop:
+The `.bin` captures beside this repository are the real HOST's own downstream
+stream — the datagrams it sent the reference IG — so replaying one is the closest
+this PC gets to the rig with no HOST in the loop: the entities move, the HOST's
+own eye flies the picture, and the HAT/HOT answers come off the local sim's
+terrain, all from a file. `tools\play-bin.ps1` is the manual way:
 
 ```
-.\tools\bin-to-scenario.ps1 -Bin 'E:\03_project\Super Puma\Visual\Local\hlm.bin'
+.\tools\play-bin.ps1                                          # newest capture, 1x
+.\tools\play-bin.ps1 'E:\03_project\Super Puma\Visual\Local\hlm.bin'
+.\tools\play-bin.ps1 -Speed 4 -KeepRunning                    # fast, and study the last pose
+.\tools\play-bin.ps1 -Loop                                    # until Ctrl+C
+.\tools\play-bin.ps1 'hlm.bin' -IgPort 8000 -NoStart          # drive an IG already running
 ```
 
-Then load the `.scp` from the emulator's script dialog and run the exercise. What
-is carried over, and what is deliberately left out (IG Control, rates,
-articulated parts and view angles), is in `tools\BinToScenario\README.md`, and
-every script's own header repeats it for that capture.
+It starts CigiStarter itself in the bench configuration (loopback, 8010/8011)
+unless one is already listening, reads the file, and sends each datagram at the
+pace it was recorded at. Ctrl+C stops cleanly; the CigiStarter it started is
+stopped through its own EXIT button on the way out (so the entities are retired
+and the sim takes the objects back), unless `-KeepRunning`. With `-NoStart` and
+the deployment ports it can drive a running IG instead.
+
+The emulator has no flight model and cannot read a `.bin`; there is no converter
+between the two any more, because the only thing that could play the result was
+the emulator's own script dialog, and the replay above needs nothing but
+CigiStarter. The emulator is still the bench HOST for the HAT/HOT wire checks
+below.
+
+The asserted version of the same run is `tools\test-simlink-e2e.ps1`: it replays
+a capture, then reads PdkSimLink's own report out of the running Prepar3D. What
+`play-bin.ps1` shows on screen, the e2e proves on the wire and in the shared
+region.
 
 ### Local bench, one command
 
@@ -738,22 +754,40 @@ the sim is left to be a sim — it just gets told where the entities are.
   drawn until its container is given one — a content decision per entity type, not
   part of the link. The one entity that is never drawn, whatever its container is
   given, is the one the camera rides: the eye is inside it.
+- **The eye comes from the HOST.** The HOST says where its own viewpoint is in a
+  **View Control** message, and in every capture it is one static definition —
+  2.8 m forward of entity 0's reference point, half a metre above it and 5 cm
+  right, turned two degrees: the pilot's seat, not the point on the airframe the
+  HOST happens to call the origin. CigiStarter decodes it and publishes it beside
+  the entity rows (`SimLink.h`, one row, `kVersion` 3), and the add-on applies it,
+  so the camera sits at the HOST's eye rather than on the entity's reference
+  point. With no View Control — or one attached to another entity — the camera
+  falls back to the reference point, which is what it did before the eye was
+  carried. The offset is a body offset (+X out the nose, +Y out the right wing,
+  +Z out the bottom), so it is rotated by the entity's attitude before it becomes
+  a latitude and longitude; that arithmetic is `SimLinkMap.h`'s `viewEyePose()`,
+  driven by the contract test without a simulator.
 - **Camera.** Driving the link is not the same as moving the picture: an entity
   object is a non-user object, so the sim's view stays where it was until the
   camera is moved too. `[simlink] camera=<entity id>` in `PdkSimLink.ini` (off by
   default) puts every 3D view onto a Fixed-origin camera definition — Prepar3D's
-  own `Cigi View` unless `camera_view` says otherwise — and applies that entity's
-  pose to it every frame, so the HOST's own aircraft flies the view. The
+  own `Cigi View` unless `camera_view` says otherwise — and applies the HOST's eye
+  for that entity to it every frame, so the HOST's own aircraft flies the view
+  from the HOST's own seat. The
   per-channel angles of an immersive dome stay where they are, in each PC's own
   `viewgroup.xml`: a ViewGroup renders its channels from the window's active
   camera and puts each channel's frustum offsets on top, so the dome keeps its
   angles and gains a moving origin. `camera_log=1` writes what the camera was
-  told and what it reports back. The entity the camera rides is created from
+  told and what it reports back — the entity's pose, the eye, and the camera's
+  own answer, which is how the cockpit view was measured on the bench. The entity
+  the camera rides is created from
   `own_ship_title` (default `CigiStarter.Entity.OwnShip`, a model-less container
   that ships with the add-on) rather than from `title`, because the eye is inside
   it and a model there fills the picture with its hull — measured on the bench,
   where the same pose showed the inside of a fuselage before that and the airfield
-  after. Prepar3D hides the sim's own aircraft for this camera already
+  after. So the cockpit view here is the HOST's eyepoint and the world it sees,
+  not a modelled cabin drawn around it: the airframe is deliberately not drawn.
+  Prepar3D hides the sim's own aircraft for this camera already
   (`HideUserAircraft` on its `Cigi View` definition).
 - **The `SimLink` line** in the operator window says whether the add-on is
   loaded and applying, and why not when it is not.
@@ -762,17 +796,21 @@ the sim is left to be a sim — it just gets told where the entities are.
   the add-on's PDK-free half — with no Prepar3D and no SDK. It is the check that
   entity 0 is drawn rather than skipped, that an Active entity is drawn while a
   Standby or Remove one means "take the object out", that the pose crosses in the
-  PDK's units and order, and that a row caught mid-rewrite is never believed.
-  `tools\test-all.ps1` runs it with the terrain probe's.
+  PDK's units and order, that the HOST's View Control decodes from the offsets the
+  captures put it at and that the eye it produces is the offset's length from the
+  reference point at every attitude, and that a row caught mid-rewrite is never
+  believed. `tools\test-all.ps1` runs it with the terrain probe's.
 - **Testing it with the sim, on this PC.** `tools\test-simlink-e2e.ps1` replays a
   recorded HOST stream into a bench CigiStarter and reads the add-on's own report
   back out of the running Prepar3D, so the objects it created, the poses it
-  applied and the poses the sim is actually holding are checked here instead of
+  applied, the poses the sim is actually holding and the eye that crossed the link
+  are checked here instead of
   for the first time on the rig. It fails up
   front on a stale `PdkSimLink.dll` or a `title=` that is not in the
   installation. The mechanism is in `tools\PdkSimLink\README.md`; `-Bin
   '..\gnd-fly-bank.bin' -Speed 20` is the run that measures the drift on a
-  moving aircraft.
+  moving aircraft. `tools\play-bin.ps1` is the same replay for watching rather
+  than checking.
 
 Every PC that renders needs its own Prepar3D with `PdkSimLink` installed. A PC
 that only fans the stream out to others (`client.txt`) or only answers HAT/HOT
@@ -804,7 +842,7 @@ with the window up instead, which is the behaviour the sketch below shows.
 |                                                                          |
 |  Relay     : 4 clients, 4 reachable, 1567 datagrams forwarded            |
 |  Relay NIC : Killer E2600 Gigabit Ethernet Controller                    |
-|  SimLink   : 3 entities applied, 3 objects in the sim                    |
+|  SimLink   : 3 entities applied, 3 objects in the sim, eye from the HOST    |
 |                                                                          |
 |  TerrainDB : 2 tile(s), 1 in memory, 25 MB                               |
 |  HAT/HOT   : answering from the sim's own terrain                        |
@@ -1081,6 +1119,23 @@ defaults; see [Usage](#usage) for the bench-test overrides.
   proves nothing). Entity 0 is the HOST's own aircraft; the HOST also sends rows
   for entities it is not driving, whose all-zero pose means "no position" and is
   neither anchored to nor rendered (`cigi::poseUsable`).
+- The **View Control** (id 16, 32 bytes) is where the HOST puts its own eye, and
+  it is what makes the sim's picture a cockpit view: the entity it is attached to
+  at offset 6 (little-endian `uint16`), then six little-endian **floats** —
+  `X`/`Y`/`Z` offsets in metres at 8/12/16 and `roll`/`pitch`/`yaw` in degrees at
+  20/24/28. The offsets are body offsets from that entity's reference point
+  (+X out the nose, +Y out the right wing, +Z out the bottom, the frame the
+  entity-relative HAT/HOT requests use), the angles are relative to it, and the
+  whole message is byte-identical in every frame of every capture: `10 20 | 00 00
+  | 01 | 3F | 00 00 | 2.8f | 0.05f | -0.5f | 0 | 0 | 358` — 2.8 m forward and
+  half a metre up from entity 0, turned two degrees. Two bytes of that header
+  (offsets 4-5) are named `viewType`/`flags` and unused here. The one thing not
+  settled from the wire is the order of the three angles: they are read here in
+  the same roll/pitch/yaw order as the Entity Control above, which is what the
+  single non-zero angle reads as, and the ICD's own View Control table may list
+  them yaw-first — reading it the other way round would bank the picture two
+  degrees instead of turning it. `TODO.md` carries it with the other
+  rig confirmations.
 - HAT/HOT responses use the CIGI 3.3 layouts: the 16-byte Response (102) carries
   a single `Height` double at offset 8, and the 40-byte Extended Response (103)
   carries `HAT` at offset 8 and `HOT` at offset 16. **Both** have a 3-byte
@@ -1123,11 +1178,9 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `tools\PdkSimLink\SimObjects\CigiEntity.OwnShip\` | the same object, permanently model-free: the container the entity the camera rides is created from, so the eye is not inside a drawn model |
 | `tools\PdkSimLink\test\` | the contract harness for the writer: drives both halves without Prepar3D |
 | `tools\test-simlink.ps1` | builds and runs the writer's contract harness, with a PASS/FAIL verdict |
-| `tools\test-all.ps1` | builds and runs every SDK-free contract harness (writer + terrain probe + capture converter) |
+| `tools\test-all.ps1` | builds and runs every SDK-free contract harness (writer + terrain probe) |
 | `tools\test-simlink-e2e.ps1` | replays a recorded HOST stream into a bench CigiStarter and checks the writer's objects and poses inside the running Prepar3D |
-| `tools\BinToScenario\` | the converter that rewrites a recorded `.bin` CIGI stream as a CIGI Host Emulator script (`.scp`), so a real sortie can be run on the native emulator |
-| `tools\BinToScenario\test\` | the contract harness for the converter: decodes synthetic captures, no sim and no `.bin` on disk |
-| `tools\bin-to-scenario.ps1` | builds the converter and runs it over one or more captures |
+| `tools\play-bin.ps1` | replays a recorded `.bin` capture into CigiStarter by hand, for watching in the sim |
 | `tools\get_terrain.ps1` | option 1: downloads generic SRTM tiles for `terrain\` |
 | `tools\capture-hat-hot.ps1` | bench aid: captures the CIGI link and prints every HAT/HOT request and answer |
 | `tools\test-hathot-emulator.ps1` | bench aid: drives the Host Emulator through the HAT/HOT checks and prints a PASS/FAIL verdict; `-Local` is the whole bench on one PC |

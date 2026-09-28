@@ -134,6 +134,31 @@ void publish(const cigi::EntityControl& e) {
     ++row.seq;
 }
 
+void publishView(const cigi::ViewControl& v) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+
+    if (!tryOpen()) return;
+
+    // One row, last one wins: a HOST that sends several views in a frame (one
+    // per view group) is asking for several pictures and this link carries one,
+    // so the latest is the one the camera will fly.  The captures send exactly
+    // one, identical in every frame, so this is a rule that never has to
+    // choose in practice.
+    View& row = g_shm->view;
+
+    ++row.seq;
+    row.valid     = 1;
+    row.entityId  = v.entityId;
+    row.viewId    = v.viewId;
+    row.xOffset   = static_cast<double>(v.xOffset);
+    row.yOffset   = static_cast<double>(v.yOffset);
+    row.zOffset   = static_cast<double>(v.zOffset);
+    row.rollDeg   = static_cast<double>(v.rollDeg);
+    row.pitchDeg  = static_cast<double>(v.pitchDeg);
+    row.yawDeg    = static_cast<double>(v.yawDeg);
+    ++row.seq;
+}
+
 Health health() {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
@@ -166,6 +191,8 @@ Health health() {
         s.hasReadback = (d & diag::kHasReadback) != 0;
     }
 
+    s.viewCarried = g_shm->view.valid != 0;
+
     s.ticking = s.alive && tickFresh();
     return s;
 }
@@ -188,6 +215,12 @@ void stop() {
                 ++g_shm->entities[i].seq;
             }
         }
+        // The eye goes back to the entity's reference point with it: a view left
+        // valid would keep the camera where the last frame of a stopped run put
+        // it, which is the same stale picture the rows above are retired for.
+        ++g_shm->view.seq;
+        g_shm->view.valid = 0;
+        ++g_shm->view.seq;
         ::UnmapViewOfFile(g_shm);
         g_shm = nullptr;
     }

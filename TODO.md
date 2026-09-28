@@ -6,7 +6,9 @@ each tool — this file is only the work that is not finished.
 
 Last updated 2026-09-29, branch `feature/pdk-simlink`. Items 1 (the read-back)
 and 2 (the physics-free object) are done and measured; item 1's terrain figures
-were re-measured on 2026-09-29 and corrected (see 1).
+were re-measured on 2026-09-29 and corrected (see 1). The camera is done too
+(item 7): the sim's view is flown from the HOST's own eyepoint, so it is a
+cockpit view rather than a view from the airframe's reference point.
 
 ---
 
@@ -179,21 +181,23 @@ fan-out leaves them looking exactly like the HOST's own stream.
   (`own_ship_title`) because it must not be drawn at all. What is left is a map
   from EntityType to title for the visible entities, which is content, not link.
 * **Camera.** Done on the bench: `camera=<entity id>` puts every 3D view onto a
-  Fixed-origin camera definition and applies that entity's pose each frame, and
-  the sim reads the camera back on the commanded pose (`PdkSimLink/README.md`,
-  *The camera*). The view's own aircraft is created from `own_ship_title` — a
-  model-less container — so the eye is not inside a drawn model; measured
-  2026-09-29 against an entities' container that had the AS332's body junctioned
-  into it, where the same parked pose showed the inside of a fuselage before that
-  and the airfield after. What is left is the dome — the per-channel angles in
-  each PC's `viewgroup.xml` are only provable on the rig — and deciding whether
-  CIGI View Control should place the eye too. The captures' View Control is one
-  static definition repeated in every frame (`X 2.8`, `Y 0.05`, `Z -0.5`,
-  roll/pitch 0, yaw 358, attached to entity 0), so it could be honoured — today
-  the eye sits on the Entity Control row's own reference point, which for the
-  AS332 is mid-cabin rather than at the pilot's eye.
-* **Converter gaps.** Component Control (id 4) is not field-mapped; `DATE` is left
-  untranslated because the captures' date fields are invalid.
+  Fixed-origin camera definition and applies the HOST's own eye for that entity
+  each frame, and the sim reads the camera back on the commanded pose
+  (`PdkSimLink/README.md`, *The camera*). The eye is the HOST's View Control
+  (`X 2.8`, `Y 0.05`, `Z -0.5`, level, yaw 358, attached to entity 0 in every
+  capture), carried across on the shared region (`view`, `kVersion` 3) and
+  rotated out of the entity's body frame by `SimLinkMap.h`'s `viewEyePose()`, so
+  the picture is drawn from the pilot's seat rather than from the entity's
+  reference point — mid-cabin on the AS332. With no View Control, or one attached
+  to another entity, the camera stays on the reference point as before. The
+  view's own aircraft is created from `own_ship_title` — a model-less container —
+  so the eye is not inside a drawn model; measured 2026-09-29 against an
+  entities' container that had the AS332's body junctioned into it, where the
+  same parked pose showed the inside of a fuselage before that and the airfield
+  after. What is left is the dome — the per-channel angles in each PC's
+  `viewgroup.xml` are only provable on the rig — and whether the airframe should
+  be drawn around the eye after all, which is a content decision and a one-line
+  change (`own_ship_title=`).
 * **A CigiStarter that is killed, not exited, leaves its objects in the sim.**
   The rows stay enabled and nothing in the region says the IG is gone — the
   heartbeat there is the add-on's, not the IG's — so the last pose of every entity
@@ -211,7 +215,11 @@ Everything the local harness cannot reach:
 * `CreateObject` / `SetPosition` / **`GetPosition`** on v6 **Professional**, and
   `GetLicenseType()` — the writer is only proven on v6 Personal.
 * The sign and order of roll/pitch/yaw — a level aircraft proves nothing, so roll
-  it.
+  it. The **View Control**'s three angles have the same doubt and less to go on:
+  every capture carries one non-zero value (358) in the slots the Entity Control
+  calls roll/pitch/yaw, and it is read that way here. A level aircraft cannot
+  tell a 2° bank from a 2° turn, and the ICD's own View Control table may list
+  them yaw-first.
 * That `PAUSE_ON_LOST_FOCUS=0` on every IG PC. An unattended IG that pauses when
   it loses focus would freeze the display. (It is `0` on this bench.)
 * Retiring the vendor program that holds the deployed sim paused.
@@ -224,15 +232,14 @@ Everything the local harness cannot reach:
   been built for this yet.
 * Do the entities that are *not* the aircraft need to exist as objects at all?
   (The camera is answered: it rides entity 0 unless `camera=` names another.)
-* **Where the eye sits in the aircraft.** The camera is placed on the entity's
-  own reference point — CIGI's Entity Control position — which for the AS332 is
-  mid-cabin, not the pilot's eye. The HOST also sends a View Control every frame
-  with an eyepoint offset from the entity (`X 2.8`, `Y 0.05`, `Z -0.5`, level,
-  yaw 358) and it is not applied. Honouring it is the protocol-correct thing to
-  do, and it is what would put the eye in the cockpit rather than the cabin — but
-  it is only visible at all if the own ship is drawn, and today the entity the
-  view rides is deliberately model-less so that the picture is the world. Say the
-  word if you want the own aircraft's airframe framed around the view instead.
+* **Should the airframe be drawn around the eye?** Answered for now: no. The
+  camera flies the HOST's View Control eyepoint (2.8 m forward of entity 0, half
+  a metre up, 5 cm right, turned two degrees — the pilot's seat), and the entity
+  the eye is inside is created from the model-less `own_ship_title`, so the
+  picture is the HOST's world and not a modelled cabin drawn around it. Giving
+  the own ship a model is a one-line change (`own_ship_title=`) and a content
+  decision: the eye is *inside* the airframe, so a cabin model only helps if it
+  is the right cabin for that aircraft type.
 
 ---
 
@@ -245,11 +252,14 @@ Everything the local harness cannot reach:
 & "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\MSBuild\Current\Bin\MSBuild.exe" `
     "CigiStarter.vcxproj" /p:Configuration=Release /p:Platform=x64
 
-# the SDK-free contract harnesses (writer + terrain probe + converter)
+# the SDK-free contract harnesses (writer + terrain probe)
 .\tools\test-all.ps1
 
 # the only test that reaches inside the sim -- needs Prepar3D running
 .\tools\test-simlink-e2e.ps1
+
+# the same replay by hand, for watching the sortie rather than checking it
+.\tools\play-bin.ps1
 ```
 
 Deploying a new writer build (the add-on is loaded once, at sim startup). The
@@ -285,7 +295,8 @@ Read these before changing anything near them.
 | **Only `ROTOR RPM PCT:1` is writable** | The other rotor variables are read-only |
 | **The add-on owns the shared region** | CigiStarter only opens it, and its counters persist across IG runs — compare **deltas**, never absolutes |
 | **Bench ports are 8010/8011** | Prepar3D holds 8000 for its own CIGI |
-| **The emulator's `.scp` loads only through its GUI** | So the e2e test replays a `.bin` directly instead |
+| **The view is a camera, not an object** | Moving an entity object does not move the picture: the sim's view belongs to a window's **active camera**, and the objects this writer creates are non-user objects. The eye has to be moved with `SetLLA`/`SetPBH` on a Fixed-origin definition, per window, and the entity the eye is inside must not be drawn or the picture is the inside of its hull |
+| **A CIGI body offset is not a lat/lon offset** | The View Control's `X`/`Y`/`Z` are body offsets (+X nose, +Y right wing, +Z down), so they have to be rotated by the entity's attitude before they become a position. Skip the rotation and the eye is right on a north heading and wrong on every other one — which reads as a camera that is subtly behind, not as a bug |
 | **Entity Control layout** | state bits in byte 4, roll@12, pitch@16, yaw@20, lat@24, lon@32, alt@40 |
 
 Anything that changes the shared-memory layout must bump `SimLinkIpc.h`'s

@@ -27,6 +27,7 @@ namespace cigi {
 enum MsgId : uint8_t {
     MsgIGControl         = 1,   // host -> IG : IG control / mode
     MsgEntityControl     = 2,   // host -> IG : entity state + pose
+    MsgViewControl       = 16,  // host -> IG : where the HOST's own eye is
     MsgHATHOTRequest     = 24,  // host -> IG : height-above/height-of terrain request
     MsgStartOfFrame      = 101, // IG -> host : start-of-frame (frame sync)
     MsgHATHOTResponse    = 102, // IG -> host : HAT/HOT response
@@ -38,6 +39,7 @@ enum MsgId : uint8_t {
 //-----------------------------------------------------------------------------
 constexpr uint8_t kSofSize            = 24;  // Start of Frame
 constexpr uint8_t kEntityControlSize  = 48;  // Entity Control
+constexpr uint8_t kViewControlSize    = 32;  // View Control
 constexpr uint8_t kHatHotReqSize      = 32;  // HAT/HOT Request
 constexpr uint8_t kHatHotRespSize     = 16;  // HAT/HOT Response
 constexpr uint8_t kHatHotExtRespSize  = 40;  // HAT/HOT Extended Response
@@ -207,6 +209,52 @@ bool parseEntityControl(const uint8_t* msg, size_t size, EntityControl& out);
 // rendered. Both the HAT/HOT anchor (main.cpp) and the sim link apply the same
 // rule, from here, so they cannot disagree about which entities exist.
 bool poseUsable(const EntityControl& e);
+
+//-----------------------------------------------------------------------------
+// View Control (message id 16) decoding
+//-----------------------------------------------------------------------------
+// Where the HOST puts its own eye -- the viewpoint it wants the picture drawn
+// from.  The view is attached to an entity (entity 0 in every capture), and
+// both the offset and the angles are relative to that entity rather than to the
+// world: X/Y/Z are body offsets in metres in the same frame the entity-relative
+// HAT/HOT requests above use (+X out the nose, +Y out the right wing, +Z out
+// the bottom, so a negative Z is *above* the reference point), and roll, pitch
+// and yaw are added to the entity's own attitude.
+//
+// Grounded on the captures rather than only on the ICD.  All 16 recordings
+// beside this repository carry exactly one View Control per frame, and it is
+// byte-identical in every frame of every one of them:
+//
+//   10 20 | 00 00 | 01 | 3F | 00 00 | 2.8 | 0.05 | -0.5 | 0 | 0 | 358
+//
+// -- one static view definition for the whole sortie.  Read with the layout
+// below it is the pilot's eye: 2.8 m forward of the entity's reference point,
+// 0.5 m above it and 5 cm to the right, turned 2 degrees left of the nose (the
+// HOST flies the aircraft, so its view's angles are a boresight, not a heading).
+//
+// One caveat, and it is written down rather than hidden: the three angle slots
+// are read here in the same roll/pitch/yaw order as the Entity Control rows
+// above (roll at 20, pitch at 24, yaw at 28), which is what the one non-zero
+// angle in every capture reads as.  The ICD's own View Control table may list
+// them yaw-first; reading this capture the other way round would bank the
+// picture two degrees instead of turning it.  TODO.md has it under the rig
+// confirmations that are still owed.
+struct ViewControl {
+    uint16_t viewId   = 0;    // View ID / View Group ID
+    uint8_t  viewType = 0;    // byte 4; 1 in every capture
+    uint8_t  flags    = 0;    // byte 5; 0x3F in every capture, not used here
+    uint16_t entityId = 0;    // the entity the view is attached to
+    float    xOffset  = 0.0f; // metres, +X out the nose
+    float    yOffset  = 0.0f; // metres, +Y out the right wing
+    float    zOffset  = 0.0f; // metres, +Z out the bottom (-0.5 is 0.5 m up)
+    float    rollDeg  = 0.0f; // degrees, relative to the entity
+    float    pitchDeg = 0.0f; // degrees, relative to the entity
+    float    yawDeg   = 0.0f; // degrees, relative to the entity
+};
+
+// Decode a View Control message.  Returns false when `msg` is not a
+// well-formed one (wrong id, or shorter than the 32-byte form).
+bool parseViewControl(const uint8_t* msg, size_t size, ViewControl& out);
 
 //-----------------------------------------------------------------------------
 // Parsing helper
