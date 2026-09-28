@@ -182,16 +182,31 @@ bool parseHatHotRequest(const uint8_t* msg, size_t size, HatHotRequest& out);
 // pose -- not the sim's own position -- is what those answers must be computed
 // from: the HOST asks about points around the aircraft it believes it is
 // flying, and it judges the answer against that same aircraft's altitude.
+//
+// The same message is also what the sim link renders with: the HOST owns every
+// entity's pose, so this is the whole of what the sim has to be told (SimLink.h).
 struct EntityControl {
     uint16_t entityId  = 0;
+    uint8_t  stateByte = 0;    // byte 4: entity state (bits 0-1) + flags
     double   latDeg    = 0.0;  // degrees
     double   lonDeg    = 0.0;  // degrees
     double   altMeters = 0.0;  // metres MSL
+    float    rollDeg   = 0.0f; // degrees, right wing down positive
+    float    pitchDeg  = 0.0f; // degrees, nose up positive
+    float    yawDeg    = 0.0f; // degrees, true heading
 };
 
 // Decode an Entity Control message. Returns false when `msg` is not a
 // well-formed one (wrong id, or shorter than the 48-byte form).
 bool parseEntityControl(const uint8_t* msg, size_t size, EntityControl& out);
+
+// True when an Entity Control carries a pose that can be used: finite, on the
+// globe, and not the all-zero pose a HOST sends for entities it is not driving
+// (the reference capture's entity 5 carries exactly that). An all-zero pose
+// means "no position", not the Gulf of Guinea, so it is neither anchored to nor
+// rendered. Both the HAT/HOT anchor (main.cpp) and the sim link apply the same
+// rule, from here, so they cannot disagree about which entities exist.
+bool poseUsable(const EntityControl& e);
 
 //-----------------------------------------------------------------------------
 // Parsing helper

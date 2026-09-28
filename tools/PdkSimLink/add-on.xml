@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Drop this next to the DLL on the IG PC, in Prepar3D's default add-on
+  discovery folder, one level deep:
+
+      %USERPROFILE%\Documents\Prepar3D v6 Add-ons\PdkSimLink\
+      (or ...\Documents\Prepar3D v5 Add-ons\PdkSimLink\ on v5)
+
+  The "add-ons" folder under %PROGRAMDATA%\Lockheed Martin\Prepar3D vN\ is NOT
+  scanned by Prepar3D, so an add-on placed there is never loaded.  Paths below
+  are relative to this file.
+-->
+<SimBase.Document Type="AddOnXml" version="3,3" id="add-on">
+    <AddOn.Name>CigiStarter Sim Link</AddOn.Name>
+    <AddOn.Description>Renders the HOST's entities from CigiStarter's shared memory, moving them to the pose the HOST commands.</AddOn.Description>
+    <AddOn.Component>
+        <Category>DLL</Category>
+        <Path>PdkSimLink.dll</Path>
+        <DLLType>PDK</DLLType>
+    </AddOn.Component>
+</SimBase.Document>

@@ -116,6 +116,16 @@ struct Status {
     bool        relaySpoofed   = true;   // copies carry the HOST's source address
     std::string relaySource;             // that address, "ip:port", for the window
     std::string relayError;              // why the relay is off ("" = running)
+
+    // The writer that puts the HOST's entities into the local Prepar3D
+    // (SimLink.h), through the PdkSimLink add-on.  This is the rendering path,
+    // not an alternative source like the terrain probe: `simLink` is true while
+    // the add-on is loaded and ticking, and `simLinkNote` says why not when it
+    // is not.  The counters are what the add-on last reported.
+    bool        simLink        = false;
+    uint32_t    simLinkObjects = 0;   // sim objects created for entities
+    uint32_t    simLinkApplied = 0;   // entities positioned on the last tick
+    std::string simLinkNote;
 };
 
 // Fixed deployment information, shown above the live status.

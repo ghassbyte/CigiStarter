@@ -66,6 +66,7 @@
 #include "SofPacer.h"
 #include "Gui.h"
 #include "Relay.h"
+#include "SimLink.h"
 #include "TerrainDb.h"
 #include "TerrainProbe.h"
 #include "TerrainSource.h"
@@ -115,6 +116,13 @@ struct Config {
     uint8_t igMode        = 0;    // 0 = Standby (0x30), 1 = Operate (0x31)
     bool    respondHatHot = true;
     bool    flowControl   = true; // pace the SOF stream to the HOST's replies
+    // Publish the HOST's entities into the local Prepar3D through the
+    // PdkSimLink add-on (SimLink.h).  The CIGI stream is the whole world, so
+    // there is nothing to configure on this side; the add-on is loaded with the
+    // sim and picks the poses up out of shared memory.  On by default, because
+    // an IG that is not rendering the HOST's world is not doing its job; the
+    // switch is here so a bench run can leave the sim alone.
+    bool    simLink       = true;
     // Start transmitting as soon as the program starts, and minimise the window
     // once it is. At a deployment site the IG PC is switched on rather than
     // operated, so there should be nothing to click before the link is live --
@@ -202,6 +210,10 @@ static Stats             g_stats;           // filled in by the receive thread
 static std::atomic<bool> g_respondHatHot{true};
 static std::atomic<int>  g_targetFps{150};
 static std::atomic<bool> g_flowControl{true};
+// Whether the HOST's entities are published to the local Prepar3D (SimLink.h).
+// Seeded from the command line and otherwise fixed: there is no window control
+// for it in this cut.
+static std::atomic<bool> g_simLinkEnabled{true};
 
 // The pose the HOST is commanding for the aircraft (its Entity Control for
 // entity 0), kept so the SOF thread can answer entity-relative HAT/HOT requests
@@ -235,14 +247,10 @@ static void noteHostPose(const cigi::EntityControl& e) {
     // carry an all-zero pose (the reference capture's entity 5 does exactly
     // that). An all-zero pose means "no position", not the Gulf of Guinea, so it
     // is not adopted -- and neither is anything off the globe. Leaving the pose
-    // unset keeps FSUIPC as the anchor instead.
-    const bool plausible =
-        std::isfinite(e.latDeg) && std::isfinite(e.lonDeg) &&
-        std::isfinite(e.altMeters) &&
-        e.latDeg >= -90.0  && e.latDeg <= 90.0 &&
-        e.lonDeg >= -180.0 && e.lonDeg <= 180.0 &&
-        (e.latDeg != 0.0 || e.lonDeg != 0.0 || e.altMeters != 0.0);
-    if (!plausible) return;
+    // unset keeps FSUIPC as the anchor instead. The same rule decides which
+    // entities the sim link renders (cigi::poseUsable), so the anchor and the
+    // rendered world cannot disagree about which entities exist.
+    if (!cigi::poseUsable(e)) return;
 
     std::lock_guard<std::mutex> lk(g_hostPoseMtx);
     g_hostPose.seen      = true;
@@ -296,6 +304,10 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                      the default)\n"
         "  --no-flow-control   transmit on the rate alone, without waiting for the\n"
         "                      HOST\n"
+        "  --sim-link          publish the HOST's entities into the local Prepar3D\n"
+        "                      through the PdkSimLink add-on, so the sim renders\n"
+        "                      the world the HOST is flying (this is the default)\n"
+        "  --no-sim-link       do not publish; leave the local Prepar3D alone\n"
         "  --auto-start        start transmitting as soon as the program starts,\n"
         "                      and minimise the window so it is out of the way\n"
         "                      (this is the default)\n"
@@ -374,6 +386,10 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
             cfg.flowControl = true;     // the default; kept so old command lines work
         } else if (a == "--no-flow-control") {
             cfg.flowControl = false;
+        } else if (a == "--sim-link") {
+            cfg.simLink = true;         // the default; kept for symmetry
+        } else if (a == "--no-sim-link") {
+            cfg.simLink = false;
         } else if (a == "--auto-start") {
             cfg.autoStart = true;       // the default; kept for symmetry
         } else if (a == "--no-auto-start") {
@@ -679,6 +695,25 @@ static std::string probeNote(const terrain::probe::Health& p) {
     return buf;
 }
 
+// A short phrase for the window's status block saying why the entity writer in
+// the local Prepar3D (SimLink.h) is not rendering, when there is something to
+// say.  Empty while it is working, so the line only appears when it explains
+// itself.  Diagnostic only: no decision anywhere reads this.
+static std::string simLinkNote(const simlink::Health& w, bool enabled) {
+    if (!enabled)       return "disabled with --no-sim-link";
+    if (!w.mappingOpen) return "add-on not loaded";
+    if (w.noTitle)      return "loaded, but PdkSimLink.ini has no title to create from";
+    if (!w.hasManager)  return "loaded, but it has no sim-object manager";
+    if (!w.alive || !w.ticking) return "loaded, but its tick is not running";
+    if (w.objectsCreated == 0 && w.createFails > 0) {
+        return "the sim refused every object it tried to create";
+    }
+    if (w.objectsCreated > 0 && w.applied == 0 && w.setFails > 0) {
+        return "objects exist, but the sim refuses every move";
+    }
+    return std::string();   // rendering; nothing to explain
+}
+
 static gui::Status uiStatus() {
     gui::Status s;
     s.sending           = g_sending.load();
@@ -744,6 +779,19 @@ static gui::Status uiStatus() {
     s.relaySpoofed   = fan.spoofed;
     s.relaySource    = fan.source;
     s.relayError     = fan.error;
+
+    // The writer that puts the HOST's entities into the local Prepar3D
+    // (SimLink.h).  Like the terrain probe it is optional -- an IG PC with no
+    // add-on still runs the link -- so its state is reported, not gated.  The
+    // line counts as "on" only when the note is empty, i.e. when the add-on is
+    // loaded, ticking and actually creating objects; anything else has a reason
+    // for the note to carry.
+    const bool wanted = g_simLinkEnabled.load();
+    const simlink::Health writer = simlink::health();
+    s.simLinkNote    = simLinkNote(writer, wanted);
+    s.simLink        = wanted && s.simLinkNote.empty();
+    s.simLinkObjects = writer.objectsCreated;
+    s.simLinkApplied = writer.applied;
     return s;
 }
 
@@ -848,6 +896,7 @@ int main(int argc, char** argv) {
     g_targetFps.store(cfg.fps);
     g_flowControl.store(cfg.flowControl);
     g_sending.store(cfg.autoStart);
+    g_simLinkEnabled.store(cfg.simLink);
 
     // The IG does not choose its own mode: it reports back whatever the HOST
     // last commanded. --ig-mode therefore only seeds the value used until the
@@ -861,6 +910,14 @@ int main(int argc, char** argv) {
     if (g_respondHatHot.load()) {
         terrain::start();
         terrain::probe::start();
+    }
+
+    // The sim link (SimLink.h): the HOST's entities, published for the
+    // PdkSimLink add-on in the local Prepar3D to render.  Its region is created
+    // by the add-on, so there is nothing to create here; opening now is just the
+    // first attempt, and publish() re-tries whenever the sim is not up yet.
+    if (cfg.simLink) {
+        simlink::start();
     }
 
     // ---- The offline terrain database (SRTM tiles) ------------------------
@@ -950,14 +1007,19 @@ int main(int argc, char** argv) {
                     }
                     case cigi::MsgEntityControl: {
                         g_stats.entityControl.fetch_add(1);
-                        // Entity 0 is the aircraft the HOST's flight model is
-                        // flying, and the one its entity-relative HAT/HOT
-                        // requests are about. Keep its pose: that, not the sim
-                        // link, is what those answers are anchored to.
+                        // Within one datagram the HOST sends one Entity Control
+                        // per entity. Entity 0 is the aircraft the HOST's own
+                        // flight model is flying, and the one its entity-relative
+                        // HAT/HOT requests are about: keep its pose -- that, not
+                        // the sim link, is what those answers are anchored to.
+                        // Every entity, entity 0 included, is also published for
+                        // the sim to render (SimLink.h).
                         cigi::EntityControl ent;
-                        if (cigi::parseEntityControl(msg, msgSize, ent) &&
-                            ent.entityId == 0) {
-                            noteHostPose(ent);
+                        if (cigi::parseEntityControl(msg, msgSize, ent)) {
+                            if (ent.entityId == 0) noteHostPose(ent);
+                            if (g_simLinkEnabled.load() && cigi::poseUsable(ent)) {
+                                simlink::publish(ent);
+                            }
                         }
                         break;
                     }
@@ -1197,6 +1259,9 @@ int main(int argc, char** argv) {
     closesocket(tx);
     if (rxThread.joinable()) rxThread.join();
     if (txThread.joinable()) txThread.join();
+    // After the joins: the receive thread is the only caller of publish(), and
+    // retiring the rows tells the add-on to take the objects back out.
+    simlink::stop();
     relay::stop();           // only now: no receive thread is injecting frames
     timeEndPeriod(1);
     WSACleanup();

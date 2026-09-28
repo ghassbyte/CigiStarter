@@ -42,9 +42,10 @@ constexpr int kClientW   = 660;
 constexpr int kStatusW   = kClientW - 2 * kMargin;
 // Tall enough for the whole status block plus a couple of wrapped lines: the
 // relay line grows with the counters, the terrain block gains a "Probe" line
-// when the add-on is not answering, and a line that wraps (the terrain database
+// when the add-on is not answering, the SimLink line explains itself when the
+// entity writer is not answering, and a line that wraps (the terrain database
 // summary carries a folder path) must not push a reading out of sight.
-constexpr int kStatusH   = 356;
+constexpr int kStatusH   = 372;
 constexpr int kSettingsY = kMargin + kStatusH + kMargin;
 constexpr int kRowH      = 24;
 // The flow-control check box gets a row of its own under the HAT/HOT row: there
@@ -400,6 +401,23 @@ void Refresh() {
                       s.relayDevice.c_str(), s.relaySource.c_str());
     }
 
+    // The entity writer in the local Prepar3D (SimLink.h). Unlike the terrain
+    // probe this is the rendering path, not a fallback, so "off" means the sim
+    // is not showing the HOST's world at all -- which is why the line is always
+    // there, with the reason when it is. `simLinkNote` is empty only while it is
+    // working.
+    wchar_t simlink[256];
+    if (!s.simLink) {
+        std::swprintf(simlink, ARRAYSIZE(simlink), L"  SimLink   : off -- %hs",
+                      s.simLinkNote.empty() ? "not answering"
+                                            : s.simLinkNote.c_str());
+    } else {
+        std::swprintf(simlink, ARRAYSIZE(simlink),
+                      L"  SimLink   : %u entit%s applied, %u object%s in the sim",
+                      s.simLinkApplied, s.simLinkApplied == 1 ? L"y" : L"ies",
+                      s.simLinkObjects, s.simLinkObjects == 1 ? L"" : L"s");
+    }
+
     // How the transmit loop is pacing, and -- when flow control is holding
     // frames back -- whether it is the HOST that is setting the pace. The SOF
     // line already shows the rate that was achieved, so a rate well under the
@@ -429,6 +447,7 @@ void Refresh() {
         L"\r\n"
         L"%s\r\n"
         L"%s\r\n"
+        L"%s\r\n"
         L"\r\n"
         L"%s\r\n",
         g_link->hostIp, static_cast<unsigned>(g_link->hostPort),
@@ -442,7 +461,7 @@ void Refresh() {
         static_cast<unsigned long long>(s.entityUpdates),
         static_cast<unsigned>(s.hostIgMode), IgModeName(s.hostIgMode),
         static_cast<unsigned>(s.lastHostFrame),
-        relay, relayNic, terrain);
+        relay, relayNic, simlink, terrain);
 
     SetWindowTextW(g_status, text);
 

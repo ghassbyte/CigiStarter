@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{7C4E2A91-3D68-4F0B-B5A2-9E1D6C3F8A54}</ProjectGuid>
+    <RootNamespace>PdkSimLink</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <!-- Keep whole-program optimisation off: it is what the rest of this repo
+         builds with, and the PDK headers are C++ interfaces it upsets. -->
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <!-- Where the Prepar3D PDK headers live. The default is the vendored copy of
+       inc\PDK from the v6 SDK; a full SDK installation is not needed, because
+       the add-on links only system libraries. Point it at a full installation
+       to build for another simulator, e.g.
+
+         msbuild PdkSimLink.vcxproj /p:Configuration=Release ^
+                 /p:P3DSdkDir="C:\Program Files\Lockheed Martin\Prepar3D v5 SDK 5.4.9.28482" -->
+  <PropertyGroup>
+    <P3DSdkDir Condition="'$(P3DSdkDir)'==''">$(MSBuildProjectDirectory)\..\..\external\Prepar3D-SDK</P3DSdkDir>
+    <P3DPdkInc>$(P3DSdkDir)\inc\PDK</P3DPdkInc>
+    <!-- The SDKs are not interchangeable: the object manager's interface grew a
+         method between them (V520 on v5, V540 on v6), so the two builds really
+         are two different DLLs and must not share an output or intermediate
+         folder. Both are named for the variant and tagged by the same test that
+         picks the interface, so the folder and the compiled interface cannot
+         disagree. -->
+    <P3DSdkTag Condition="$(P3DSdkDir.Contains('v5 SDK'))">v5</P3DSdkTag>
+    <P3DSdkTag Condition="'$(P3DSdkTag)'==''">v6</P3DSdkTag>
+    <OutDir>$(MSBuildProjectDirectory)\bin\$(Configuration)-$(P3DSdkTag)\</OutDir>
+    <IntDir>$(MSBuildProjectDirectory)\obj\$(Configuration)-$(P3DSdkTag)\</IntDir>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(P3DPdkInc);$(MSBuildProjectDirectory)\..\..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Debug'">_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Release'">NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- The object-manager interface differs between the SDKs: the v5
+           headers have no V540, so a build against them selects V520 instead
+           (see PdkSimLink.cpp). -->
+      <PreprocessorDefinitions Condition="$(P3DSdkDir.Contains('v5 SDK'))">P3D_MANAGER_V520;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <ModuleDefinitionFile>PdkSimLink.def</ModuleDefinitionFile>
+      <AdditionalDependencies>kernel32.lib;user32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <GenerateDebugInformation Condition="'$(Configuration)'=='Release'">true</GenerateDebugInformation>
+    </Link>
+    <ResourceCompile>
+      <PreprocessorDefinitions>WIN32;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="PdkSimLink.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\SimLinkIpc.h" />
+    <None Include="..\..\SimLinkMap.h" />
+    <None Include="add-on.xml" />
+    <None Include="PdkSimLink.def" />
+    <None Include="PdkSimLink.ini" />
+    <None Include="README.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="PdkSimLink.def" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

@@ -115,6 +115,7 @@
     <ClCompile Include="Gui.cpp" />
     <ClCompile Include="cigi.cpp" />
     <ClCompile Include="Relay.cpp" />
+    <ClCompile Include="SimLink.cpp" />
     <ClCompile Include="TerrainDb.cpp" />
     <ClCompile Include="TerrainProbe.cpp" />
     <ClCompile Include="TerrainSource.cpp" />
@@ -123,6 +124,9 @@
     <ClInclude Include="cigi.h" />
     <ClInclude Include="Gui.h" />
     <ClInclude Include="Relay.h" />
+    <ClInclude Include="SimLink.h" />
+    <ClInclude Include="SimLinkIpc.h" />
+    <ClInclude Include="SimLinkMap.h" />
     <ClInclude Include="SofPacer.h" />
     <ClInclude Include="TerrainDb.h" />
     <ClInclude Include="TerrainProbe.h" />

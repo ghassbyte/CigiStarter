@@ -28,11 +28,13 @@ Release/
 # the whole point of having it in the tree, for the bench tests.
 !external/HostEmulator_Win32_v3.3.3/*.exe
 
-# The terrain probe is built once per Prepar3D SDK variant and its output and
+# The PDK add-ons are built once per Prepar3D SDK variant and their output and
 # intermediate folders are named for the variant (bin\Release-v5, bin\Release-v6),
 # so the generic Release/ rule above does not catch them.
 tools/PdkTerrainProbe/bin/
 tools/PdkTerrainProbe/obj/
+tools/PdkSimLink/bin/
+tools/PdkSimLink/obj/
 
 # Editor / OS
 *.swp

@@ -1,0 +1,4 @@
+LIBRARY PdkSimLink
+EXPORTS
+    DLLStart
+    DLLStop

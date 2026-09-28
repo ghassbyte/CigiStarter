@@ -6,6 +6,7 @@
 //=============================================================================
 #include "cigi.h"
 
+#include <cmath>
 #include <cstring>
 
 namespace cigi {
@@ -18,6 +19,7 @@ inline void writeF32LE(uint8_t* p, float v)   { std::memcpy(p, &v, 4); }
 inline void writeF64LE(uint8_t* p, double v)  { std::memcpy(p, &v, 8); }
 
 inline uint16_t readU16LE(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
+inline float    readF32LE(const uint8_t* p) { float    v; std::memcpy(&v, p, 4); return v; }
 inline double   readF64LE(const uint8_t* p) { double   v; std::memcpy(&v, p, 8); return v; }
 
 } // namespace
@@ -169,9 +171,11 @@ bool parseHatHotRequest(const uint8_t* msg, size_t size, HatHotRequest& out) {
 //   32   8    longitude       (double LE, degrees)
 //   40   8    altitude        (double LE, metres MSL)
 //
-// Only the pose is decoded: the offsets below are the CIGI 3.3 layout, checked
-// field by field against the rig capture, where the doubles at 24/32/40 read
-// back as the aircraft's own Atang-to-Halim track.
+// The pose is decoded field by field against the rig capture, where the doubles
+// at 24/32/40 read back as the aircraft's own Atang-to-Halim track. The attitude
+// floats at 12/16/20 are the CIGI 3.3 layout but are not yet seen on the wire
+// from this HOST (it is level); they are what the sim link renders with, so a
+// bench run is what confirms their sign and order.
 //-----------------------------------------------------------------------------
 bool parseEntityControl(const uint8_t* msg, size_t size, EntityControl& out) {
     if (size < kEntityControlSize ||
@@ -179,10 +183,22 @@ bool parseEntityControl(const uint8_t* msg, size_t size, EntityControl& out) {
         return false;
     }
     out.entityId  = readU16LE(msg + 2);
+    out.stateByte = msg[4];
+    out.rollDeg   = readF32LE(msg + 12);
+    out.pitchDeg  = readF32LE(msg + 16);
+    out.yawDeg    = readF32LE(msg + 20);
     out.latDeg    = readF64LE(msg + 24);
     out.lonDeg    = readF64LE(msg + 32);
     out.altMeters = readF64LE(msg + 40);
     return true;
+}
+
+bool poseUsable(const EntityControl& e) {
+    return std::isfinite(e.latDeg) && std::isfinite(e.lonDeg) &&
+           std::isfinite(e.altMeters) &&
+           e.latDeg >= -90.0  && e.latDeg <= 90.0 &&
+           e.lonDeg >= -180.0 && e.lonDeg <= 180.0 &&
+           (e.latDeg != 0.0 || e.lonDeg != 0.0 || e.altMeters != 0.0);
 }
 
 } // namespace cigi
