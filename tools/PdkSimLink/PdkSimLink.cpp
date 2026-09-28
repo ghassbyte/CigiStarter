@@ -155,9 +155,9 @@ LinkCallback*          g_frameCb = nullptr;
 // Where the eye goes comes from the HOST.  CigiStarter publishes the HOST's own
 // View Control (`view` in the shared region, SimLinkIpc.h): one static
 // definition in every capture, 2.8 m forward of entity 0's reference point, half
-// a metre above it and 5 cm right, turned two degrees -- the pilot's seat, not
-// the airframe reference point a position-only camera has to sit on.  Two
-// degrees and two metres is the whole difference between "the picture is drawn
+// a metre above it and 5 cm right, turned a degree -- the pilot's seat, not
+// the airframe reference point a position-only camera has to sit on.  A
+// degree and two metres is the whole difference between "the picture is drawn
 // from the aircraft" and a cockpit view, and only the HOST knows which its view
 // is.  In CIGI's body frame (+X nose, +Y right wing, +Z down) the offset has to
 // be rotated by the entity's attitude before it becomes a latitude and
@@ -756,11 +756,14 @@ public:
 
         // CIGI's own units and order: degrees and metres MSL, roll/pitch/yaw --
         // and the PDK's SetPBH is (pitch, bank, heading), so roll and heading
-        // swap places.  Getting that wrong flies the picture mirrored, which is
-        // exactly the kind of thing that looks right until it is banked.
+        // swap places.  The bank *also* changes sign: Prepar3D's bank axis is
+        // the opposite of CIGI's roll (SimLinkMap.h's toPdkPose has the
+        // measurement), so the eye's roll is negated here exactly as an entity's
+        // is.  Both have to agree, or a banked turn would draw the model one way
+        // and the horizon the other.
         cam->SetLLA(eye.latDeg, eye.lonDeg, eye.altMeters);
         cam->SetPBH(static_cast<float>(eye.pitchDeg),
-                    static_cast<float>(eye.rollDeg),
+                    static_cast<float>(-eye.rollDeg),
                     static_cast<float>(eye.yawDeg));
 
         // The bench trace.  GetLLA/GetPBH read the camera *back* out of the sim,
@@ -770,6 +773,17 @@ public:
         // Both poses are printed when there is a view, because the whole of the
         // cockpit fix is the difference between them.  Sampled about once a
         // second; camera_log is off in normal operation.
+        //
+        // Two orders are printed and labelled, because they are not the same
+        // order and one field is not the same sign: `rpy` is CIGI's
+        // roll/pitch/yaw, printed in that order, and `pbh` is the PDK's
+        // pitch/bank/heading, so the `told pbh` bank reads as the negative of
+        // the `eye` roll.  The read-back
+        // can only show that the call landed -- it returns whatever number it was
+        // given -- so a matching `reads pbh` proves the camera is *on* the told
+        // pose, never that the bank leans the right way.  Only looking at the
+        // picture settles the sign; that is why it lives in one place
+        // (SimLinkMap.h's toPdkPose).
         if (g_camLog) {
             static unsigned tick = 0;
             if ((tick++ % 60u) == 0u) {
@@ -785,13 +799,15 @@ public:
                 }
                 wchar_t line[640] = L"";
                 swprintf_s(line,
-                           L"camera '%s' ent %.6f %.6f %.2f | %.2f %.2f %.2f "
-                           L"eye %.6f %.6f %.2f | %.2f %.2f %.2f "
-                           L"reads %.6f %.6f %.2f | %.2f %.2f %.2f %s",
+                           L"camera '%s' ent %.6f %.6f %.2f rpy %.2f %.2f %.2f "
+                           L"| eye %.6f %.6f %.2f rpy %.2f %.2f %.2f "
+                           L"| told pbh %.2f %.2f %.2f "
+                           L"| reads %.6f %.6f %.2f pbh %.2f %.2f %.2f %s",
                            name, e.latDeg, e.lonDeg, e.altMeters,
-                           e.pitchDeg, e.rollDeg, e.yawDeg,
+                           e.rollDeg, e.pitchDeg, e.yawDeg,
                            eye.latDeg, eye.lonDeg, eye.altMeters,
-                           eye.pitchDeg, eye.rollDeg, eye.yawDeg,
+                           eye.rollDeg, eye.pitchDeg, eye.yawDeg,
+                           eye.pitchDeg, -eye.rollDeg, eye.yawDeg,
                            lla[0], lla[1], lla[2], pbh[0], pbh[1], pbh[2],
                            haveView ? L"(view applied)" : L"(no view: on the entity)");
                 camLog(line);

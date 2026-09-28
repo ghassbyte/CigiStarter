@@ -7,10 +7,9 @@
 //    (SOF) messages, so this program continuously sends SOF at a configurable
 //    rate and answers HAT/HOT requests with the terrain height from the local
 //    Prepar3D's own terrain engine, through the PdkTerrainProbe add-on
-//    (TerrainProbe.h). An offline SRTM tile set (TerrainDb.h) and then the sim
-//    over FSUIPC (TerrainSource.h) are the fallbacks. Answering is on by
-//    default; an unreachable sim just leaves those fallbacks unavailable until
-//    it appears.
+//    (TerrainProbe.h). An offline SRTM tile set (TerrainDb.h) is the fallback
+//    for a PC whose sim is not answering. Answering is on by default; an
+//    unreachable sim just leaves the fallback to do the work until it appears.
 //
 //  SOF rate and flow control
 //    The HOST answers each SOF with one datagram, and each answer carries a fresh
@@ -48,11 +47,9 @@
 //
 //  Dependencies
 //    Windows sockets, the 1 ms timer and user32 (Ws2_32.lib, Winmm.lib,
-//    User32.lib). While HAT/HOT answering is switched on (the default) the
-//    FSUIPC SDK is linked as well, to read the terrain height out of the local
-//    Prepar3D (isolated in TerrainSource.cpp). Npcap is used for the fan-out
-//    but is loaded at run time, never linked, so a PC without it is still a
-//    perfectly good IG (Relay.cpp).
+//    User32.lib) -- and nothing else. Npcap is used for the fan-out but is
+//    loaded at run time, never linked, so a PC without it is still a perfectly
+//    good IG (Relay.cpp).
 //
 //  Usage
 //    CigiStarter.exe [--fps 150] [--ig-mode 0] [--no-respond-hathot]
@@ -69,7 +66,6 @@
 #include "SimLink.h"
 #include "TerrainDb.h"
 #include "TerrainProbe.h"
-#include "TerrainSource.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -220,12 +216,13 @@ static std::atomic<bool> g_simLinkEnabled{true};
 // entity 0), kept so the SOF thread can answer entity-relative HAT/HOT requests
 // against it. Those requests name no position of their own -- they are offsets
 // from the aircraft -- so the answer is only right when it is computed around
-// the aircraft the HOST believes it is flying. The sim link (FSUIPC) used to be
-// the only anchor there was, and on the rig it froze at the departure airfield
-// while the HOST flew the aircraft to its destination: every answer kept
-// describing the departure terrain, so the HOST levelled off on ground that was
-// 550 ft too high. This pose is the fix; FSUIPC is the fallback for a link that
-// has not carried an Entity Control yet.
+// the aircraft the HOST believes it is flying. The sim's own aircraft was once
+// the fallback anchor, read over FSUIPC, and on the rig it froze at the
+// departure airfield while the HOST flew the aircraft to its destination: every
+// answer kept describing the departure terrain, so the HOST levelled off on
+// ground that was 550 ft too high. The HOST's Entity Control is the fix, and it
+// arrives with the first frame, so there is no fallback to keep -- entity-
+// relative requests are answered Valid = 0 until one has been seen.
 struct HostPose {
     bool   seen      = false;
     double latDeg    = 0.0;
@@ -248,7 +245,7 @@ static void noteHostPose(const cigi::EntityControl& e) {
     // carry an all-zero pose (the reference capture's entity 5 does exactly
     // that). An all-zero pose means "no position", not the Gulf of Guinea, so it
     // is not adopted -- and neither is anything off the globe. Leaving the pose
-    // unset keeps FSUIPC as the anchor instead. The same rule decides which
+    // unset means there is no anchor at all. The same rule decides which
     // entities the sim link renders (cigi::poseUsable), so the anchor and the
     // rendered world cannot disagree about which entities exist.
     if (!cigi::poseUsable(e)) return;
@@ -296,10 +293,9 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "  --respond-hathot    answer HAT/HOT requests, reporting the terrain\n"
         "                      height from the Prepar3D the aircraft is flying in\n"
         "                      (through the PdkTerrainProbe add-on), or from the\n"
-        "                      local terrain database, or from Prepar3D directly\n"
-        "                      over FSUIPC, in that order   (this is the default)\n"
-        "  --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC\n"
-        "                      untouched\n"
+        "                      local terrain database, in that order\n"
+        "                                                         (this is the default)\n"
+        "  --no-respond-hathot do not answer HAT/HOT requests\n"
         "  --flow-control      hold a SOF back while the HOST has not answered the\n"
         "                      previous one, so the stream fits the HOST (this is\n"
         "                      the default)\n"
@@ -453,16 +449,15 @@ static bool resolveV4(const char* ip, uint16_t port, sockaddr_in& out) {
 //-----------------------------------------------------------------------------
 // HAT/HOT answering
 //-----------------------------------------------------------------------------
-// Three terrain sources are available, tried in this order: the local
-// Prepar3D's own terrain engine through the PdkTerrainProbe add-on
-// (TerrainProbe.h), which is the surface the sim will actually fly the aircraft
-// onto; an offline SRTM database (TerrainDb.h); and the sim's ground altitude
-// read over FSUIPC (terrain::Sample::groundAltMeters).
+// Two terrain sources are available, tried in this order: the local Prepar3D's
+// own terrain engine through the PdkTerrainProbe add-on (TerrainProbe.h), which
+// is the surface the sim will actually fly the aircraft onto; and an offline
+// SRTM database (TerrainDb.h) for a PC whose sim is not answering.
 //
-// The probe and the database both answer about the *world* rather than about
-// where the aircraft is sitting, so neither goes stale while the aircraft is
-// positioned into Prepar3D from outside. The original Master IG answered from
-// its own terrain database for the same reason.
+// Both answer about the *world* rather than about where the aircraft is sitting,
+// so neither goes stale while the aircraft is positioned into Prepar3D from
+// outside. The original Master IG answered from its own terrain database for the
+// same reason.
 //
 // Which aircraft the request is *about* is a separate question from where the
 // terrain is, and it is answered by the HOST's own Entity Control (hostPose()
@@ -470,33 +465,18 @@ static bool resolveV4(const char* ip, uint16_t port, sockaddr_in& out) {
 // from the aircraft, identical wherever the aircraft is, so the wire itself
 // cannot show an anchor that has gone stale -- the answer just quietly describes
 // the wrong terrain until the aircraft parks on it.
-constexpr double kGeodeticToleranceMeters = 500.0;
-constexpr double kPi                      = 3.14159265358979323846;
-constexpr double kEarthRadiusMeters       = 6371000.0;
-
-static bool nearAircraft(double latDeg, double lonDeg, const terrain::Sample& sim) {
-    const double dLat    = (latDeg - sim.latDeg) * kPi / 180.0;
-    const double meanLat = (latDeg + sim.latDeg) * 0.5 * kPi / 180.0;
-    const double dLon    = (lonDeg - sim.lonDeg) * kPi / 180.0 * std::cos(meanLat);
-    const double north   = kEarthRadiusMeters * dLat;
-    const double east    = kEarthRadiusMeters * dLon;
-    return (north * north + east * east) <=
-           (kGeodeticToleranceMeters * kGeodeticToleranceMeters);
-}
 
 // The terrain height for one point, from the same chain every HAT/HOT answer is
 // taken from: the sim's own terrain engine through the PDK add-on (the surface
-// Prepar3D will actually put the aircraft on), else the offline database, else
-// -- only when it describes the same place -- the sim's ground height read over
-// FSUIPC. `key` is the probe slot to ask on, so a caller that is not answering a
-// real request (the window's anchor readout) can keep a slot of its own.
+// Prepar3D will actually put the aircraft on), else the offline database.
+// `key` is the probe slot to ask on, so a caller that is not answering a real
+// request (the window's anchor readout) can keep a slot of its own.
 //
-// `surface`, when passed, is filled only by the sim path: the database and
-// FSUIPC have no idea whether the ground they describe is a platform.  It is
-// diagnostic for now; see terrain::probe::Surface.
+// `surface`, when passed, is filled only by the sim path: the database has no
+// idea whether the ground it describes is a platform.  It is diagnostic for
+// now; see terrain::probe::Surface.
 static bool terrainAt(unsigned key,
                       double latDeg, double lonDeg, double altMeters,
-                      bool simFallback, const terrain::Sample& sim,
                       double& hot,
                       terrain::probe::Surface* surface = nullptr) {
     if (terrain::probe::elevation(key, latDeg, lonDeg, altMeters, hot, surface)) {
@@ -505,20 +485,15 @@ static bool terrainAt(unsigned key,
     if (surface) *surface = terrain::probe::Surface{};
     bool ok = false;
     hot = terrain::db::elevation(latDeg, lonDeg, ok);
-    if (!ok && simFallback) {
-        hot = sim.groundAltMeters;
-        ok  = true;
-    }
     return ok;
 }
 
 // The answer to one HAT/HOT request. `valid` follows the ICD: it is cleared
 // whenever the IG cannot return the requested datum, which here means "we have
 // no terrain to report" (a request for another entity, no anchor at all for an
-// entity-relative request, or a geodetic point too far from the aircraft for
-// FSUIPC to stand in for). Answering Valid = 0 makes the HOST ignore the packet
-// -- far better than a fabricated HOT of 0, which the HOST would follow
-// straight into the ground.
+// entity-relative request, or no source covering the point). Answering
+// Valid = 0 makes the HOST ignore the packet -- far better than a fabricated
+// HOT of 0, which the HOST would follow straight into the ground.
 struct HatHotAnswer {
     bool   valid = false;
     double hat   = 0.0;  // metres above the terrain surface
@@ -526,16 +501,14 @@ struct HatHotAnswer {
 };
 
 static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
-                                 const terrain::Sample& sim,
                                  const HostPose& host) {
     HatHotAnswer ans;
 
     // Work out the point whose terrain the HOST is asking about, and the
     // altitude of the test point itself.
-    double testAlt     = 0.0;
-    double lat         = 0.0;
-    double lon         = 0.0;
-    bool   simFallback = false;  // may FSUIPC stand in if the database misses?
+    double testAlt = 0.0;
+    double lat     = 0.0;
+    double lon     = 0.0;
 
     if (req.coordSystem == cigi::kHatHotEntity) {
         if (req.entityId != 0) {
@@ -543,52 +516,36 @@ static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
         }
         // Anchor to the aircraft the HOST is flying. Its Entity Control is the
         // authoritative pose for a request that names offsets from that
-        // aircraft; FSUIPC is only the fallback, for a HOST that has not sent
-        // one yet. A frozen FSUIPC anchor is exactly the failure this avoids.
-        if (host.seen) {
-            testAlt = host.altMeters - req.z;
-            lat     = host.latDeg;
-            lon     = host.lonDeg;
-        } else if (sim.connected) {
-            testAlt = sim.aircraftAltMeters - req.z;
-            lat     = sim.latDeg;
-            lon     = sim.lonDeg;
-        } else {
-            return ans;  // no anchor at all: nothing to answer from
+        // aircraft, and until one has arrived there is no anchor to answer from
+        // at all. This arrives with the HOST's first frame.
+        if (!host.seen) {
+            return ans;
         }
+        testAlt = host.altMeters - req.z;
+        lat     = host.latDeg;
+        lon     = host.lonDeg;
         // Entity axes are local NED: +Z points out of the bottom, so a positive
         // Z offset sits *below* the reference point. The HOST's entity-relative
         // probes sit within ~10 m of the aircraft (the reference capture's six
         // points reach 10.4 m back and 3 m forward). Terrain data is far
         // coarser than that, so the terrain under the aircraft answers every
         // one of them, and the x/y offsets are folded in as a result.
-        //
-        // FSUIPC's ground height is the terrain under *its* aircraft, so it can
-        // only stand in when that is where this request is about -- if the link
-        // has frozen over another airfield its reading describes a different
-        // place, and a fabricated answer there is worse than none.
-        simFallback = sim.connected && nearAircraft(lat, lon, sim);
     } else {
         testAlt = req.z;  // geodetic requests carry the altitude directly
         lat = req.x;
         lon = req.y;
-        // FSUIPC only knows the terrain under the aircraft, so it can stand in
-        // for a geodetic request only when that request is close to it.
-        simFallback = sim.connected && nearAircraft(lat, lon, sim);
     }
 
     // The chain below answers from the sim's own terrain engine first, through
     // the PDK add-on: it reports the surface Prepar3D will actually put the
     // aircraft on (a runway's flattening included), it stays live for the whole
     // flight, and it answers a geodetic request anywhere rather than only under
-    // the aircraft. The offline database, and then the sim's ground height read
-    // over FSUIPC, are the fallbacks for when the add-on is not loaded. See
-    // TerrainProbe.h.
+    // the aircraft. The offline database is the fallback for when the add-on is
+    // not loaded. See TerrainProbe.h.
     bool   ok  = false;
     double hot = 0.0;
 
-    ok = terrainAt(static_cast<unsigned>(req.hatHotId), lat, lon, testAlt,
-                   simFallback, sim, hot);
+    ok = terrainAt(static_cast<unsigned>(req.hatHotId), lat, lon, testAlt, hot);
     if (!ok) {
         // No terrain to report: leave Valid = 0 so the HOST ignores the packet
         // rather than following a fabricated HOT of 0 into the ground.
@@ -606,10 +563,8 @@ static HatHotAnswer answerHatHot(const cigi::HatHotRequest& req,
 //-----------------------------------------------------------------------------
 // The ground *the answers use*: the height at the aircraft the entity-relative
 // requests are anchored to, from the same chain answerHatHot() takes. The
-// transmit loop refreshes it every frame, so the window has a live reading even
-// when the sim's own FSUIPC ground height has stopped following the aircraft (a
-// slew freezes Prepar3D's ground model). The FSUIPC reading is not the answer
-// and must not be mistaken for one.
+// transmit loop refreshes it every frame, so the window has a live reading of
+// the terrain actually being answered.
 //
 // A reserved probe key keeps this read out of the slots the real HAT/HOT ids
 // use; the HOST's ids are one byte wide, so 0xFFFFFFFF can never collide.
@@ -621,7 +576,7 @@ struct AnchorTerrain {
     // The sim's own classification of that ground, when the probe answered from
     // an add-on that reports one: `onPlatform` is what says the answer is an
     // object's deck rather than terrain (a vessel at sea). Diagnostic only, and
-    // left default when the database or FSUIPC supplied the height.
+    // left default when the database supplied the height.
     terrain::probe::Surface surface;
 };
 static std::mutex    g_anchorTerrainMtx;
@@ -727,24 +682,18 @@ static gui::Status uiStatus() {
     s.hostIgMode        = g_stats.hostIgMode.load();
     s.lastHostFrame     = g_stats.lastHostFrame.load();
 
-    const terrain::Sample sim = terrain::latest();
-    s.terrainConnected  = sim.connected;
-    s.groundAltMeters   = sim.groundAltMeters;
-    s.aircraftAltMeters = sim.aircraftAltMeters;
-
     // Which aircraft the entity-relative answers are anchored to, and where it
     // is. A stale anchor is invisible on the wire -- the requests are the same
     // offsets wherever the aircraft is -- so the window has to say it, or an
     // anchor stuck over the departure airfield looks like nothing at all.
     const HostPose anchor = hostPose();
     s.anchorFromHost  = anchor.seen;
-    s.anchorLatDeg    = anchor.seen ? anchor.latDeg    : sim.latDeg;
-    s.anchorLonDeg    = anchor.seen ? anchor.lonDeg    : sim.lonDeg;
-    s.anchorAltMeters = anchor.seen ? anchor.altMeters : sim.aircraftAltMeters;
+    s.anchorLatDeg    = anchor.latDeg;
+    s.anchorLonDeg    = anchor.lonDeg;
+    s.anchorAltMeters = anchor.altMeters;
 
     // The ground the answers use at that anchor, refreshed by the transmit loop
-    // (see anchorTerrain()). Shown so the operator watches the terrain that is
-    // actually being answered, not the sim's own FSUIPC reading below it.
+    // (see anchorTerrain()).
     const AnchorTerrain ground = anchorTerrain();
     s.anchorGroundValid  = ground.valid;
     s.anchorGroundMeters = ground.hotMeters;
@@ -805,21 +754,18 @@ static void uiRequestQuit()       { g_running.store(false); }
 // (a held-back SOF simply becomes due again).
 static void uiSetFlowControl(bool on) { g_flowControl.store(on); }
 
-// Switching HAT/HOT answering on and off starts and stops the terrain poller
-// with it: the poller is the only thing in this process that touches FSUIPC and
-// there is no point reading the sim while the answer goes unused. It reconnects
-// on its own, so toggling is safe in any order (including before Prepar3D is
-// running, where it just retries).
+// Switching HAT/HOT answering on and off starts and stops the terrain probe
+// with it: there is no point querying the sim while the answer goes unused. The
+// probe reconnects on its own, so toggling is safe in any order (including
+// before Prepar3D is running, where it just retries).
 static void uiSetRespondHatHot(bool on) {
     if (g_respondHatHot.exchange(on) == on) {
         return;  // no change
     }
     if (on) {
-        terrain::start();
         terrain::probe::start();
     } else {
         terrain::probe::stop();
-        terrain::stop();
     }
 }
 
@@ -905,12 +851,10 @@ int main(int argc, char** argv) {
     // first IG Control arrives, after which the receive thread takes over.
     g_stats.hostIgMode.store(static_cast<uint8_t>(cfg.igMode & 0x03u));
 
-    // The terrain poller owns every FSUIPC call in this process, so it runs
-    // only while HAT/HOT answering is enabled -- which it is by default, since
-    // a wrong or missing HOT flies the aircraft into the ground. The window's
-    // check box turns it on and off at runtime.
+    // The terrain probe runs while HAT/HOT answering is enabled -- which it is
+    // by default, since a wrong or missing HOT flies the aircraft into the
+    // ground. The window's check box turns it on and off at runtime.
     if (g_respondHatHot.load()) {
-        terrain::start();
         terrain::probe::start();
     }
 
@@ -924,11 +868,9 @@ int main(int argc, char** argv) {
 
     // ---- The offline terrain database (SRTM tiles) ------------------------
     // The HAT/HOT answer may be taken from here when the sim's own probe cannot
-    // answer. The FSUIPC reading is one point, and was frozen outright while the
-    // aircraft was driven into the sim with slew (see TerrainDb.h). Indexing the
-    // folder is cheap;
-    // each tile is read from disk the first time it is asked about. Optional
-    // and never fatal -- no tiles just means the FSUIPC fallback, as before.
+    // answer. Indexing the folder is cheap; each tile is read from disk the
+    // first time it is asked about. Optional and never fatal -- no tiles just
+    // means an unanswered request when the probe is not loaded either.
     terrain::db::setVerticalOffset(cfg.terrainOffset);
     if (cfg.terrainDir.empty()) {
         terrain::db::load();
@@ -1145,28 +1087,23 @@ int main(int argc, char** argv) {
                         hatHot.items.clear();
                     }
 
-                    const terrain::Sample sim = terrain::latest();
-                    const HostPose       host = hostPose();
+                    const HostPose host = hostPose();
 
                     // The ground the answers use, at the anchor the requests are
                     // taken from. Recomputed every frame so the window can show
-                    // the terrain actually being answered instead of the sim's
-                    // own FSUIPC reading, which can hold still at the last
-                    // reposition while the answers follow the aircraft.
-                    {
-                        const bool   haveAnchor = host.seen || sim.connected;
-                        const double lat = host.seen ? host.latDeg : sim.latDeg;
-                        const double lon = host.seen ? host.lonDeg : sim.lonDeg;
-                        const double alt = host.seen ? host.altMeters
-                                                     : sim.aircraftAltMeters;
-                        const bool   fb  = sim.connected &&
-                                           nearAircraft(lat, lon, sim);
+                    // the terrain actually being answered. No anchor yet (the
+                    // first Entity Control has not arrived) means no ground to
+                    // show, and no answer either.
+                    if (host.seen) {
                         double hot = 0.0;
                         terrain::probe::Surface surface;
-                        const bool ok = haveAnchor &&
-                                        terrainAt(kAnchorTerrainKey, lat, lon, alt,
-                                                  fb, sim, hot, &surface);
+                        const bool ok = terrainAt(kAnchorTerrainKey,
+                                                  host.latDeg, host.lonDeg,
+                                                  host.altMeters, hot, &surface);
                         noteAnchorTerrain(ok, hot, surface);
+                    } else {
+                        noteAnchorTerrain(false, 0.0,
+                                          terrain::probe::Surface{});
                     }
 
                     const uint8_t lsn = static_cast<uint8_t>(
@@ -1188,7 +1125,7 @@ int main(int argc, char** argv) {
                             continue;
                         }
 
-                        const HatHotAnswer ans = answerHatHot(a.req, sim, host);
+                        const HatHotAnswer ans = answerHatHot(a.req, host);
                         const uint8_t valid = ans.valid ? 1 : 0;
 
                         if (a.req.requestType == cigi::kHatHotRequestExtended) {
@@ -1272,7 +1209,6 @@ int main(int argc, char** argv) {
     // ---- Shutdown ---------------------------------------------------------
     g_running.store(false);  // in case run() returned without EXIT
     terrain::probe::stop();  // tells the add-on to stop querying for us
-    terrain::stop();         // joins the poller before FSUIPC/the CRT goes away
     closesocket(rx);
     closesocket(tx);
     if (rxThread.joinable()) rxThread.join();

@@ -22,7 +22,9 @@
         says they are (getting the 3-byte gap wrong is what flies the aircraft
         into the ground);
       * Valid is set only when a terrain source could answer;
-      * an entity-relative request is answered at the aircraft's position;
+      * an entity-relative request with no anchor -- no Entity Control has
+        arrived, which is every case on this bench -- is answered Valid = 0,
+        never from some other aircraft's position;
       * when the sim's own terrain probe is loaded, the height on the wire is
         the probe's reading for the very point that was asked about.
 
@@ -96,7 +98,7 @@
 
 .EXAMPLE
     # no P3D needed: CigiStarter answers geodetic requests from the SRTM
-    # database instead, and the two sim-dependent checks are skipped:
+    # database instead, and the one sim-dependent check is skipped:
     .\tools\test-hathot-emulator.ps1 -Local -NoLaunch
 #>
 [CmdletBinding()]
@@ -615,7 +617,7 @@ try {
     if ($script:hasP3d) {
         Write-Host '  sim         Prepar3D is running'
     } else {
-        Write-Host '  sim         Prepar3D is not running: the two sim-dependent checks will be skipped'
+        Write-Host '  sim         Prepar3D is not running: the sim-dependent check will be skipped'
     }
 
     Initialize-Bench
@@ -637,13 +639,13 @@ try {
                 $(if ($probe.OwnThreadTick) { ", answered by the add-on's own thread" } else { '' }))
         }
         if (-not $ticking) {
-            Write-Host '              the probe is loaded but its tick has stopped: HAT/HOT will fall back to the database / FSUIPC' -ForegroundColor Yellow
+            Write-Host '              the probe is loaded but its tick has stopped: HAT/HOT will fall back to the database' -ForegroundColor Yellow
             if ($probe.Version -ge 2 -and $probe.FrameTicks -eq 0) {
                 Write-Host '              neither the per-frame event nor the object simulation has ever run' -ForegroundColor Yellow
             }
         }
     } else {
-        Write-Host '  probe       not loaded (answers come from the terrain database / FSUIPC)'
+        Write-Host '  probe       not loaded (the answer comes from the terrain database)'
     }
 } catch {
     Write-Host ''
@@ -802,13 +804,24 @@ Run-Test 'several requests at once' {
 }
 
 #-----------------------------------------------------------------------------
-# 6. Entity-relative: answered at the aircraft's position, so it needs the sim.
+# 6. Entity-relative with no anchor: Valid = 0, never a fabricated answer.
+#
+#   An entity-relative request names six offsets from the aircraft the HOST is
+#   flying, so the only thing that can anchor it is the HOST's own Entity
+#   Control for entity 0. The Host Emulator is not a flight model and sends no
+#   Entity Control, so on this bench there is never an anchor and every such
+#   request must be answered Valid = 0.
+#
+#   This is the rule that used to be broken: the answer was anchored to the
+#   local sim's own aircraft, read over FSUIPC. That aircraft is not flown any
+#   more (the HOST's entities are separate sim objects), so its position
+#   described a parked aircraft, and a stale anchor answers the wrong terrain
+#   silently -- the rig's "parks at the departure ground" failure. The anchored
+#   case, where the HOST *has* sent an Entity Control, is not reachable from
+#   this bench: it needs a replayed capture (tools\play-bin.ps1) or the rig, and
+#   is on TODO.md's rig list.
 #-----------------------------------------------------------------------------
-Run-Test 'entity-relative request' {
-    if (-not $script:hasP3d) {
-        Skip 'answered at the aircraft position' 'Prepar3D is not running, so there is no ownship position'
-        return
-    }
+Run-Test 'entity-relative, no anchor' {
     if (-not (Set-HatHotFields -Type Extended -System Entity -Id 28 -X 0 -Y 0 -Z 0 -Period 0)) {
         Assert 'the emulator took the requested fields' $false 'the dialog read back different values'
         return
@@ -821,8 +834,7 @@ Run-Test 'entity-relative request' {
     Assert 'answered exactly once' ($ans.Count -eq 1) ("{0} answer(s)" -f $ans.Count)
     if ($ans.Count -ne 1) { return }
     $a = $ans[0]
-    Assert 'Valid is set (the aircraft position is known)' ($a.valid -eq 'True') ($a.valid)
-    Assert 'HOT is the terrain under the aircraft' ($null -ne $a.hot -and $a.hot -gt -500.0 -and $a.hot -lt 5000.0) ("HOT {0:N2} m" -f $a.hot)
+    Assert 'Valid is clear (no Entity Control has anchored it)' ($a.valid -eq 'False') ("valid={0}" -f $a.valid)
 }
 
 #-----------------------------------------------------------------------------

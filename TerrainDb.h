@@ -3,20 +3,21 @@
 //
 //  Why this exists
 //    The HOST drives its aircraft altitude from the Height Of Terrain (HOT)
-//    the IG reports. The local Prepar3D can supply that ground, but its FSUIPC
-//    reading (`0x0020`) is the terrain under the *player* aircraft and nothing
-//    else, so it can stand in only while the request is where that aircraft is.
-//    It used to be worse: while the program that drives the aircraft held the
-//    sim in slew mode, Prepar3D froze its ground model in slew, so the reading
-//    stopped following the aircraft and the IG answered every request with the
-//    terrain of wherever the last reposition left it -- and the HOST flew the
-//    aircraft on until it met rising ground. (The rig's vendor program now
-//    holds the sim paused with slew off, so the reading follows again.)
+//    the IG reports. The local Prepar3D can supply that ground through the
+//    PdkTerrainProbe add-on (TerrainProbe.h), which is the surface Prepar3D will
+//    actually place the aircraft on -- but that needs the sim up and the add-on
+//    loaded.
 //
 //    This module gives the HAT/HOT path a terrain source that does not depend
 //    on the live sim at all: Shuttle Radar Topography Mission (SRTM) tiles,
 //    read straight from disk. It is the same idea the original Master IG used
 //    -- answer the terrain request from a database rather than from the sim.
+//
+//    (The sim's own ground altitude was once read over FSUIPC as the last
+//    fallback. That is gone: it describes only the ground under the sim's *own*
+//    aircraft, which is no longer flown -- the HOST's entities are separate
+//    objects now (SimLink.h) -- and it stopped following anyway while the
+//    program that drives the sim's aircraft held it in slew.)
 //
 //  What it reads
 //    Raw SRTM ".hgt" tiles in the folder "terrain" next to the executable,
@@ -32,8 +33,9 @@
 //    column 0 the western edge, -32768 marking a void.
 //
 //  Lookups are bilinear, a tile is read from disk on first use and kept. The
-//  whole thing is optional: with no terrain folder the HAT/HOT path falls
-//  back to the FSUIPC ground altitude exactly as before.
+//  whole thing is optional: with no terrain folder the HAT/HOT path has nothing
+//  to answer from when the sim's own probe is not loaded either, and answers
+//  Valid = 0 so the HOST ignores the request.
 //
 //  Threading
 //    elevation() is called from the SOF transmit thread and status() from the

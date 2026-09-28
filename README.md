@@ -8,8 +8,8 @@ SOF at a configurable rate to wake up the HOST and begin the flight-data
 stream, and answers HAT/HOT requests with the terrain height under the aircraft
 — from the Prepar3D the aircraft is flying in, through a small add-on DLL, so a
 runway's flattening and any added scenery are included without anything being
-pre-mapped, falling back to an offline **SRTM terrain database** and then to the
-sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
+pre-mapped, falling back to an offline **SRTM terrain database** — see
+[HAT/HOT answering](#hathot-answering).
 
 The work still open — the entity writer, the rotor and the lights, and the rig
 confirmations — is kept in [`TODO.md`](TODO.md), which is the file to read first
@@ -32,9 +32,8 @@ when picking this back up. `agents.md` is the network view of the link.
    off, as does `--no-respond-hathot`). The terrain height comes from the sim the
    aircraft is actually flying in, through the `PdkTerrainProbe` add-on, so the
    surface that will be flown onto is the one reported — and a new scenery
-   add-on needs no matching pass. An offline **SRTM terrain database**, and then
-   the sim again over FSUIPC, are the fallbacks — see
-   [HAT/HOT answering](#hathot-answering).
+   add-on needs no matching pass. An offline **SRTM terrain database** is the
+   fallback — see [HAT/HOT answering](#hathot-answering).
 5. **Puts the HOST's world on screen.** Every Entity Control is decoded — attitude
    as well as position — and published for the `PdkSimLink` add-on inside the
    local Prepar3D, which creates a sim object per entity and moves it to the
@@ -58,13 +57,10 @@ when picking this back up. `agents.md` is the network view of the link.
   startup error or `--help` is reported in a message box instead of on stdout.
   The project links with `SubSystem=Windows` plus `EntryPointSymbol=mainCRTStartup`,
   which produces a GUI binary while still allowing a plain `int main(argc, argv)`.
-- Windows system libraries only, plus the **FSUIPC SDK** while HAT/HOT answering
-  is switched on (`Ws2_32.lib` for sockets, `Winmm.lib` for timing,
-  `User32.lib` for the window, `Iphlpapi.lib` for the client MAC lookups, and
-  `FSUIPCuser64.lib` for the aircraft position and the terrain fallback). With
-  answering switched off the program never touches FSUIPC. The terrain
-  database itself needs no library at all — just the `.hgt` tiles (see
-  [Terrain database](#terrain-database)).
+- **Windows system libraries only** (`Ws2_32.lib` for sockets, `Winmm.lib` for
+  timing, `User32.lib` for the window, `Iphlpapi.lib` for the client MAC
+  lookups). The terrain database needs no library at all — just the `.hgt`
+  tiles (see [Terrain database](#terrain-database)).
 - The preferred terrain source is a Prepar3D that is running the
   **`PdkTerrainProbe`** add-on (`tools\PdkTerrainProbe`). Building it needs the
   Prepar3D PDK headers, vendored in `external\Prepar3D-SDK\inc\PDK\`; *using* it
@@ -81,16 +77,8 @@ when picking this back up. `agents.md` is the network view of the link.
   without it. The Npcap *SDK* (headers) is needed to build and is vendored in
   `external\npcap-sdk-1.16\`; point the build elsewhere with
   `/p:NpcapSdkDir=<directory>`.
-- The FSUIPC header/library are vendored in `external\UIPC64_SDK_C_version2\`.
-  Point the build at another copy with `/p:FsuipcSdkDir=<directory>`.
-- `FSUIPCuser64.lib` was compiled with **MSVC v140** and is an LTCG library, so
-  this project must **not** build with `/GL` — `WholeProgramOptimization` is
-  therefore `false` for Release. Building with `/GL` fails at link with
-  `C1047` / `LNK1257` ("created by a different version of the compiler").
 - Built with the static CRT (`/MT`, `/MTd`), so the executable runs on a fresh
-  IG PC **without installing the Visual C++ redistributable**. (The FSUIPC SDK
-  does not use the CRT across its boundary, so the mixed CRT is harmless —
-  expect a benign `LNK4098` about `MSVCRT`.)
+  IG PC **without installing the Visual C++ redistributable**.
 - The program runs **unelevated** (the manifest asks for `asInvoker`): a
   deployment starts it from a logon or startup path, where a UAC prompt would
   block an unattended IG. Nothing it does needs administrator on a normal
@@ -151,10 +139,8 @@ CigiStarter.exe [options]
   --respond-hathot    answer HAT/HOT requests, reporting the terrain height
                       from the Prepar3D the aircraft is flying in (through the
                       PdkTerrainProbe add-on), or from the local terrain
-                      database, or from Prepar3D directly over FSUIPC, in
-                      that order                                  (default on)
-  --no-respond-hathot do not answer HAT/HOT requests, and leave FSUIPC
-                      untouched
+                      database, in that order                       (default on)
+  --no-respond-hathot do not answer HAT/HOT requests
   --flow-control      hold a SOF back while the HOST has not answered the
                       previous one                            (default on)
   --no-flow-control   transmit on the rate alone, without waiting for the HOST
@@ -307,7 +293,7 @@ In order, it:
 
 ```
 ================================================================
-  RESULT: PASS   --   35 passed, 0 failed, 0 skipped
+  RESULT: PASS   --   34 passed, 0 failed, 0 skipped
 ================================================================
 ```
 
@@ -320,9 +306,9 @@ if ($LASTEXITCODE -ne 0) { throw 'the HAT/HOT bench failed' }
 ```
 
 A check whose prerequisite is missing is **skipped**, with the reason, and not
-counted as a pass: with Prepar3D closed, the two sim-dependent checks report SKIP
-and the run still ends `PASS`. `0 skipped` needs Prepar3D running *and* the
-terrain probe loaded.
+counted as a pass: with Prepar3D closed, the one sim-dependent check (that the
+height on the wire is the probe's own reading) reports SKIP and the run still
+ends `PASS`. `0 skipped` needs Prepar3D running *and* the terrain probe loaded.
 
 `-Stop` takes the bench down once the checks are done. It stops only what the run
 itself started — CigiStarter through its own EXIT button, the emulator through
@@ -353,10 +339,11 @@ answer would break: that a request is answered, and answered exactly once (or
 every *n*-th frame when it carries an update period); that the request id and
 type pick the right response message; that `HAT = request altitude − HOT`, which
 is what catches the two doubles packed in the wrong place; that `Valid` is set
-only when a terrain source could answer; that an entity-relative request is
-answered at the aircraft's position; and, when the sim's terrain probe is loaded,
-that the height on the wire is the probe's own reading for the very point that
-was asked about.
+only when a terrain source could answer; that an entity-relative request with no
+anchor — no Entity Control has arrived, which is every case on this bench — is
+answered `Valid = 0` rather than from some other aircraft's position; and, when
+the sim's terrain probe is loaded, that the height on the wire is the probe's own
+reading for the very point that was asked about.
 
 ### When the bench does not come up
 
@@ -367,7 +354,7 @@ was asked about.
 | `CigiStarter.exe not found at …` | build Release x64 first — see [Building](#building) |
 | `CigiStarter did not come up on UDP port 8010` | the bind was refused, usually by the firewall, or the exe predates the `--ig-port` option |
 | requests but no answers, on every check | the emulator is pointed at another port; check its `Remote Port` key, or let the script restart it rather than pairing a stale emulator with `-NoLaunch` |
-| two `SKIP`s | Prepar3D is not running, or its `ACTIVE` entry is off for the probe check |
+| a `SKIP` | Prepar3D is not running, or its `ACTIVE` entry is off for the probe check |
 | `LNK1104 … CigiStarter.exe` while rebuilding | a CigiStarter from an earlier run still holds the file — stop it with `-Stop`, or from its own window |
 
 ### Watching the wire by hand
@@ -450,7 +437,7 @@ in the window, or start with `--no-respond-hathot`, if you must:
 | Type 0 (HAT) / 1 (HOT) | HAT/HOT Response (id 102, 16 bytes)           |
 | Type 2 (Extended)      | HAT/HOT Extended Response (id 103, 40 bytes)  |
 
-There are three terrain sources, in this order:
+There are two terrain sources, in this order:
 
 1. **Prepar3D's own terrain**, through the `PdkTerrainProbe` add-on
    ([below](#terrain-from-the-sim)) — the PDK's surface query service, asked for
@@ -462,40 +449,40 @@ There are three terrain sources, in this order:
    `.hgt` tile set. It answers a request from the latitude and longitude alone,
    so it stays correct for the whole flight too, but it is a copy of the world
    and cannot know about a flattening or changed scenery.
-3. **The local Prepar3D via FSUIPC** — the ground under the *player* aircraft
-   (`0x0020`). It stands in for any request neither of the above can cover.
 
-Why a database exists here at all: the FSUIPC reading is the ground under the
-**player** aircraft and nothing else, so it can stand in only for a request that
-is where the sim's own aircraft is. It used to be worse — the program that drives
-the aircraft into Prepar3D by writing its position over FSUIPC (CigiP3dBridge,
-or the vendor program that replaces it) held the sim in **slew mode**, and
-Prepar3D **freezes its ground model in slew**: the reading stopped following the
-aircraft and stayed wherever the last reposition left it, so an IG answering from
-FSUIPC alone kept reporting the same terrain however far the aircraft flew, and
-the HOST flew it on until it met rising ground. (The rig's vendor program now
-holds the sim **paused** with slew off, but FSUIPC is still a single point, and
-the sim's own altitude is not following anything at all: the position is written
-and the altitude is not.) The original Master IG
-answered from its own database for that same reason. Both sources 1 and 2 are
-answers about the *world* rather than about where the aircraft is sitting, so
-neither can go stale.
+With neither available, the request is answered `Valid = 0` and the HOST ignores
+it — never a fabricated `0 m`, which it would follow straight into the ground.
+
+Why a database exists here at all: it is the fallback for a PC whose sim is not
+answering, and it is the same idea the original Master IG used — answer the
+terrain request from a database rather than from the sim. A **third** source was
+once read out of the sim over FSUIPC: the ground under the *player* aircraft
+(`0x0020`). It was dropped with the rest of the FSUIPC path. It described one
+point only — the ground beneath the sim's own aircraft — and that aircraft is no
+longer flown at all: the HOST's entities are separate sim objects now
+([Rendering the HOST's world](#rendering-the-hosts-world)), so a reading taken
+from a parked aircraft is not an answer about the world the HOST is flying in.
+It also froze outright while the program that positions that aircraft held the
+sim in **slew** (Prepar3D freezes its ground model in slew), which is what put a
+database here in the first place. Both sources 1 and 2 are answers about the
+*world* rather than about where the aircraft is sitting, so neither can go stale.
 
 ### Which aircraft the request is about
 
-The three sources say *where the terrain is*; they do not say *where the
+The two sources say *where the terrain is*; they do not say *where the
 aircraft is*, and an entity-relative request needs both — it names six fixed
 offsets from the aircraft, identical wherever the aircraft happens to be. That
 anchor is the HOST's own **Entity Control** for entity 0: the pose the HOST's
 flight model is commanding, and the aircraft it is asking about. It is kept from
 each Entity Control the HOST sends and used for every entity-relative answer;
 the request's Z offset is applied to that altitude, and its latitude/longitude
-locate the terrain query.
+locate the terrain query. Until the first Entity Control arrives there is no
+anchor, and entity-relative requests are answered `Valid = 0` — there is nothing
+to answer them from.
 
-FSUIPC is only the fallback for a HOST that has not sent an Entity Control yet,
-and a pose outside the globe — or the all-zero placeholder a HOST emits for
+A pose outside the globe — or the all-zero placeholder a HOST emits for
 entities it is not driving — is refused rather than adopted. The window's
-`Anchor` line names whichever of the two is in use and where it points — the
+`Anchor` line shows that pose and where it points — the
 position in the degrees, minutes and seconds Prepar3D itself displays — because
 this failure is invisible on the wire: the requests look identical whether the
 anchor is right or stuck over the departure airfield. On the rig the sim link
@@ -507,10 +494,9 @@ The fields themselves:
 
 - `HOT` = the height from the first source that can answer: the sim's surface
   query at the request's point, else the database height there (bilinear between
-  the four surrounding samples), else FSUIPC `0x0020` with a geodetic request
-  accepted only within 500 m of the aircraft.
+  the four surrounding samples). With neither, the answer is `Valid = 0`.
 - `HAT` = test-point altitude − `HOT`. Entity-relative requests use the HOST
-  aircraft's altitude (its Entity Control, or FSUIPC when none has been seen)
+  aircraft's altitude (its Entity Control)
   minus the request's Z offset (CIGI entity axes are local NED, so **+Z points
   down**); geodetic requests carry the altitude themselves.
 - Entity-relative requests are answered at the **HOST's** aircraft position:
@@ -519,19 +505,18 @@ The fields themselves:
   resolution. The sim's own query is asked for the exact point all the same.
 - `Valid` is set to 0 — never a fabricated 0 m — when no source can produce an
   answer: a request for an entity other than the ownship (entity 0), an
-  entity-relative request with no anchor (no Entity Control seen and the FSUIPC
-  link down), or a point no source can cover.
+  entity-relative request with no anchor (no Entity Control has arrived), or a
+  point no source can cover.
 - `updatePeriod = 0` (one-shot) requests are answered once; a non-zero period is
   honoured by re-answering every *n*-th frame until a fresh request for the same
   HAT/HOT ID replaces it — that one is answered at once and its count restarts.
 
-The FSUIPC link is polled by a background thread that owns every FSUIPC call, so
-the SOF pacing is never delayed by an FSUIPC round trip. The poller runs only
-while answering is switched on — the window's check box starts and stops it, and
-while it is off this program makes no FSUIPC calls at all. With a terrain
-database present a missing Prepar3D is no longer fatal to the answer: the
-database still answers, and `Valid = 0` is returned only for points it cannot
-cover.
+The sim is queried through the probe's own shared-memory link, which never
+blocks the SOF pacing (see below). The probe is started and stopped with
+answering: the window's check box turns it off, and this program then asks the
+sim nothing at all. With a terrain database present a missing Prepar3D is not
+fatal to the answer: the database still answers, and `Valid = 0` is returned
+only for points it cannot cover.
 
 ### Terrain from the sim
 
@@ -540,7 +525,7 @@ Prepar3D. The PDK exposes a free-standing surface query
 (`ISurfaceQueryManagerV400`) — not tied to any object, so no probe object has to
 be created or teleported around the world — and the add-on asks it for each
 point CigiStarter wants, then publishes the answers through a block of shared
-memory (`TerrainProbeIpc.h`, `TerrainProbe.h`). No FSUIPC, no per-scenery
+memory (`TerrainProbeIpc.h`, `TerrainProbe.h`). No per-scenery
 mapping, and a newly added airport is answered the moment the sim can see it.
 
 It answers HAT/HOT whenever it is loaded, because it is the surface Prepar3D
@@ -690,7 +675,7 @@ client.txt
      ```
 
      Run `probe` first: it asks about a few spread-out points, twice, and prints
-     sim against SRTM. No FSUIPC and no repositioning are involved — the surface
+     sim against SRTM. No repositioning is involved — the surface
      query is answered about the world, so the whole sweep takes seconds — but
      `probe` and `survey` need Prepar3D running with the add-on loaded. `plan`,
      `compose` and `--help` need neither. A bake builds on option 1 — fetch the
@@ -702,13 +687,13 @@ client.txt
   kept; the window's `TerrainDB` line shows how many are indexed and how many
   are held.
 - **Where.** `terrain\` next to the executable by default, or **`--terrain-dir
-  <dir>`**. With no tiles at all the program simply falls back to FSUIPC, and
-  the window says so.
+  <dir>`**. With no tiles at all the window says so, and a request the sim's own
+  probe cannot answer is answered `Valid = 0`.
 - **Calibration.** SRTM heights are orthometric (EGM96) and the sim's datum is
   its own; the two matched to ~2 m at Juanda in testing. If a site shows a
   constant bias, **`--terrain-offset <m>`** adds a fixed number of metres to
-  every database height. It affects the database only, never the FSUIPC
-  fallback.
+  every database height. It affects the database only, never a height the sim
+  reported.
 
 ## Rendering the HOST's world
 
@@ -757,7 +742,7 @@ the sim is left to be a sim — it just gets told where the entities are.
 - **The eye comes from the HOST.** The HOST says where its own viewpoint is in a
   **View Control** message, and in every capture it is one static definition —
   2.8 m forward of entity 0's reference point, half a metre above it and 5 cm
-  right, turned two degrees: the pilot's seat, not the point on the airframe the
+  right, turned a degree (yaw 359): the pilot's seat, not the point on the airframe the
   HOST happens to call the origin. CigiStarter decodes it and publishes it beside
   the entity rows (`SimLink.h`, one row, `kVersion` 3), and the add-on applies it,
   so the camera sits at the HOST's eye rather than on the entity's reference
@@ -767,6 +752,19 @@ the sim is left to be a sim — it just gets told where the entities are.
   +Z out the bottom), so it is rotated by the entity's attitude before it becomes
   a latitude and longitude; that arithmetic is `SimLinkMap.h`'s `viewEyePose()`,
   driven by the contract test without a simulator.
+- **Units and signs.** The rows carry CIGI's degrees and metres; the PDK wants
+  radians, feet, its own (longitude, altitude, latitude) order and its own
+  (pitch, heading, bank) one, so the crossing converts units and swaps heading and
+  roll. Bank is the one field that also changes **sign**: CIGI's roll is
+  right-bank-positive — the captures show the aircraft banking into its turn —
+  and Prepar3D's bank axis is the opposite, which no read-back can reveal because
+  it hands back whatever number it was given. The predecessor measured the same
+  inversion on the bench, and a replay of `gnd-fly-bank.bin` through this writer —
+  the aircraft turning right while banking left — is what showed the writer was
+  missing it; replayed once the negation was in, the banked pair leans into its
+  turn both ways. The negation lives in `SimLinkMap.h`'s `toPdkPose()` and
+  `toCigiPose()`, and in the camera's `SetPBH` so the horizon and the models agree
+  with each other, and nowhere else.
 - **Camera.** Driving the link is not the same as moving the picture: an entity
   object is a non-user object, so the sim's view stays where it was until the
   camera is moved too. `[simlink] camera=<entity id>` in `PdkSimLink.ini` (off by
@@ -869,8 +867,8 @@ with the window up instead, which is the behaviour the sketch below shows.
   launch and STOP is the live one. The button that would be a no-op is always the
   disabled one.
 - **Answer HAT/HOT** switches HAT/HOT answering on and off, and with it the
-  FSUIPC poller — switching it off means this program makes no FSUIPC calls at
-  all, switching it back on reconnects. It starts **on**, unless
+  sim's terrain probe — switching it off means this program asks the sim
+  nothing at all, switching it back on reconnects. It starts **on**, unless
   `--no-respond-hathot` was given. (The terrain database is indexed at startup
   regardless, so the window can always report it.)
 - **Pace SOF to HOST replies** is the [flow
@@ -896,7 +894,7 @@ with the window up instead, which is the behaviour the sketch below shows.
   thread to finish the client-address lookup it is already in the middle of.
 - Since the process has no console, `Ctrl+C` cannot reach it either.
 - `Anchor` is the aircraft the entity-relative answers are about: the HOST's
-  own Entity Control once one has arrived, else the sim's aircraft over FSUIPC.
+  own Entity Control, shown once it has arrived, and `none yet` before that.
   Its position is shown the way Prepar3D shows one — hemisphere, degrees,
   minutes and seconds, e.g. `S6°32'23.03" E106°45'34.67"` — and its altitude in
   feet, because the line is meant to be read against the sim's own readout and
@@ -906,36 +904,24 @@ with the window up instead, which is the behaviour the sketch below shows.
   force, in the order the answer is taken from: `answering from the sim's own
   terrain` when the `PdkTerrainProbe` add-on is loaded in the local Prepar3D,
   else `answering from the terrain database` when tiles are indexed, else
-  `answering from FSUIPC`, else `switched on, but nothing to answer from`.
+  `switched on, but nothing to answer from`.
   `TerrainDB` names the database behind that fallback — `N tile(s), M in
   memory, X MB`, or `none` with the reason (for instance no `terrain\` folder).
   `Terrain` is the ground **the answers use**: the height at the aircraft they
   are anchored to — the `Anchor` line's aircraft — in feet, from the same source
-  chain the answer is taken from. With the anchor on the HOST's Entity Control
-  that is the ground under the aircraft the HOST is flying, so it follows a
-  reposition even while the sim holds its own ground model still; with no Entity
-  Control the anchor is the sim's own aircraft and the line names that instead.
+  chain the answer is taken from. That is the ground under the aircraft the HOST
+  is flying, so it follows a reposition. It is absent until the first Entity
+  Control arrives, because there is no anchor to ask about.
   When the add-on answered and published the surface's classification, the line
   carries it in brackets: `(hard)`, `(soft)`, `(water)`, or `(…, platform)`.
   **`platform` is the one to watch** — it means the sim called the surface an
   *object's* rather than terrain, which is what a vessel's deck or a rig standing
   in the sea looks like (Prepar3D will rest an aircraft on it while the terrain
   under it is still sea level). The brackets are absent when the answer came from
-  the database or FSUIPC, or from an add-on built before the classification was
+  the database, or from an add-on built before the classification was
   published. The answer is not decided from them — the height the full surface
   query returns already carries the deck — they are there to show that the ground
   answered with is an object and not terrain.
-- `Sim` appears when the anchor is the HOST's Entity Control: it is the sim's own
-  FSUIPC reading — the ground under the sim's aircraft and its altitude, in feet,
-  the way Prepar3D displays them — and it is **not** the answer. It is kept
-  because it is the one place the sim's own aircraft is visible, and because the
-  answer falls back to its ground height (`0x0020`) when neither the add-on nor
-  the database can answer. It is not the terrain in force: it can stop following
-  while an external program positions the sim's aircraft (Prepar3D freezes its
-  ground model in slew), and on the rig that program leaves the sim's own
-  altitude at the value Prepar3D started with, so only the position follows.
-  With no sim the line reads `Sim : no FSUIPC link to Prepar3D`; with answering
-  off the block collapses to `not answered (switched off)`.
 - A `Probe` line appears under `HAT/HOT` when there is something to say about the
   add-on: `add-on not loaded`, `loaded, but it has no terrain service`, a stopped
   tick with the reason behind it, or — while Prepar3D has stopped ticking, which
@@ -1114,11 +1100,15 @@ defaults; see [Usage](#usage) for the bench-test overrides.
   MSL). The doubles are the layout the HAT/HOT anchor has always used — the
   capture's read back as the aircraft's own Atang-to-Halim track; the attitude
   floats are the same CIGI 3.3 layout and are what
-  [the sim link](#rendering-the-hosts-world) feeds the entities, so a bench run
-  with a *rolled* aircraft is what confirms their sign and order (a level one
-  proves nothing). Entity 0 is the HOST's own aircraft; the HOST also sends rows
-  for entities it is not driving, whose all-zero pose means "no position" and is
-  neither anchored to nor rendered (`cigi::poseUsable`).
+  [the sim link](#rendering-the-hosts-world) feeds the entities. The signs are
+  `+roll` = right bank and `+yaw` = clockwise from north, which the captures
+  themselves show — the aircraft banks into its turn, and its yaw matches its own
+  lat/lon ground track — and Prepar3D's bank axis is the *opposite* of CIGI's
+  roll, so the sim link negates the bank on the way across (a read-back cannot
+  see that: it round-trips the number it was given). Entity 0 is the HOST's own
+  aircraft; the HOST also sends rows for entities it is not driving, whose
+  all-zero pose means "no position" and is neither anchored to nor rendered
+  (`cigi::poseUsable`).
 - The **View Control** (id 16, 32 bytes) is where the HOST puts its own eye, and
   it is what makes the sim's picture a cockpit view: the entity it is attached to
   at offset 6 (little-endian `uint16`), then six little-endian **floats** —
@@ -1127,14 +1117,15 @@ defaults; see [Usage](#usage) for the bench-test overrides.
   (+X out the nose, +Y out the right wing, +Z out the bottom, the frame the
   entity-relative HAT/HOT requests use), the angles are relative to it, and the
   whole message is byte-identical in every frame of every capture: `10 20 | 00 00
-  | 01 | 3F | 00 00 | 2.8f | 0.05f | -0.5f | 0 | 0 | 358` — 2.8 m forward and
-  half a metre up from entity 0, turned two degrees. Two bytes of that header
+  | 01 | 3F | 00 00 | 2.8f | 0.05f | -0.5f | 0 | 0 | 359` — 2.8 m forward and
+  half a metre up from entity 0, turned a degree (yaw 359 is a degree to the
+  left). Two bytes of that header
   (offsets 4-5) are named `viewType`/`flags` and unused here. The one thing not
   settled from the wire is the order of the three angles: they are read here in
   the same roll/pitch/yaw order as the Entity Control above, which is what the
   single non-zero angle reads as, and the ICD's own View Control table may list
-  them yaw-first — reading it the other way round would bank the picture two
-  degrees instead of turning it. `TODO.md` carries it with the other
+  them yaw-first — reading it the other way round would bank the picture a
+  degree instead of turning it. `TODO.md` carries it with the other
   rig confirmations.
 - HAT/HOT responses use the CIGI 3.3 layouts: the 16-byte Response (102) carries
   a single `Height` double at offset 8, and the 40-byte Extended Response (103)
@@ -1154,8 +1145,6 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT + flow-control check boxes, SOF rate box) |
 | `cigi.h`           | CIGI 3.3 message IDs, sizes, pack/parse API    |
 | `cigi.cpp`         | explicit little-endian message packing         |
-| `TerrainSource.h`  | FSUIPC-backed aircraft/terrain snapshot API (aircraft position + fallback terrain) |
-| `TerrainSource.cpp`| the FSUIPC poller thread (owns all FSUIPC use) |
 | `TerrainDb.h`      | offline SRTM `.hgt` terrain database API — the HAT/HOT fallback when the sim's own probe cannot answer |
 | `TerrainDb.cpp`    | the `.hgt` reader: tile index, lazy load, bilinear lookup |
 | `TerrainProbe.h`   | API to the sim's own terrain, through the `PdkTerrainProbe` add-on — the preferred HAT/HOT source |
@@ -1169,7 +1158,7 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
 | `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles the HAT/HOT fallback is answered from |
-| `external\`        | vendored third-party code: the build-time SDKs (FSUIPC, Npcap, Prepar3D PDK headers) and the CIGI Host Emulator the bench tests drive |
+| `external\`        | vendored third-party code: the build-time SDKs (Npcap, Prepar3D PDK headers) and the CIGI Host Emulator the bench tests drive |
 | `external\HostEmulator_Win32_v3.3.3\` | the CIGI Host Emulator 3.3.3, the HOST side of a bench link (not linked by anything) |
 | `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source, and the sampler `TerrainBaker` uses) |
 | `tools\PdkSimLink\` | the PDK add-on that renders the HOST's entities: creates a sim object per entity and moves it to the pose CigiStarter publishes |
@@ -1188,7 +1177,7 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |
 | `agents.md`        | description of the HOST / IG / CigiStarter agents |
 | `CigiStarter.sln`  | Visual Studio solution (x64 only)              |
-| `CigiStarter.vcxproj` | VS project (x64 only, static CRT, ws2_32, FSUIPC) |
+| `CigiStarter.vcxproj` | VS project (x64 only, static CRT, ws2_32) |
 | `CigiStarter.vcxproj.filters` | project file organization            |
 | `.gitignore`       | ignores build output and VS artifacts          |
 

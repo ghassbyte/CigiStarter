@@ -90,6 +90,28 @@ inline bool readEntityRow(const Entity& row, Entity& out) {
 
 // CIGI's degrees and metres, in the PDK's radians and feet and the PDK's order
 // (longitude/altitude/latitude and pitch/heading/bank).
+//
+// Bank is the one field that changes sign on the way across, and it is worth
+// spelling out why, because nothing on the wire or in a read-back can show it.
+//
+// CIGI's roll is right-bank-positive.  That is measured from the captures rather
+// than assumed: in `alt 1530.2 air spd 101.4 freeze, right.bin` the roll runs
+// about +21 while the HOST's own heading climbs (243.97 -> 244.52) and its lat/
+// lon track turns clockwise with it, and `... left.bin` is the mirror (roll -24,
+// heading falling).  An aircraft banks into its turn, so positive roll is a
+// right bank.
+//
+// Prepar3D's bank axis is the other way round: a positive bank draws a *left*
+// bank.  A read-back cannot catch that -- it round-trips whatever number it was
+// given, so `GetPBH` after `SetPBH` matches whichever way the model actually
+// rolls -- which is exactly the trap the predecessor program fell into before
+// looking at the aircraft (CigiP3dSimConnect, README -> *Bench checks* item 1,
+// and AGENTS.md -> item 3).  It measured the inversion by eye on the bench and
+// carried `kBankSign = -1.0` for the same reason this does.
+//
+// So the negation lives here and in toCigiPose() below, and nowhere else: the
+// written pose and the read-back stay in the same terms, and there is one place
+// to change if a future Prepar3D changes its mind.
 inline PdkPose toPdkPose(const Entity& e) {
     PdkPose p;
     p.lonRad     = e.lonDeg    * kDegToRad;
@@ -97,7 +119,7 @@ inline PdkPose toPdkPose(const Entity& e) {
     p.latRad     = e.latDeg    * kDegToRad;
     p.pitchRad   = e.pitchDeg  * kDegToRad;
     p.headingRad = e.yawDeg    * kDegToRad;
-    p.bankRad    = e.rollDeg   * kDegToRad;
+    p.bankRad    = -e.rollDeg  * kDegToRad;
     return p;
 }
 
@@ -116,6 +138,11 @@ struct CigiPose {
 // The reverse of toPdkPose: the PDK's two vectors -- (longitude, altitude,
 // latitude) and (pitch, heading, bank) -- back to degrees and metres. Passed as
 // plain doubles so this header keeps its distance from the PDK's Types.h.
+//
+// Bank is negated on the way back as well, so a pose that survived the round
+// trip reads as the CIGI pose that was commanded.  Without it the read-back's
+// roll would be the negative of the commanded one and the e2e drift check would
+// report a bank that never moved.
 inline CigiPose toCigiPose(double lonRad, double altFeet, double latRad,
                            double pitchRad, double headingRad, double bankRad) {
     CigiPose c;
@@ -124,7 +151,7 @@ inline CigiPose toCigiPose(double lonRad, double altFeet, double latRad,
     c.altMeters = altFeet    / kMetersToFt;
     c.pitchDeg  = pitchRad   / kDegToRad;
     c.yawDeg    = headingRad / kDegToRad;
-    c.rollDeg   = bankRad    / kDegToRad;
+    c.rollDeg   = -bankRad   / kDegToRad;
     return c;
 }
 
@@ -182,7 +209,7 @@ inline bool readViewRow(const View& row, View& out) {
 // The entity attitude is also what the offset is rotated by, not the view's own
 // angles: the HOST places the eye a fixed distance along the aircraft, and then
 // points it.  The two are the same thing for the captures, whose view is turned
-// two degrees; they are not the same thing in general.
+// a degree; they are not the same thing in general.
 inline CigiPose viewEyePose(const Entity& e, const View& v) {
     CigiPose c;
     c.rollDeg  = e.rollDeg  + v.rollDeg;

@@ -29,8 +29,8 @@
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
-    <!-- Kept false for consistency with CigiStarter.vcxproj; nothing here
-         needs it either way now that the FSUIPC library is gone. -->
+    <!-- Off for a small, fast build; this tool does not need whole-program
+         optimisation. -->
     <WholeProgramOptimization>false</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>

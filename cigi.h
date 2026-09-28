@@ -225,19 +225,21 @@ bool poseUsable(const EntityControl& e);
 // beside this repository carry exactly one View Control per frame, and it is
 // byte-identical in every frame of every one of them:
 //
-//   10 20 | 00 00 | 01 | 3F | 00 00 | 2.8 | 0.05 | -0.5 | 0 | 0 | 358
+//   10 20 | 00 00 | 01 | 3F | 00 00 | 2.8 | 0.05 | -0.5 | 0 | 0 | 359
 //
 // -- one static view definition for the whole sortie.  Read with the layout
 // below it is the pilot's eye: 2.8 m forward of the entity's reference point,
-// 0.5 m above it and 5 cm to the right, turned 2 degrees left of the nose (the
+// 0.5 m above it and 5 cm to the right, turned a degree left of the nose (the
 // HOST flies the aircraft, so its view's angles are a boresight, not a heading).
+// The yaw is the last float as it stands on the wire, `00 80 B3 43` = 359.00f;
+// the whole of the turn is that one degree.
 //
 // One caveat, and it is written down rather than hidden: the three angle slots
 // are read here in the same roll/pitch/yaw order as the Entity Control rows
 // above (roll at 20, pitch at 24, yaw at 28), which is what the one non-zero
 // angle in every capture reads as.  The ICD's own View Control table may list
 // them yaw-first; reading this capture the other way round would bank the
-// picture two degrees instead of turning it.  TODO.md has it under the rig
+// picture a degree instead of turning it.  TODO.md has it under the rig
 // confirmations that are still owed.
 struct ViewControl {
     uint16_t viewId   = 0;    // View ID / View Group ID

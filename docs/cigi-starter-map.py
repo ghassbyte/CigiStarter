@@ -46,7 +46,7 @@ txt(60, 30, "CigiStarter - a CIGI 3.3 Image Generator", size=34, font=FONT_HAND,
     color="#1e1e1e")
 txt(60, 86,
     "A minimal replacement for the Master IG PC: wakes the HOST with SOF, answers its HAT/HOT requests from the terrain Prepar3D will actually fly the aircraft onto "
-    "(the PdkTerrainProbe add-on), falls back to an offline SRTM database and then to the sim over FSUIPC, and fans the HOST's downstream stream out to the extra IG PCs. "
+    "(the PdkTerrainProbe add-on) and falls back to an offline SRTM database, and fans the HOST's downstream stream out to the extra IG PCs. "
     "CIGI 3.3, UDP, little-endian. Single Win32 binary, runs unelevated, streams from launch with the window minimised.",
     size=16, font=FONT_NORMAL, width=3260)
 
@@ -181,7 +181,7 @@ txt(cx, 1410,
 # ==========================================================================
 
 cx, cy = panel(1180, 760, 1080, 840,
-               "4 - HAT/HOT answering: three sources, one anchor")
+               "4 - HAT/HOT answering: two sources, one anchor")
 
 src1 = s.box(1240, 820, 960, None,
              "1 - Prepar3D's own terrain, through PdkTerrainProbe.dll\n"
@@ -195,10 +195,10 @@ src2 = s.box(1240, 925, 960, None,
              "whole flight, but it is a copy of the world: no flattening, no changed scenery",
              fill="yellow", size=14)
 src3 = s.box(1240, 1030, 960, None,
-             "3 - the local Prepar3D via FSUIPC 0x0020\n"
-             "the ground under the sim's own aircraft: one point only, so it can stand "
-             "in only for a request where that aircraft is",
-             fill="orange", size=14)
+             "and there is no third source\n"
+             "if neither can cover the point the answer is Valid = 0 and the HOST ignores "
+             "the packet - never a fabricated 0 m, which it would follow into the ground",
+             size=14)
 s.arrow(src1, src2)
 s.arrow(src2, src3)
 
@@ -212,14 +212,13 @@ txt(1240, 1150,
     "        entity other than the ownship (0), an entity-relative request with no\n"
     "        anchor, or a point no source can reach\n"
     "updatePeriod = 0 -> answered once;  n -> re-answered every n-th frame until a\n"
-    "        fresh request with the same HAT/HOT ID replaces it (answered at once)\n"
-    "the geodetic FSUIPC fallback is accepted only within 500 m of the aircraft",
+    "        fresh request with the same HAT/HOT ID replaces it (answered at once)",
     size=12.5)
 
 txt(1240, 1330,
     "ANCHOR   entity-relative answers are anchored to the HOST's own Entity Control\n"
     "         (entity 0) - the pose its flight model is commanding - not to the sim's\n"
-    "         FSUIPC read-back. All-zero and off-globe poses are refused, not adopted.\n"
+    "         own aircraft. All-zero and off-globe poses are refused, not adopted.\n"
     "         The six probe offsets are identical wherever the aircraft is, so a stuck\n"
     "         anchor is invisible on the wire: on the rig it parked the aircraft on the\n"
     "         departure ground, a ~550 ft step at the destination.",
@@ -377,7 +376,7 @@ txt(cx, cy,
 
 txt(cx, 2120,
     "Refreshes 4x/s. START / STOP start and stop the SOF stream (the button that would be a no-op is the disabled one). "
-    "Answer HAT/HOT also starts and stops the FSUIPC poller: off means no FSUIPC calls at all. Pace SOF to HOST replies is the flow-control switch. "
+    "Answer HAT/HOT also starts and stops the sim's terrain probe: off means the sim is not asked at all. Pace SOF to HOST replies is the flow-control switch. "
     "SOF rate is 1..100000 Hz, applied to the transmit loop on the next frame with Apply or Enter, so the stream retunes while it runs; --fps only seeds it.",
     size=13, font=FONT_NORMAL, width=940)
 txt(cx, 2215,
@@ -386,7 +385,7 @@ txt(cx, 2215,
     size=13, font=FONT_NORMAL, width=940)
 txt(cx, 2310,
     "Terrain lines: HAT/HOT names the source in force; TerrainDB the fallback behind it and its size; Probe the tick that is answering; "
-    "Anchor the HOST's pose; Terrain the sim's own aircraft over FSUIPC - the ground under it and its altitude in feet, the way Prepar3D shows them.",
+    "Anchor the HOST's pose; Terrain the ground the answers use at that anchor, in feet.",
     size=13, font=FONT_NORMAL, width=940)
 
 # ==========================================================================
@@ -504,7 +503,7 @@ txt(cx, 2775,
 
 txt(cx, 2890,
     "Calibration: SRTM heights are orthometric (EGM96) and the sim's datum is its own; the two matched to ~2 m at Juanda in testing. "
-    "--terrain-offset <m> shifts every database height if a site shows a constant bias - the database only, never FSUIPC and never a sim height.",
+    "--terrain-offset <m> shifts every database height if a site shows a constant bias - the database only, never a sim height.",
     size=13, font=FONT_NORMAL, width=940)
 
 # ==========================================================================
@@ -521,18 +520,15 @@ txt(cx, cy,
     "  with a plain int main(): no console, so --help and startup errors use\n"
     "  a message box\n"
     "  static CRT (/MT): a fresh IG PC needs no Visual C++ redistributable\n"
-    "  no /GL: FSUIPCuser64.lib is an LTCG library built with MSVC v140\n"
-    "  (WholeProgramOptimization=false; expect a benign LNK4098)\n"
     "  runs unelevated (asInvoker) - it starts from a logon path, where a\n"
     "  UAC prompt would block an unattended IG\n"
-    "  vendored SDKs: external\\UIPC64_SDK_C_version2,\n"
-    "  external\\npcap-sdk-1.16, external\\Prepar3D-SDK\\inc\\PDK\n"
-    "  (/p:FsuipcSdkDir, /p:NpcapSdkDir, /p:P3DSdkDir)",
+    "  vendored SDKs: external\\npcap-sdk-1.16,\n"
+    "  external\\Prepar3D-SDK\\inc\\PDK\n"
+    "  (/p:NpcapSdkDir, /p:P3DSdkDir)",
     size=12)
 
 txt(cx, 2790,
     "FILES   main.cpp  SofPacer.h  Gui.h/.cpp  cigi.h/.cpp\n"
-    "        TerrainSource.h/.cpp   the FSUIPC poller thread\n"
     "        TerrainDb.h/.cpp       the SRTM .hgt reader\n"
     "        TerrainProbe.h/.cpp    this side of the shared-memory link\n"
     "        TerrainProbeIpc.h      the pinned contract\n"

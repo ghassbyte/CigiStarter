@@ -15,7 +15,7 @@
 //     +--------------------------------------------------------------------+
 //
 //  The settings rows are live: the check boxes switch HAT/HOT answering (and
-//  with it the FSUIPC poller) and the flow control, and the rate box retunes the
+//  with it the terrain probe) and the flow control, and the rate box retunes the
 //  SOF stream, all without stopping anything first. The rate box applies on
 //  Enter, on Apply, and when it loses focus, so a typed value can never be
 //  silently ignored.
@@ -233,10 +233,7 @@ void Refresh() {
     // The terrain lines have their own branches because they can be missing.
     // The sim's own terrain probe answers HAT/HOT when it is loaded, because it
     // reports the surface the sim will actually fly the aircraft onto; the
-    // offline database is the fallback (the sim's ground model froze in slew,
-    // which is why a database existed at all), and FSUIPC supplies the sim's
-    // own aircraft position and altitude and stands in for terrain neither
-    // covers.
+    // offline database is the fallback for a PC whose sim is not answering.
     wchar_t terrain[1536];
     if (!s.respondingHatHot) {
         std::swprintf(terrain, ARRAYSIZE(terrain),
@@ -255,8 +252,7 @@ void Refresh() {
         const wchar_t* source =
             s.terrainProbe       ? L"answering from the sim's own terrain"
           : (s.terrainTiles > 0) ? L"answering from the terrain database"
-          : (s.terrainConnected  ? L"answering from FSUIPC"
-                                 : L"switched on, but nothing to answer from");
+                                 : L"switched on, but nothing to answer from";
 
         // Which tick the probe is answering from, and why it is not, when there
         // is something to say: without this the operator sees only that the
@@ -270,16 +266,16 @@ void Refresh() {
                           L"\r\n  Probe     : %hs", s.terrainProbeNote.c_str());
         }
 
-        // The aircraft the entity-relative answers are anchored to. When the
-        // HOST has sent an Entity Control it is the truth the HOST itself uses;
-        // otherwise the sim link stands in. Shown because a frozen anchor (the
-        // failure that parked the aircraft on the departure ground) is otherwise
-        // invisible -- the requests are the same offsets wherever it is.
+        // The aircraft the entity-relative answers are anchored to: the HOST's
+        // own Entity Control, the pose its flight model is flying. Shown because
+        // a stale anchor is otherwise invisible -- the requests are the same
+        // offsets wherever it is -- and because those requests go unanswered
+        // until one arrives.
         wchar_t anchorLine[256] = L"";
-        if (!s.anchorFromHost && !s.terrainConnected) {
+        if (!s.anchorFromHost) {
             std::swprintf(anchorLine, ARRAYSIZE(anchorLine),
-                          L"\r\n  Anchor    : none yet -- no Entity Control, "
-                          L"no FSUIPC link");
+                          L"\r\n  Anchor    : none yet -- no Entity Control "
+                          L"from the HOST");
         } else {
             wchar_t anchorLat[32];
             wchar_t anchorLon[32];
@@ -288,19 +284,14 @@ void Refresh() {
             FormatLatLon(s.anchorLonDeg, L'E', L'W', anchorLon,
                          ARRAYSIZE(anchorLon));
             std::swprintf(anchorLine, ARRAYSIZE(anchorLine),
-                          L"\r\n  Anchor    : %s %s %s, %.0f ft",
-                          s.anchorFromHost ? L"HOST Entity Control"
-                                           : L"FSUIPC (sim)",
+                          L"\r\n  Anchor    : HOST Entity Control %s %s, %.0f ft",
                           anchorLat, anchorLon,
                           s.anchorAltMeters * kFeetPerMetre);
         }
 
         // The ground the answers actually use: the terrain at the aircraft they
         // are anchored to, from the same chain the answer is taken from. This is
-        // the number to watch. The sim's own FSUIPC reading below it is *not*
-        // the answer, and can hold still at the last reposition (Prepar3D
-        // freezes its ground model in slew) while the answers follow the
-        // aircraft -- the failure this line exists to make visible.
+        // the number to watch.
         // What kind of surface the sim called that ground, when it said. Over a
         // vessel at sea the interesting reading is a *platform*: the deck, which
         // Prepar3D's collision will rest an aircraft on while the terrain under
@@ -323,36 +314,19 @@ void Refresh() {
             }
         }
 
-        wchar_t answerLine[160] = L"";
+        wchar_t answerLine[176] = L"";
         if (s.anchorGroundValid) {
             std::swprintf(answerLine, ARRAYSIZE(answerLine),
-                          L"\r\n  Terrain   : %.0f ft ground under the %s aircraft%s",
+                          L"\r\n  Terrain   : %.0f ft ground under the HOST aircraft%s",
                           s.anchorGroundMeters * kFeetPerMetre,
-                          s.anchorFromHost ? L"HOST" : L"sim",
                           surfaceNote);
-        }
-
-        // The sim's own FSUIPC reading, kept only while it is a different
-        // aircraft from the anchor. When the anchor *is* the sim the line above
-        // already describes it, and a second copy would only invite the mistake
-        // of reading this one as the answer.
-        wchar_t simLine[224] = L"";
-        if (!s.terrainConnected) {
-            std::swprintf(simLine, ARRAYSIZE(simLine),
-                          L"\r\n  Sim       : no FSUIPC link to Prepar3D");
-        } else if (s.anchorFromHost) {
-            std::swprintf(simLine, ARRAYSIZE(simLine),
-                          L"\r\n  Sim       : %.0f ft ground under the sim aircraft, "
-                          L"%.0f ft sim aircraft",
-                          s.groundAltMeters * kFeetPerMetre,
-                          s.aircraftAltMeters * kFeetPerMetre);
         }
 
         std::swprintf(terrain, ARRAYSIZE(terrain),
                       L"%s\r\n"
-                      L"  HAT/HOT   : %s%s%s%s%s",
+                      L"  HAT/HOT   : %s%s%s%s",
                       dbline, source, probeLine, anchorLine,
-                      answerLine, simLine);
+                      answerLine);
     }
 
     // The relay block, likewise: off is a normal state, and each way of being

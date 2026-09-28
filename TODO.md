@@ -8,7 +8,11 @@ Last updated 2026-09-29, branch `feature/pdk-simlink`. Items 1 (the read-back)
 and 2 (the physics-free object) are done and measured; item 1's terrain figures
 were re-measured on 2026-09-29 and corrected (see 1). The camera is done too
 (item 7): the sim's view is flown from the HOST's own eyepoint, so it is a
-cockpit view rather than a view from the airframe's reference point.
+cockpit view rather than a view from the airframe's reference point. The
+**FSUIPC path is gone** (2026-09-29): it read the local sim's own aircraft, which
+nothing flies any more now that the HOST's entities are separate objects, so
+terrain is the sim's own probe and then the SRTM database, and the operator
+window no longer has the frozen `Sim` line.
 
 ---
 
@@ -135,7 +139,7 @@ else** — the standard light variables and bare K-events included. SimConnect
 
 | Path | Cost |
 |------|------|
-| FSUIPC | already vendored, but a de-facto 32-bit-era channel and one more moving part |
+| FSUIPC | was vendored; removed with the rest of the HAT/HOT FSUIPC path (2026-09-29), so re-adding it is a new moving part, and a de-facto 32-bit-era channel at that |
 | The PDK | no `L:` write from the PDK either, as far as we have found |
 | A small bridging gauge in the sim | a shared-memory → `L:switch ...` writer beside `PdkSimLink`; cleanest, but a new component |
 
@@ -160,7 +164,8 @@ looks: `rotor_still` under 40, `rotor_slow` 40–45, `rotor_blurred` above 45.
 
 Pose only, today. The same shared-memory channel carries the rest.
 
-* Time of day: **SimConnect has no setter**, so this is PDK `SetTime` or FSUIPC.
+* Time of day: **SimConnect has no setter**, so this is PDK `SetTime` or FSUIPC
+  (which this program no longer vendors — see the table in item 3).
 * Weather/visibility: `IWeatherSystemV500`, plus the warm-up Atmosphere Control
   messages the captures already carry.
 * Open unknown: **nothing found yet that sets wave height** —
@@ -184,7 +189,7 @@ fan-out leaves them looking exactly like the HOST's own stream.
   Fixed-origin camera definition and applies the HOST's own eye for that entity
   each frame, and the sim reads the camera back on the commanded pose
   (`PdkSimLink/README.md`, *The camera*). The eye is the HOST's View Control
-  (`X 2.8`, `Y 0.05`, `Z -0.5`, level, yaw 358, attached to entity 0 in every
+  (`X 2.8`, `Y 0.05`, `Z -0.5`, level, yaw 359, attached to entity 0 in every
   capture), carried across on the shared region (`view`, `kVersion` 3) and
   rotated out of the entity's body frame by `SimLinkMap.h`'s `viewEyePose()`, so
   the picture is drawn from the pilot's seat rather than from the entity's
@@ -214,14 +219,29 @@ Everything the local harness cannot reach:
 
 * `CreateObject` / `SetPosition` / **`GetPosition`** on v6 **Professional**, and
   `GetLicenseType()` — the writer is only proven on v6 Personal.
-* The sign and order of roll/pitch/yaw — a level aircraft proves nothing, so roll
-  it. The **View Control**'s three angles have the same doubt and less to go on:
-  every capture carries one non-zero value (358) in the slots the Entity Control
-  calls roll/pitch/yaw, and it is read that way here. A level aircraft cannot
-  tell a 2° bank from a 2° turn, and the ICD's own View Control table may list
-  them yaw-first.
+* The **order** of the **View Control**'s three angles. The Entity Control's own
+  sign and order are settled: its yaw matches the capture's own ground track and
+  `+roll` is a right bank — checked by eye on the bench, 2026-09-29, with the
+  negation in, where the banked pair leans into its turn both ways — which is why
+  the
+  sim link negates the bank for Prepar3D's opposite axis — see `SimLinkMap.h`'s
+  `toPdkPose()`. The view's three angles have the same doubt and less to go on:
+  every capture carries one non-zero value (359, a degree) in the slots the
+  Entity Control calls roll/pitch/yaw, and it is read that way here. A level
+  aircraft cannot tell a 1° bank from a 1° turn, and the ICD's own View Control
+  table may list them yaw-first.
 * That `PAUSE_ON_LOST_FOCUS=0` on every IG PC. An unattended IG that pauses when
   it loses focus would freeze the display. (It is `0` on this bench.)
+* **An entity-relative HAT/HOT answer with the HOST's own Entity Control as its
+  anchor** now has no automated check. The emulator bench cannot produce that
+  anchor — the Host Emulator is not a flight model and sends no Entity Control —
+  so `tools\test-hathot-emulator.ps1` asserts the opposite rule there: no anchor
+  means `Valid = 0`, never an answer from another aircraft. The anchored case
+  wants a wire check built on a replayed capture (dumpcap plus
+  `tools\capture-hat-hot.ps1`, the way the emulator test reads the answers) or a
+  sighting on the rig, where the failure it guards against — the ~550 ft step at
+  the destination when the anchor was left behind at the departure field — was
+  first seen.
 * Retiring the vendor program that holds the deployed sim paused.
 
 ---
@@ -234,7 +254,7 @@ Everything the local harness cannot reach:
   (The camera is answered: it rides entity 0 unless `camera=` names another.)
 * **Should the airframe be drawn around the eye?** Answered for now: no. The
   camera flies the HOST's View Control eyepoint (2.8 m forward of entity 0, half
-  a metre up, 5 cm right, turned two degrees — the pilot's seat), and the entity
+  a metre up, 5 cm right, turned a degree — the pilot's seat), and the entity
   the eye is inside is created from the model-less `own_ship_title`, so the
   picture is the HOST's world and not a modelled cabin drawn around it. Giving
   the own ship a model is a one-line change (`own_ship_title=`) and a content

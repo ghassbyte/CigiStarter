@@ -203,7 +203,7 @@ matters. With `camera` blank there is no own ship and every entity uses `title`.
 |---|---|
 | `camera` | the CIGI entity id the sim's view should ride — normally `0`, the HOST's own aircraft. The eye is the HOST's own (its View Control), not the entity's reference point: see *The eye is the HOST's* below. Blank or absent leaves the sim's view alone, which is the default. |
 | `camera_view` | the camera definition every 3D view is put onto before it is driven. Must be Fixed-origin. Default `Cigi View`. |
-| `camera_log` | `1` writes `PdkSimLink.camera.log` beside the DLL: about a line a second per driven view, each with the entity's pose, the eye that becomes the camera, and what the camera reports back. Default `0`. |
+| `camera_log` | `1` writes `PdkSimLink.camera.log` beside the DLL: about a line a second per driven view, each with the entity's pose and the eye that becomes the camera (both in CIGI's roll/pitch/yaw, labelled `rpy`), the pose the camera is then told in Prepar3D's own pitch/bank/heading (`told pbh`), and what it reports back (`reads pbh`). The two orders are labelled because they are not the same order and the bank is not the same sign. Default `0`. |
 
 **Why it is needed at all.** An entity object the add-on created is a *non-user*
 object, so moving it does not move the picture. Prepar3D's view belongs to a
@@ -224,8 +224,13 @@ each 3D view onto it and then applies the HOST's eye for the entity every frame.
 place for values the camera's own update then uses for its position and
 orientation — `SetLLA(lat, lon, alt)` and `SetPBH(pitch, bank, heading)` are
 called every frame. CIGI carries roll/pitch/yaw and the PDK wants
-pitch/bank/heading, so roll and heading swap places; the contract test covers the
-conversion so the two halves cannot disagree. The definition switch itself
+pitch/bank/heading, so roll and heading swap places — and the bank is
+**negated**, because Prepar3D's bank axis is the opposite of CIGI's roll. That is
+the same negation an entity object's pose gets (`SimLinkMap.h`'s `toPdkPose()`
+carries the measurement), and it has to be the same one: a camera that banked the
+other way from the aircraft it rides would draw the model and the horizon
+disagreeing. The contract test covers the conversion so the two halves cannot
+disagree. The definition switch itself
 happens on the frame event and not inside that callback, because
 `SetCameraDefinition` replaces the window's camera system mid-flight and
 re-entering it from the pre-camera callback is not something the SDK promises.
@@ -237,7 +242,7 @@ one.
 **The eye is the HOST's, and it is not the entity's reference point.** The HOST
 says where its own viewpoint is in a CIGI **View Control**, and in every capture
 that is one static definition: 2.8 m forward of entity 0's reference point, 5 cm
-to the right, half a metre up, level, turned two degrees — the pilot's seat. CigiStarter
+to the right, half a metre up, level, turned a degree (yaw 359) — the pilot's seat. CigiStarter
 decodes it and publishes it beside the entity rows (`SimLink.h`; the `view` row
 that `kVersion` 3 added), and the add-on applies it instead of the entity's own
 pose whenever the view is attached to the entity the camera rides. The offsets
@@ -262,22 +267,33 @@ definition) and this is the same rule for the entity this add-on created: the
 camera's entity is made from `own_ship_title`, a container that carries no model,
 while every other entity still draws from `title`.
 
-**Measured on the bench, 2026-09-29** (`camera=0`, `camera_log=1`, a replay of
-`gnd-fly-bank.bin`): every sample's `GetLLA`/`GetPBH` read back the eye exactly —
-e.g. the entity at `-6.542806 106.757343 201.76 | -14.22 -12.58 110.90` becomes
-the eye `-6.542814 106.757367 201.56 | -14.22 -12.58 109.90` and the camera
-reports exactly that, with a heading of 270.25 returning as the equivalent
-`-89.75` once it crossed 180°. The first sample read `0.0 0.0 1.00`, the
-definition's own fixed point, and every sample after the first `SetLLA` matched
-the eye, so the pose is the HOST's and not the definition's. The window reports
-`CAMERA_SYSTEM_ORIGIN_FIXED` after the switch. The picture was looked at the same
+**Measured on the bench, 2026-09-29** (`camera=0`, `camera_log=1`, replays of the
+banked pair, `right.bin` and then `left.bin`): every sample read the camera back
+exactly on the pose it had been given. The log prints both orders and labels them
+-- `rpy` is CIGI's roll/pitch/yaw, `pbh` is the PDK's pitch/bank/heading --
+because they are neither the same order nor, for one field, the same sign. One
+sample of `right.bin`: the entity at `-6.473351 106.725805 465.26 | 15.51 1.56
+253.38` became the eye `-6.473356 106.725780 465.81 | 15.51 1.56 252.38` -- half a
+metre up, and the view's degree taken off the heading -- and the camera was told
+`pbh 1.56 -15.51 252.38`, pitch then the bank *negated* then the heading, and
+reported exactly that (a heading of 252.38 comes back as the equivalent
+`-107.62` once it crosses 180°). `left.bin` mirrors it: CIGI roll `-18.87` is
+told to the camera as bank `18.87`. An earlier run, before the bank was negated,
+read the same sort of pose with the bank column equal to the eye's roll rather
+than its negative. The first sample read `0.0 0.0 1.00`,
+the definition's own fixed point, and every sample after the first `SetLLA`
+matched the eye, so the pose is the HOST's and not the definition's. The window
+reports `CAMERA_SYSTEM_ORIGIN_FIXED` after the switch. The read-back proves the
+call landed and nothing more -- it returns whatever number it was given, so it
+can never say which way the bank leans; that sign is settled by eye and lives in
+one place (`SimLinkMap.h`'s `toPdkPose()`). The picture was looked at the same
 time: the parked pose shows the apron, the hangars and the mountains — the world
 from the eye, with no hull across it — and a mid-sortie pose at 292 m shows the
 terrain below the horizon from the pilot's seat. What the bench cannot show is
 the dome itself — one monitor, no Immersive Display Pro — so the per-channel
 angles are proved only where the ViewGroup is, and a level aircraft cannot tell a
-2° bank from a 2° turn, which is why the sign and order of the View Control's
-angles are still on the rig list (`..\..\TODO.md`, 8).
+1° bank from a 1° turn, which is why the *order* of the View Control's angles is
+still on the rig list (`..\..\TODO.md`, 8).
 
 **What was deliberately not done.** An "AI-object camera" (the pilot's eye inside
 another aircraft) was the first choice and is not reachable from a PDK add-on:
@@ -474,7 +490,8 @@ that an Active (1) entity is rendered, which is the state the reference HOST
 really sends, while a disabled row, an all-zero pose, a Standby (0) or a
 Remove/Destroyed (2) entity all mean "take the object back out"; that the pose
 arrives in the PDK's units and order (degrees to radians, metres to feet, yaw in
-the heading slot); that a row caught mid-rewrite is never believed, read flat
+the heading slot, the bank as CIGI's roll **negated** -- Prepar3D's bank axis is
+the other way round); that a row caught mid-rewrite is never believed, read flat
 out with the IG rewriting underneath; and that a publisher with no add-on loaded
 does nothing, while a region left behind by a sim whose tick has stopped is not
 believed.
@@ -561,11 +578,25 @@ The bench answers the link; these need the sim, the HOST and the flight model:
   the deployed sorties. The physics-free object makes the refusal moot where it is
   used, but the rig still has to show that the custom category registers and its
   objects create and hold on v6 **Professional** (TODO.md item 8);
-* that the sign and order of roll/pitch/yaw are right -- a level aircraft proves
-  nothing, so roll it;
+* that a banked entity on the rig leans into its turn. The sign is settled --
+  CIGI's roll is right-bank-positive (read off the captures) and Prepar3D's bank
+  axis is the opposite, which the predecessor measured on the bench and which is
+  exactly what "the aircraft moves right but banks left" was showing when a
+  capture was replayed into this writer; `SimLinkMap.h`'s `toPdkPose()` negates
+  it. It was then looked at on the bench with the negation in (2026-09-29): a
+  replay of the banked pair, `right.bin` then `left.bin`, leans right through the
+  right turn and left through the left one. A sign is only ever proved by looking,
+  though, and the rig's own model is the one that has to look right;
 * how many entities the HOST actually drives, and whether the entities that are
   not the aircraft should exist as objects at all;
 * whether the dome keeps its per-channel angles with the camera driven -- the
   bench has one monitor and no Immersive Display Pro, so a ViewGroup's frustum
   offsets are only proved on the rig. The mechanism itself is proved here: the
-  sim reports the camera back on the commanded pose every frame.
+  sim reports the camera back on the commanded pose every frame;
+* the **order** of the View Control's three angles. Every capture carries one
+  non-zero value -- a degree (yaw 359) in the slot the CIGI View Control table
+  calls `yaw` -- and a level aircraft cannot tell a 1° bank from a 1° turn. It is
+  read as `roll`/`pitch`/`yaw`, the same order as the Entity Control, which is
+  what the one non-zero value reads as; the ICD's own View Control table may list
+  them yaw-first, and reading it the other way would bank the picture a degree
+  instead of turning it.

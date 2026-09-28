@@ -17,7 +17,7 @@
 <rect x="1180.00" y="760.00" width="1080.00" height="840.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
 <rect x="1240.00" y="820.00" width="960.00" height="72.50" rx="8" fill="#b2f2bb" stroke="#2f9e44" stroke-width="2"/>
 <rect x="1240.00" y="925.00" width="960.00" height="72.50" rx="8" fill="#ffec99" stroke="#f08c00" stroke-width="2"/>
-<rect x="1240.00" y="1030.00" width="960.00" height="55.00" rx="8" fill="#ffd8a8" stroke="#e8590c" stroke-width="2"/>
+<rect x="1240.00" y="1030.00" width="960.00" height="72.50" rx="8" fill="transparent" stroke="#1e1e1e" stroke-width="2"/>
 <polyline points="1720.00,898.50 1720.00,919.00" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/>
 <polyline points="1720.00,1003.50 1720.00,1024.00" fill="none" stroke="#1e1e1e" stroke-width="2" marker-end="url(#head)"/>
 <rect x="2300.00" y="760.00" width="1080.00" height="840.00" rx="8" fill="transparent" stroke="#868e96" stroke-width="1" stroke-dasharray="8 8"/>
@@ -36,8 +36,7 @@
 <tspan x="60.00" dy="4.25">CigiStarter - a CIGI 3.3 Image Generator</tspan>
 </text>
 <text x="60.00" y="86.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" text-anchor="start" dominant-baseline="hanging">
-<tspan x="60.00" dy="2.00">A minimal replacement for the Master IG PC: wakes the HOST with SOF, answers its HAT/HOT requests from the terrain Prepar3D will actually fly the aircraft onto (the PdkTerrainProbe add-on), falls back to an offline SRTM database and then to the sim over FSUIPC, and fans the HOST's downstream stream out to the extra IG PCs. CIGI 3.3, UDP, little-endian. Single Win32 binary, runs unelevated, streams from launch with the</tspan>
-<tspan x="60.00" dy="20.00">window minimised.</tspan>
+<tspan x="60.00" dy="2.00">A minimal replacement for the Master IG PC: wakes the HOST with SOF, answers its HAT/HOT requests from the terrain Prepar3D will actually fly the aircraft onto (the PdkTerrainProbe add-on) and falls back to an offline SRTM database, and fans the HOST's downstream stream out to the extra IG PCs. CIGI 3.3, UDP, little-endian. Single Win32 binary, runs unelevated, streams from launch with the window minimised.</tspan>
 </text>
 <text x="74.00" y="160.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
 <tspan x="74.00" dy="2.38">1 - The link: HOST, IG, extra IG PCs</tspan>
@@ -159,7 +158,7 @@
 <tspan x="120.00" dy="16.88">about twice the replies the HOST had frames to give.</tspan>
 </text>
 <text x="1194.00" y="770.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
-<tspan x="1194.00" dy="2.38">4 - HAT/HOT answering: three sources, one anchor</tspan>
+<tspan x="1194.00" dy="2.38">4 - HAT/HOT answering: two sources, one anchor</tspan>
 </text>
 <text x="1720.00" y="830.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" dominant-baseline="hanging">
 <tspan x="1720.00" dy="1.75">1 - Prepar3D's own terrain, through PdkTerrainProbe.dll</tspan>
@@ -172,8 +171,9 @@
 <tspan x="1720.00" dy="17.50">scenery</tspan>
 </text>
 <text x="1720.00" y="1040.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" dominant-baseline="hanging">
-<tspan x="1720.00" dy="1.75">3 - the local Prepar3D via FSUIPC 0x0020</tspan>
-<tspan x="1720.00" dy="17.50">the ground under the sim's own aircraft: one point only, so it can stand in only for a request where that aircraft is</tspan>
+<tspan x="1720.00" dy="1.75">and there is no third source</tspan>
+<tspan x="1720.00" dy="17.50">if neither can cover the point the answer is Valid = 0 and the HOST ignores the packet - never a fabricated 0 m, which it would follow into the</tspan>
+<tspan x="1720.00" dy="17.50">ground</tspan>
 </text>
 <text x="1240.00" y="1150.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
 <tspan x="1240.00" dy="1.56">HOT   = the height from the first source that can answer</tspan>
@@ -186,12 +186,11 @@
 <tspan x="1240.00" dy="15.62">        anchor, or a point no source can reach</tspan>
 <tspan x="1240.00" dy="15.62">updatePeriod = 0 -&gt; answered once;  n -&gt; re-answered every n-th frame until a</tspan>
 <tspan x="1240.00" dy="15.62">        fresh request with the same HAT/HOT ID replaces it (answered at once)</tspan>
-<tspan x="1240.00" dy="15.62">the geodetic FSUIPC fallback is accepted only within 500 m of the aircraft</tspan>
 </text>
 <text x="1240.00" y="1330.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12.5" text-anchor="start" dominant-baseline="hanging">
 <tspan x="1240.00" dy="1.56">ANCHOR   entity-relative answers are anchored to the HOST's own Entity Control</tspan>
 <tspan x="1240.00" dy="15.62">         (entity 0) - the pose its flight model is commanding - not to the sim's</tspan>
-<tspan x="1240.00" dy="15.62">         FSUIPC read-back. All-zero and off-globe poses are refused, not adopted.</tspan>
+<tspan x="1240.00" dy="15.62">         own aircraft. All-zero and off-globe poses are refused, not adopted.</tspan>
 <tspan x="1240.00" dy="15.62">         The six probe offsets are identical wherever the aircraft is, so a stuck</tspan>
 <tspan x="1240.00" dy="15.62">         anchor is invisible on the wire: on the rig it parked the aircraft on the</tspan>
 <tspan x="1240.00" dy="15.62">         departure ground, a ~550 ft step at the destination.</tspan>
@@ -325,8 +324,8 @@
 </text>
 <text x="1240.00" y="2120.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
 <tspan x="1240.00" dy="1.62">Refreshes 4x/s. START / STOP start and stop the SOF stream (the button that would be a no-op is the disabled one). Answer HAT/HOT also starts and</tspan>
-<tspan x="1240.00" dy="16.25">stops the FSUIPC poller: off means no FSUIPC calls at all. Pace SOF to HOST replies is the flow-control switch. SOF rate is 1..100000 Hz, applied to</tspan>
-<tspan x="1240.00" dy="16.25">the transmit loop on the next frame with Apply or Enter, so the stream retunes while it runs; --fps only seeds it.</tspan>
+<tspan x="1240.00" dy="16.25">stops the sim's terrain probe: off means the sim is not asked at all. Pace SOF to HOST replies is the flow-control switch. SOF rate is 1..100000 Hz,</tspan>
+<tspan x="1240.00" dy="16.25">applied to the transmit loop on the next frame with Apply or Enter, so the stream retunes while it runs; --fps only seeds it.</tspan>
 </text>
 <text x="1240.00" y="2215.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
 <tspan x="1240.00" dy="1.62">EXIT is the only way out: SC_CLOSE is deleted from the system menu (the X is drawn greyed out), WM_CLOSE is ignored, and with no console Ctrl+C</tspan>
@@ -335,7 +334,7 @@
 </text>
 <text x="1240.00" y="2310.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
 <tspan x="1240.00" dy="1.62">Terrain lines: HAT/HOT names the source in force; TerrainDB the fallback behind it and its size; Probe the tick that is answering; Anchor the HOST's</tspan>
-<tspan x="1240.00" dy="16.25">pose; Terrain the sim's own aircraft over FSUIPC - the ground under it and its altitude in feet, the way Prepar3D shows them.</tspan>
+<tspan x="1240.00" dy="16.25">pose; Terrain the ground the answers use at that anchor, in feet.</tspan>
 </text>
 <text x="2314.00" y="1660.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
 <tspan x="2314.00" dy="2.38">8 - Fan-out to the extra IG PCs</tspan>
@@ -435,7 +434,7 @@
 </text>
 <text x="1240.00" y="2890.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" dominant-baseline="hanging">
 <tspan x="1240.00" dy="1.62">Calibration: SRTM heights are orthometric (EGM96) and the sim's datum is its own; the two matched to ~2 m at Juanda in testing. --terrain-offset &lt;m&gt;</tspan>
-<tspan x="1240.00" dy="16.25">shifts every database height if a site shows a constant bias - the database only, never FSUIPC and never a sim height.</tspan>
+<tspan x="1240.00" dy="16.25">shifts every database height if a site shows a constant bias - the database only, never a sim height.</tspan>
 </text>
 <text x="2314.00" y="2510.00" fill="#1e1e1e" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="19" text-anchor="start" dominant-baseline="hanging">
 <tspan x="2314.00" dy="2.38">11 - Build, files and bench tooling</tspan>
@@ -448,17 +447,14 @@
 <tspan x="2360.00" dy="15.00">  with a plain int main(): no console, so --help and startup errors use</tspan>
 <tspan x="2360.00" dy="15.00">  a message box</tspan>
 <tspan x="2360.00" dy="15.00">  static CRT (/MT): a fresh IG PC needs no Visual C++ redistributable</tspan>
-<tspan x="2360.00" dy="15.00">  no /GL: FSUIPCuser64.lib is an LTCG library built with MSVC v140</tspan>
-<tspan x="2360.00" dy="15.00">  (WholeProgramOptimization=false; expect a benign LNK4098)</tspan>
 <tspan x="2360.00" dy="15.00">  runs unelevated (asInvoker) - it starts from a logon path, where a</tspan>
 <tspan x="2360.00" dy="15.00">  UAC prompt would block an unattended IG</tspan>
-<tspan x="2360.00" dy="15.00">  vendored SDKs: external\UIPC64_SDK_C_version2,</tspan>
-<tspan x="2360.00" dy="15.00">  external\npcap-sdk-1.16, external\Prepar3D-SDK\inc\PDK</tspan>
-<tspan x="2360.00" dy="15.00">  (/p:FsuipcSdkDir, /p:NpcapSdkDir, /p:P3DSdkDir)</tspan>
+<tspan x="2360.00" dy="15.00">  vendored SDKs: external\npcap-sdk-1.16,</tspan>
+<tspan x="2360.00" dy="15.00">  external\Prepar3D-SDK\inc\PDK</tspan>
+<tspan x="2360.00" dy="15.00">  (/p:NpcapSdkDir, /p:P3DSdkDir)</tspan>
 </text>
 <text x="2360.00" y="2790.00" fill="#1e1e1e" font-family="'Cascadia Code', Consolas, monospace" font-size="12" text-anchor="start" dominant-baseline="hanging">
 <tspan x="2360.00" dy="1.50">FILES   main.cpp  SofPacer.h  Gui.h/.cpp  cigi.h/.cpp</tspan>
-<tspan x="2360.00" dy="15.00">        TerrainSource.h/.cpp   the FSUIPC poller thread</tspan>
 <tspan x="2360.00" dy="15.00">        TerrainDb.h/.cpp       the SRTM .hgt reader</tspan>
 <tspan x="2360.00" dy="15.00">        TerrainProbe.h/.cpp    this side of the shared-memory link</tspan>
 <tspan x="2360.00" dy="15.00">        TerrainProbeIpc.h      the pinned contract</tspan>

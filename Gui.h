@@ -9,8 +9,8 @@
 //
 //  What the operator can change at runtime
 //    - START / STOP of the SOF stream,
-//    - whether HAT/HOT requests are answered (which starts/stops the FSUIPC
-//      terrain poller along with it),
+//    - whether HAT/HOT requests are answered (which starts/stops the terrain
+//      probe along with it),
 //    - whether the SOF stream is paced to the HOST's replies (flow control),
 //    - the SOF transmit rate, typed as a whole number of Hz.
 //    The command-line options only seed these controls; whatever the window
@@ -58,22 +58,18 @@ struct Status {
     int      targetFps         = 150;    // rate the transmit loop is pacing to
     uint8_t  hostIgMode        = 0;      // mode the HOST last commanded
     uint32_t lastHostFrame     = 0;      // HOST frame counter
-    bool     terrainConnected  = false;  // FSUIPC link up?
-    double   groundAltMeters   = 0.0;    // terrain under the aircraft
-    double   aircraftAltMeters = 0.0;    // aircraft altitude
     // Where entity-relative HAT/HOT requests are anchored: the HOST's own
-    // Entity Control (the aircraft its flight model is flying) when one has been
-    // seen, otherwise the sim link's position. The requests carry no position of
-    // their own, so an anchor stuck over the wrong airfield cannot be seen on
-    // the wire -- only here, which is why it is shown.
-    bool     anchorFromHost    = false;  // true: HOST Entity Control, false: FSUIPC
+    // Entity Control, the pose its flight model is flying. The requests carry no
+    // position of their own, so an anchor stuck over the wrong airfield cannot be
+    // seen on the wire -- only here, which is why it is shown. False until the
+    // first Entity Control arrives, and those requests go unanswered until then.
+    bool     anchorFromHost    = false;  // has the HOST's Entity Control been seen?
     double   anchorLatDeg      = 0.0;
     double   anchorLonDeg      = 0.0;
     double   anchorAltMeters   = 0.0;
     // The ground under the anchored aircraft, from the same source chain the
-    // HAT/HOT answers take (TerrainProbe / TerrainDb / FSUIPC). This is the
-    // terrain the answers actually use, so it follows a reposition even when the
-    // sim's own ground model -- `groundAltMeters` below -- has frozen.
+    // HAT/HOT answers take (TerrainProbe, then TerrainDb). This is the terrain
+    // the answers actually use, so it follows a reposition.
     bool     anchorGroundValid  = false;
     double   anchorGroundMeters = 0.0;
     // What the sim's own surface query said about that ground, when the probe
@@ -88,7 +84,7 @@ struct Status {
     int      groundCategory     = -1;
     // The offline terrain database the HAT/HOT answer falls back to (TerrainDb.h)
     // when the sim's own terrain probe is not answering. Optional: no tiles means
-    // the answer goes to the FSUIPC terrain instead.
+    // nothing to answer from when the probe is missing too.
     int         terrainTiles  = 0;       // ".hgt" tiles indexed
     int         terrainLoaded = 0;       // tiles read into memory
     uint64_t    terrainBytes  = 0;       // sample data held

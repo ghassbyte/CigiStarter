@@ -299,8 +299,10 @@ int main(int /*argc*/, char** /*argv*/) {
               "altitude becomes feet");
         check(approx(p.pitchRad, kPitch * d2r) &&
               approx(p.headingRad, kYaw * d2r) &&
-              approx(p.bankRad, kRoll * d2r),
-              "pitch/heading/bank go to the PDK's slots -- yaw is the heading, roll the bank");
+              approx(p.bankRad, -kRoll * d2r),
+              "pitch/heading/bank go to the PDK's slots -- yaw is the heading, and the "
+              "bank is CIGI's roll negated, because Prepar3D's bank axis is the other "
+              "way round (measured by eye, not by a read-back; SimLinkMap.h says how)");
     }
 
     // -- 3b. The read-back: the pose the sim is actually holding --------------
@@ -391,7 +393,7 @@ int main(int /*argc*/, char** /*argv*/) {
     {
         // The bytes one of the captures carries, written out by hand rather than
         // read from a file: 10 20 | 00 00 | 01 | 3F | 00 00 | 2.8 | 0.05 | -0.5
-        // | 0 | 0 | 358.
+        // | 0 | 0 | 359.
         uint8_t msg[cigi::kViewControlSize];
         std::memset(msg, 0, sizeof(msg));
         msg[0] = static_cast<uint8_t>(cigi::MsgViewControl);
@@ -405,7 +407,7 @@ int main(int /*argc*/, char** /*argv*/) {
         putF32(msg + 16, -0.5f);
         putF32(msg + 20,  0.0f);
         putF32(msg + 24,  0.0f);
-        putF32(msg + 28,  358.0f);
+        putF32(msg + 28,  359.0f);
 
         cigi::ViewControl v;
         check(cigi::parseViewControl(msg, sizeof(msg), v),
@@ -417,7 +419,7 @@ int main(int /*argc*/, char** /*argv*/) {
         check(std::fabs(v.xOffset - 2.8) < 1e-6 && std::fabs(v.yOffset - 0.05) < 1e-6 &&
               std::fabs(v.zOffset + 0.5) < 1e-6,
               "the offsets are the floats at 8/12/16");
-        check(approx(v.yawDeg, 358.0) && v.rollDeg == 0.0f && v.pitchDeg == 0.0f,
+        check(approx(v.yawDeg, 359.0) && v.rollDeg == 0.0f && v.pitchDeg == 0.0f,
               "the angles are the floats at 20/24/28");
         check(!cigi::parseViewControl(msg, sizeof(msg) - 1, v),
               "a truncated view is refused");
@@ -432,7 +434,7 @@ int main(int /*argc*/, char** /*argv*/) {
         check(simlink::readViewRow(fake.shm()->view, row) && row.valid != 0,
               "publishing a view puts a valid row in the region");
         check(row.entityId == v.entityId && approx(row.zOffset, -0.5) &&
-              approx(row.yawDeg, 358.0),
+              approx(row.yawDeg, 359.0),
               "with the fields the camera reads");
         check(simlink::health().viewCarried,
               "and the writer reports the eye as carried");
@@ -451,7 +453,7 @@ int main(int /*argc*/, char** /*argv*/) {
               "and 5 cm -- the lateral offset -- to the east");
         check(approx(eye.altMeters, 100.5),
               "and half a metre up: Z is out the bottom in CIGI's body frame");
-        check(approx(eye.yawDeg, 358.0), "turned two degrees left of the nose");
+        check(approx(eye.yawDeg, 359.0), "turned a degree left of the nose");
 
         e.yawDeg = 90.0;   // pointing east
         eye = simlink::viewEyePose(e, row);
@@ -460,9 +462,9 @@ int main(int /*argc*/, char** /*argv*/) {
         check(approx(eye.lonDeg, 2.8 / simlink::kMetersPerDegLat),
               "so it is the longitude that moves");
 
-        e.yawDeg = 359.0;
+        e.yawDeg = 1.0;   // a degree east of north
         eye = simlink::viewEyePose(e, row);
-        check(approx(eye.yawDeg, 357.0),
+        check(approx(eye.yawDeg, 0.0),
               "a view is relative to the entity, and the heading wraps");
 
         // The invariant that catches a wrong rotation without a reference

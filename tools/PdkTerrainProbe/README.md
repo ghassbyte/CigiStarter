@@ -8,12 +8,12 @@ offline copy of the world.
 
 The HOST drives its aircraft altitude from the Height Of Terrain the IG reports,
 so a wrong or stale HOT flies the aircraft into the ground. CigiStarter had two
-ways to get it, and both are approximations:
+ways to get it before this add-on, and both are approximations:
 
 | Source | Problem |
 |---|---|
 | `TerrainDb` (offline SRTM `.hgt`) | Cannot know a runway's flattening or any changed scenery, and has to be re-baked whenever the scenery changes. At Atang Senjaya it reads ~175.5 m where the reference IG reported ~178 m. |
-| `TerrainSource` (FSUIPC `0x0020`) | Reports the ground under the local aircraft and nothing else, so it can stand in only when the request is where the sim's own aircraft is. It **froze** while the program that drives the aircraft held the sim in slew — the rig now runs that program paused, with slew off, so it follows again. |
+| `TerrainSource` (FSUIPC `0x0020`) | Reported the ground under the local aircraft and nothing else, so it could stand in only when the request was where the sim's own aircraft was. It **froze** while the program that drives the aircraft held the sim in slew. That path has since been **removed** from CigiStarter: the local sim's own aircraft is no longer flown (the HOST's entities are separate objects), so a reading taken from it described a parked aircraft. `TerrainDb` is the only fallback left. |
 
 Prepar3D will answer the question directly, from the terrain it is about to put
 the aircraft on. The PDK exposes that as `ISurfaceQueryManagerV400`, and it is a
@@ -177,7 +177,8 @@ as before:
   may be started in either order.
 * No add-on, or no tick yet, or a tick that has stopped (the sim exited and left
   a mapping behind) → the probe reports itself unavailable and CigiStarter falls
-  back to `TerrainDb`, and then to FSUIPC. A **paused** sim is not one of those
+  back to `TerrainDb`, and then to `Valid = 0`. A **paused** sim is not one of
+  those
   cases: Prepar3D's own ticks stop while it is paused, and the add-on's own
   thread keeps the table answering underneath them.
 * `--terrain-offset` is **not** applied to a height that came from the sim. That
@@ -278,8 +279,8 @@ Three places report it, and they all read the same layout:
 * CigiStarter's window grows a `Probe :` line under `HAT/HOT` whenever there is
   something to say — when the probe is not the source (naming the reason and the
   counters), and also when it *is* the source but answering from its own thread
-  because Prepar3D has stopped ticking (the pause). Previously the window only
-  ever said the answer had fallen back to FSUIPC.
+  because Prepar3D has stopped ticking (the pause). Previously the window could
+  only say that the answer had fallen back, never why.
 * `TerrainBaker probe` (and `requireProbe`, the gate the other modes pass) turns
   the old one-line `the probe is loaded but its simulation tick is not running`
   into the evidence behind it, and prints a healthy baseline on a good run.

@@ -28,11 +28,6 @@
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
-    <!-- MUST stay false: FSUIPCuser64.lib is a prebuilt MSVC v140 LTCG
-         library. Building this project with /GL and then linking it fails with
-         C1047 / LNK1257 ("created by a different version of the compiler").
-         Without /GL the linker handles the mixed LTCG inputs fine. -->
-    <WholeProgramOptimization>false</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -45,12 +40,9 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros">
-    <!-- Both SDKs are vendored in external\ so this folder builds on its own.
+    <!-- The one SDK is vendored in external\ so this folder builds on its own.
          Override on the command line to build against another copy, e.g.
-           msbuild ... /p:FsuipcSdkDir=C:\path\to\UIPC64_SDK_C_version2 -->
-    <!-- FSUIPC: the prebuilt v140 library, so this program and CigiP3dBridge
-         always agree on the wire format whatever built them. -->
-    <FsuipcSdkDir Condition="'$(FsuipcSdkDir)'==''">$(ProjectDir)external\UIPC64_SDK_C_version2</FsuipcSdkDir>
+           msbuild ... /p:NpcapSdkDir=C:\path\to\npcap-sdk-1.16 -->
     <!-- Npcap headers, for the client.txt fan-out (Relay.cpp). Only the
          headers are needed: wpcap.dll is loaded with LoadLibrary() at run
          time, so this program still starts on an IG PC that has no Npcap. -->
@@ -66,7 +58,7 @@
       <ConformanceMode>true</ConformanceMode>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(FsuipcSdkDir);$(NpcapSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NpcapSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <!-- Windowed program: the operator window is the only interface. The
@@ -76,7 +68,7 @@
       <SubSystem>Windows</SubSystem>
       <EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;iphlpapi.lib;winmm.lib;user32.lib;$(FsuipcSdkDir)\FSUIPCuser64.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;iphlpapi.lib;winmm.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- Unelevated (asInvoker): a deployment starts this from a logon or
            startup path, where a UAC prompt would block an unattended IG.
            Nothing here needs administrator on a normal install; the fan-out
@@ -95,7 +87,7 @@
       <ConformanceMode>true</ConformanceMode>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(FsuipcSdkDir);$(NpcapSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(NpcapSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <!-- See the Debug configuration: windowed subsystem, main() entry. -->
@@ -104,7 +96,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;iphlpapi.lib;winmm.lib;user32.lib;$(FsuipcSdkDir)\FSUIPCuser64.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;iphlpapi.lib;winmm.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- See the Debug configuration: asInvoker, not requireAdministrator. -->
       <UACExecutionLevel>AsInvoker</UACExecutionLevel>
       <UACUIAccess>false</UACUIAccess>
@@ -118,7 +110,6 @@
     <ClCompile Include="SimLink.cpp" />
     <ClCompile Include="TerrainDb.cpp" />
     <ClCompile Include="TerrainProbe.cpp" />
-    <ClCompile Include="TerrainSource.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cigi.h" />
@@ -131,7 +122,6 @@
     <ClInclude Include="TerrainDb.h" />
     <ClInclude Include="TerrainProbe.h" />
     <ClInclude Include="TerrainProbeIpc.h" />
-    <ClInclude Include="TerrainSource.h" />
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="app.manifest" />

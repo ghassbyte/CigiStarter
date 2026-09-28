@@ -5,23 +5,22 @@
 //    The HOST drives its aircraft altitude from the Height Of Terrain (HOT)
 //    the IG reports, so a wrong or stale HOT flies the aircraft into the ground.
 //    The offline SRTM database (TerrainDb.h) is a copy of the world that has to
-//    be re-baked whenever the scenery changes, and the FSUIPC reading
-//    (TerrainSource.h) only ever describes the ground under the sim's own
-//    aircraft.  Prepar3D will answer the same question directly, from the
-//    terrain it is actually about to place the aircraft on, if a small PDK
-//    add-on asks it -- see TerrainProbeIpc.h and tools\PdkTerrainProbe.
+//    be re-baked whenever the scenery changes.  Prepar3D will answer the same
+//    question directly, from the terrain it is actually about to place the
+//    aircraft on, if a small PDK add-on asks it -- see TerrainProbeIpc.h and
+//    tools\PdkTerrainProbe.
 //
 //  What it does
 //    Talks to PdkTerrainProbe.dll, an add-on loaded into the local Prepar3D,
 //    through a block of shared memory.  CigiStarter writes the points it wants
 //    looked up; the add-on asks the sim on its next simulation tick and writes
-//    the answers back.  Nothing here blocks on the sim, and there is no FSUIPC
-//    round trip in the HAT/HOT path.
+//    the answers back.  Nothing here blocks on the sim.
 //
 //  Failure behaviour
 //    If Prepar3D is not running, or the add-on is not installed, or the add-on
 //    has not had a simulation tick yet, the module reports itself unavailable
-//    and callers fall through to the database and then to FSUIPC.  The mapping
+//    and callers fall through to the database, and then to no answer at all.
+//    The mapping
 //    is opened lazily and re-tried, so CigiStarter may start before the sim.
 //
 //  Note on --terrain-offset
