@@ -4,9 +4,9 @@ What is still open, in the order it should be picked up. `README.md` is the
 manual, `agents.md` is the network view, and `tools\*\README.md` is the detail on
 each tool — this file is only the work that is not finished.
 
-Last updated 2026-09-28, branch `feature/pdk-simlink`. Items 1 (the read-back)
-and 2 (the physics-free object) are done and measured; the changes are in the
-working tree, uncommitted.
+Last updated 2026-09-29, branch `feature/pdk-simlink`. Items 1 (the read-back)
+and 2 (the physics-free object) are done and measured; item 1's terrain figures
+were re-measured on 2026-09-29 and corrected (see 1).
 
 ---
 
@@ -19,10 +19,11 @@ object per driven entity and move it to the pose the HOST sent: 28/28 checks,
 
 **Items 1 and 2 are answered** (2026-09-28):
 
-* against a stock title (the AS332) the sim holds a written pose to ~2 cm and
-  ~0.1° and does not fight the writer, but it **clamps the object to its own
-  ground** — a commanded altitude below the terrain is held on the surface, which
-  is what the 277 m "drift" on `gnd-fly-bank.bin` was (item 1, see 1 below);
+* against a stock title (the AS332) the sim holds a written pose to a few
+  centimetres in the air and does not fight the writer; it **refuses a pose far
+  below the ground**, holding the object above it (item 1, see 1 below).
+  `gnd-fly-bank.bin` never commands below the ground, so it shows no refusal and
+  ~0.2 m of drift, not the 277 m once reported;
 * against the **physics-free object** (`CigiStarter.Entity`) the pose is held
   exactly — 0.00 m / 0.00° — an altitude below the sim's terrain is where the
   command puts it, and the sim is never paused or in slew (item 2, see 2 below).
@@ -50,18 +51,40 @@ own positions:
 | a fixed pose at 1000 m | held exactly, 0.02 m, for as long as it is fed and after |
 | a 30 m/s climb, 1000 → 1300 m | held exactly, 0.02 m, the whole way |
 | roll 30°, pitch 10°, yaw 180/359/270° | held to <0.1°, wrap included |
-| **any altitude below the sim's ground** | **clamped to the terrain** |
+| **a pose far below the sim's ground** | **refused — the object is held above it** |
 
-The last row is the finding that mattered. At entity 0's position the sim's
-ground is 456.4 m; at entity 3's it is 210.9 m. The capture commands 178.9 m and
-−0.3 m respectively, so both objects sat on the ground and the run reported
-277 m / 211 m of "drift" — which is not the flight model moving the object, it is
-the sim refusing to put it underground.
+The last row is the finding that mattered, and it was re-measured on 2026-09-29
+because the numbers first written here did not hold up. What the bench actually
+shows:
+
+* **The capture never triggers it.** `gnd-fly-bank.bin` commands entity 0 between
+  178.87 m and 913.3 m and entity 3 at −0.34 m. P3D's own terrain under entity 0
+  is 174.3 m and under entity 3 is 0.0 m (water), and over entity 0's whole flight
+  track it stays below 175.5 m — so entity 0 is always a few metres *above* the
+  ground and entity 3 only 0.34 m under the water surface, which the stock object
+  followed. Replaying the **whole** capture, worst drift was **0.19 m / 0.24°**:
+  no refusal, and none of the 277 m / 211 m once reported.
+* **The refusal is real, but it is not the surface.** Publishing a below-ground
+  pose directly through the SimLink region, the stock object refuses a command
+  well below the ground: over land (terrain 174.3 m) commands of 50–160 m were
+  held at **176.6 m**, and over water (0.0 m) commands of −10 to −50 m were held
+  at **+26.7 m**. The hold altitude is a property of the *place*, not the terrain
+  height (moving one object to the other's position moved the hold with it), and
+  a command only a little below the ground is followed (land 168 m → 168.2 m;
+  water −7 m → −6.8 m).
+
+The terrain figures first recorded here — 456.4 m and 210.9 m — were wrong: they
+are not the terrain under the two entities. (Terrain at entity 0's *latitude*
+with entity 3's *longitude*, ~14 km east, is 467.9 m, which is likely where the
+reading was taken.) The HOST-vs-P3D datum gap at these points is a few metres
+(the HOST flies entity 0 at 178.87 m where P3D's ground is 174.3 m), nowhere near
+the 277 m the notes attributed to a refusal.
 
 **Consequence:** the native flight model does not drift a pose it is given, so
-item 2 is no longer forced by drift. It is still wanted for the ground clamp (a
-physics-free object can be placed anywhere) and for the transients a fast replay
-shows when a write has not been applied before the next read-back.
+item 2 is no longer forced by drift. It is still wanted because a stock object
+refuses a pose far below the ground where a physics-free one is placed anywhere,
+and for the transients a fast replay shows when a write has not been applied
+before the next read-back.
 
 ## 2. Replace the stock object with a custom `ISimObject` (no flight model) — **done, 2026-09-28**
 
@@ -81,13 +104,13 @@ bits — 29 (`kPhysicsFree`, asked of each object's own category with
 `GetCategoryId`, not assumed from the title) and 30 (`kModePauseOrSlew`).
 
 Measured on the bench with `title=CigiStarter.Entity`, replaying
-`gnd-fly-bank.bin` — the same capture that clamped the stock AS332 by 277 m:
+`gnd-fly-bank.bin`:
 
 | Command | Result |
 |---|---|
 | every pose on the capture | held **exactly**: 0.00 m / 0.00° over 4330 comparisons |
-| entity 0 commanded 178.9 m (terrain under it 456.4 m) | held at 178.9 m — **below the sim's ground** |
-| entity 3 commanded −0.3 m (terrain under it 210.9 m) | held at −0.3 m — **below the sim's ground** |
+| entity 0 commanded 178.9 m (terrain under it 174.3 m) | held at 178.9 m |
+| entity 3 commanded −0.3 m (water surface 0.0 m) | held at −0.3 m — **below the surface** |
 | paused or slewed? | never — `diag` bit 30 stayed clear |
 
 The e2e test now **asserts** zero drift when `kPhysicsFree` is set; for a stock
@@ -151,12 +174,33 @@ fan-out leaves them looking exactly like the HOST's own stream.
 ## 7. Smaller, in any order
 
 * **Per-entity-type titles.** The HOST sends CIGI EntityType 1 for entity 0 and 2
-  for entity 3; one title currently covers every entity.
-* **Camera.** One owner only: per-channel angles stay in each PC's
-  `viewgroup.xml`; CIGI View Control is mapped to a camera only if the HOST
-  actually moves views.
+  for entity 3; one `title` currently covers every entity that is *drawn*. The
+  one exception is the entity the camera rides, which has its own container
+  (`own_ship_title`) because it must not be drawn at all. What is left is a map
+  from EntityType to title for the visible entities, which is content, not link.
+* **Camera.** Done on the bench: `camera=<entity id>` puts every 3D view onto a
+  Fixed-origin camera definition and applies that entity's pose each frame, and
+  the sim reads the camera back on the commanded pose (`PdkSimLink/README.md`,
+  *The camera*). The view's own aircraft is created from `own_ship_title` — a
+  model-less container — so the eye is not inside a drawn model; measured
+  2026-09-29 against an entities' container that had the AS332's body junctioned
+  into it, where the same parked pose showed the inside of a fuselage before that
+  and the airfield after. What is left is the dome — the per-channel angles in
+  each PC's `viewgroup.xml` are only provable on the rig — and deciding whether
+  CIGI View Control should place the eye too. The captures' View Control is one
+  static definition repeated in every frame (`X 2.8`, `Y 0.05`, `Z -0.5`,
+  roll/pitch 0, yaw 358, attached to entity 0), so it could be honoured — today
+  the eye sits on the Entity Control row's own reference point, which for the
+  AS332 is mid-cabin rather than at the pilot's eye.
 * **Converter gaps.** Component Control (id 4) is not field-mapped; `DATE` is left
   untranslated because the captures' date fields are invalid.
+* **A CigiStarter that is killed, not exited, leaves its objects in the sim.**
+  The rows stay enabled and nothing in the region says the IG is gone — the
+  heartbeat there is the add-on's, not the IG's — so the last pose of every entity
+  stays on screen until Prepar3D is restarted. Only the EXIT button retires the
+  rows. The contract has room for an IG-side heartbeat (`kVersion` guards it), and
+  the add-on taking a stale one as "retire everything" is the honest fix; on the
+  bench it shows up as a second e2e run finding the objects already there.
 * **Wire the contract tests into the build** (optional; today they are scripts,
   deliberately not in `CigiStarter.sln`).
 
@@ -178,8 +222,17 @@ Everything the local harness cannot reach:
 
 * **Item 3: which light path?** (FSUIPC / PDK / a bridging gauge.) Nothing has
   been built for this yet.
-* Do the entities that are *not* the aircraft need to exist as objects at all,
-  and which entity should the camera follow, if any?
+* Do the entities that are *not* the aircraft need to exist as objects at all?
+  (The camera is answered: it rides entity 0 unless `camera=` names another.)
+* **Where the eye sits in the aircraft.** The camera is placed on the entity's
+  own reference point — CIGI's Entity Control position — which for the AS332 is
+  mid-cabin, not the pilot's eye. The HOST also sends a View Control every frame
+  with an eyepoint offset from the entity (`X 2.8`, `Y 0.05`, `Z -0.5`, level,
+  yaw 358) and it is not applied. Honouring it is the protocol-correct thing to
+  do, and it is what would put the eye in the cockpit rather than the cabin — but
+  it is only visible at all if the own ship is drawn, and today the entity the
+  view rides is deliberately model-less so that the picture is the world. Say the
+  word if you want the own aircraft's airframe framed around the view instead.
 
 ---
 
@@ -226,7 +279,7 @@ Read these before changing anything near them.
 | **Object lifetime in the writer** | `retire()` must take the id, forget the pointer, `Release()`, and *then* `RemoveObject(id)`. The other order corrupts the sim's heap and Prepar3D dies ~a minute later in `ucrtbase.dll` (`0xc0000409`), reading as `created 2, removed 0` |
 | **A loaded DLL cannot be replaced** | Deploy, then restart Prepar3D. The e2e test's hash check enforces it |
 | **Pause and slew kill the rotor** | Proven on the bench. A live rotor needs an unpaused, non-slew sim |
-| **The sim clamps an object to its ground** | A stock sim object will not go below the terrain under it, so a commanded altitude below the sim's own elevation is held on the surface instead. On `gnd-fly-bank.bin` that read as 277 m of "drift" from the writer when the object was simply standing on ground 456 m higher than the command. The read-back reports it; compare the commanded altitude before blaming the object. The physics-free object (item 2) is placed below it — that is what it is for |
+| **A stock object refuses a pose below its ground** | A stock sim object is not placed far below the terrain under it: the pose is refused and the object is held above it. Measured directly, the hold altitude is a property of the *place*, not the surface — 176.6 m over 174.3 m terrain, and +26.7 m over water at 0.0 m — and a command only a little below the ground is followed. It is not what earlier notes called a "277 m clamp on `gnd-fly-bank.bin`": that capture never commands below the ground and shows ~0.2 m of drift. The read-back reports any refusal; compare the commanded altitude before blaming the object. The physics-free object (item 2) is placed below it — that is what it is for |
 | **A container's `CategoryId` must match the DLL's GUID** | `CigiEntity.h` registers one GUID and `SimObjects\CigiEntity\sim.cfg` names it as `[General] CategoryId`. Ship the two out of step and every `CreateObject()` fails: the object is never ours, and the e2e test shows it as create failures rather than as a wrong pose |
 | **SimConnect cannot write `L:` vars** | The AS332's lights live in `L:switch ...` and the panel's own servo reverts everything else |
 | **Only `ROTOR RPM PCT:1` is writable** | The other rotor variables are read-only |

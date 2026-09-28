@@ -728,17 +728,33 @@ the sim is left to be a sim — it just gets told where the entities are.
   simulation and has no ground contact, so the pose written is the pose that
   stays, a command below the sim's terrain is where the object goes, and the sim
   is never paused or slewed to hold it. A stock container title still works and
-  still creates the sim's own object — its own flight model and its ground clamp —
-  which is the like-for-like comparison the bench uses. The add-on also reads each
-  object's pose back (`GetPosition`) and publishes it, so the sim can be seen
-  *holding* the pose rather than merely accepting it.
+  still creates the sim's own object — its own flight model, which holds the pose
+  it is given but refuses one far below the ground under it and holds the object
+  above it instead — which is the like-for-like comparison the bench uses. The
+  add-on also reads each object's pose back (`GetPosition`) and publishes it, so
+  the sim can be seen *holding* the pose rather than merely accepting it.
 - **This cut is pose only.** Time of day, weather and effects are the next things
   the same channel will carry. The object ships with no model, so nothing is
   drawn until its container is given one — a content decision per entity type, not
-  part of the link.
-- **Camera.** The per-channel angles of an immersive dome stay where they are, in
-  each PC's own `viewgroup.xml`. Attaching the cockpit view to a HOST entity is a
-  separate decision and a separate call, and does not change the contract.
+  part of the link. The one entity that is never drawn, whatever its container is
+  given, is the one the camera rides: the eye is inside it.
+- **Camera.** Driving the link is not the same as moving the picture: an entity
+  object is a non-user object, so the sim's view stays where it was until the
+  camera is moved too. `[simlink] camera=<entity id>` in `PdkSimLink.ini` (off by
+  default) puts every 3D view onto a Fixed-origin camera definition — Prepar3D's
+  own `Cigi View` unless `camera_view` says otherwise — and applies that entity's
+  pose to it every frame, so the HOST's own aircraft flies the view. The
+  per-channel angles of an immersive dome stay where they are, in each PC's own
+  `viewgroup.xml`: a ViewGroup renders its channels from the window's active
+  camera and puts each channel's frustum offsets on top, so the dome keeps its
+  angles and gains a moving origin. `camera_log=1` writes what the camera was
+  told and what it reports back. The entity the camera rides is created from
+  `own_ship_title` (default `CigiStarter.Entity.OwnShip`, a model-less container
+  that ships with the add-on) rather than from `title`, because the eye is inside
+  it and a model there fills the picture with its hull — measured on the bench,
+  where the same pose showed the inside of a fuselage before that and the airfield
+  after. Prepar3D hides the sim's own aircraft for this camera already
+  (`HideUserAircraft` on its `Cigi View` definition).
 - **The `SimLink` line** in the operator window says whether the add-on is
   loaded and applying, and why not when it is not.
 - **Testing it without the sim.** `tools\test-simlink.ps1` builds and runs a
@@ -1103,7 +1119,8 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `tools\PdkTerrainProbe\` | the PDK add-on that asks Prepar3D's own terrain for the height (preferred source, and the sampler `TerrainBaker` uses) |
 | `tools\PdkSimLink\` | the PDK add-on that renders the HOST's entities: creates a sim object per entity and moves it to the pose CigiStarter publishes |
 | `tools\PdkSimLink\CigiEntity.h` | the physics-free `ISimObject` the entities are created as (no simulation, no ground contact) |
-| `tools\PdkSimLink\SimObjects\CigiEntity\` | the container that routes to it (`[General] CategoryId`; model-free) |
+| `tools\PdkSimLink\SimObjects\CigiEntity\` | the container that routes to it (`[General] CategoryId`; model-free until the content side gives it a model) |
+| `tools\PdkSimLink\SimObjects\CigiEntity.OwnShip\` | the same object, permanently model-free: the container the entity the camera rides is created from, so the eye is not inside a drawn model |
 | `tools\PdkSimLink\test\` | the contract harness for the writer: drives both halves without Prepar3D |
 | `tools\test-simlink.ps1` | builds and runs the writer's contract harness, with a PASS/FAIL verdict |
 | `tools\test-all.ps1` | builds and runs every SDK-free contract harness (writer + terrain probe + capture converter) |

@@ -42,18 +42,20 @@
       own category GUID rather than from the configured title):
 
         * the sim's own object (a stock title, e.g. the AS332).  It keeps its own
-          simulation between writes and is clamped to the terrain under it.  On
-          the bench it tracked the command to about 2 cm and 0.1 deg in the air,
-          but a commanded altitude below the sim's terrain was held on the
-          surface and read as drift (up to ~277 m on gnd-fly-bank.bin).  The
+          simulation between writes and refuses a pose far below the ground under
+          it.  On the bench it tracked the command to a few centimetres and tenths
+          of a degree in the air, and a pose published well below the ground was
+          held above it (a property of the place, not the terrain surface: 176.6 m
+          over 174.3 m terrain, +26.7 m over water).  gnd-fly-bank.bin never
+          commands below the ground, so its drift is ~0.2 m, not a refusal.  The
           number is reported, not asserted: a large value here is a finding about
           the sim's own objects, not a failure of the link.
 
         * CigiStarter.Entity, the physics-free object (CigiEntity.h).  It has no
           simulation and no ground contact, so the pose written is the pose that
           stays and a command below the sim's terrain is honoured.  Here the
-          drift is asserted to be zero, and the same capture that clamped the
-          stock object is the proof: if it clamps still, the assertion fails.
+          drift is asserted to be zero: if the object yields any of the pose it
+          is given, the assertion fails.
 
       The status word also says whether any object is paused or in slew
       (`ModePauseOrSlew`); a physics-free object needs neither, and item 4's
@@ -67,8 +69,11 @@
     The objects the test creates use whatever container title PdkSimLink.ini
     names -- normally CigiStarter.Entity, the physics-free object, and a stock
     title only for a like-for-like comparison -- so a few objects will appear in
-    the sim while it runs. CigiStarter is stopped at the end, which retires every
-    row and takes the objects back out.
+    the sim while it runs. With `camera` set, the entity the camera rides is
+    created from `own_ship_title` instead (normally CigiStarter.Entity.OwnShip,
+    the model-less container, so the eye is not inside a drawn model); the test
+    checks that container is installed too. CigiStarter is stopped at the end,
+    which retires every row and takes the objects back out.
 
 .PARAMETER Bin
     The recorded HOST stream to replay. Default hlm.bin beside the repository,
@@ -470,6 +475,8 @@ $hasP3d = $false
 $dllLoaded = $false
 $deployMatches = $false
 $title = ''
+$ownShipTitle = ''
+$cameraId = ''
 try {
     if (-not (Test-Path $Bin)) {
         throw ("no capture to replay at '{0}'.  The .bin files beside this repository are the recorded HOST stream; pass one with -Bin." -f $Bin)
@@ -518,6 +525,8 @@ try {
 
     if (Test-Path "$addonDir\PdkSimLink.ini") {
         $title = ((Get-Content "$addonDir\PdkSimLink.ini" | Select-String '^\s*title\s*=' | Select-Object -First 1) -replace '^\s*title\s*=\s*', '').Trim()
+        $ownShipTitle = ((Get-Content "$addonDir\PdkSimLink.ini" | Select-String '^\s*own_ship_title\s*=' | Select-Object -First 1) -replace '^\s*own_ship_title\s*=\s*', '').Trim()
+        $cameraId = ((Get-Content "$addonDir\PdkSimLink.ini" | Select-String '^\s*camera\s*=\s*' | Select-Object -First 1) -replace '^\s*camera\s*=\s*', '').Trim()
     }
     Write-Host ("  add-on      title='{0}'" -f $(if ($title) { $title } else { '(none)' }))
 
@@ -549,6 +558,20 @@ try {
             $(if ($titleAt) { $titleAt } else { "'$title' is not in the sim's SimObjects tree or the add-on folder - the add-on will create nothing" })
         if (-not $titleAt) {
             Write-Host '      (an add-on may register SimObjects from elsewhere; the create-failure count below is the last word)'
+        }
+    }
+
+    # The entity the sim's view rides is created from `own_ship_title` and not
+    # from `title`, so with the camera on, that container has to be in the
+    # installation as well.  A camera whose own ship cannot be created stops at
+    # the picture: the pose arrives, the view is driven, and nothing is drawn
+    # where the eye is, which reads as a link failure rather than an install one.
+    if ($cameraId -and $ownShipTitle -and $title) {
+        $ownAt = Find-SimTitle $ownShipTitle (Split-Path -Parent $p3d.Path)
+        Assert 'the own-ship container exists in this installation' ([bool]$ownAt) `
+            $(if ($ownAt) { $ownAt } else { "'$ownShipTitle' is not in the sim's SimObjects tree or the add-on folder - the entity the camera rides cannot be created" })
+        if (-not $ownAt) {
+            Write-Host '      (copy SimObjects\CigiEntity.OwnShip, or set own_ship_title empty to create the own ship from title=)'
         }
     }
 
@@ -677,9 +700,17 @@ Run-Test 'the HOST entities reach the sim' {
         ("{0} row(s) expected" -f $lastBySlot.Count)
     if ($lastBySlot.Count -eq 0) { return }
 
-    Assert 'the sim created an object per driven entity' `
-        ($after.ObjectsCreated - $before.ObjectsCreated -ge $wanted.Count) `
-        ("created {0}, expected at least {1} (state Active)" -f ($after.ObjectsCreated - $before.ObjectsCreated), $wanted.Count)
+    # An object per driven entity -- and one that is actually being driven.  The
+    # created counter is cumulative for the sim's lifetime and the sim is not
+    # restarted between runs, so a second run against the same Prepar3D creates
+    # nothing new: a CigiStarter that was force-stopped (its EXIT button is the
+    # one path that retires the rows) leaves its objects in the sim, and the
+    # add-on finds the slots already filled.  What has to hold either way is that
+    # an object exists for every driven entity and is being positioned.
+    $created = $after.ObjectsCreated - $before.ObjectsCreated
+    Assert 'the sim holds an object for every driven entity' `
+        (($created -ge $wanted.Count) -or ($after.Applied -eq $wanted.Count)) `
+        ("created {0} this run, {1} applied of {2} driven (state Active)" -f $created, $after.Applied, $wanted.Count)
     Assert 'every created object is being positioned each tick' `
         ($after.Applied -eq $wanted.Count) `
         ("applied {0} of {1} on the last tick" -f $after.Applied, $wanted.Count)
@@ -745,19 +776,19 @@ Run-Test 'the HOST entities reach the sim' {
         Write-Host '    => the object stays on the pose it is written, to a few centimetres'
     } elseif ($after.PhysicsFree) {
         Write-Host '    => the physics-free object left the pose it was written; it must not'
-        Write-Host '       (asserted below) -- a number near the commanded altitude gap is a clamp'
-        Write-Host '       that the custom object failed to lift.'
+        Write-Host '       (asserted below) -- it has no ground contact, so it must not be held'
+        Write-Host '       above a below-ground command the way a stock object is.'
     } else {
         Write-Host '    => the object left the pose it was written.  Check the commanded altitude above:'
-        Write-Host '       the sim clamps an object to its own ground, so a command below the sim''s'
-        Write-Host '       terrain is held on the surface and reads as drift without being one.'
+        Write-Host '       a stock object refuses a pose far below the ground and is held above it, so a'
+        Write-Host '       command below the sim''s terrain reads as drift without the object moving.'
     }
 
     # Item 2's acceptance.  A physics-free object exists to hold the pose exactly
     # and to go where it is sent, so -- and only when one is in use -- the drift
-    # is failed on rather than reported.  The capture that clamped the stock
-    # object (up to ~277 m) is the proof: a clamp here is a clamp that did not get
-    # lifted, and on any capture the physics-free drift has nowhere to hide.
+    # is failed on rather than reported.  The stock object's refusal of a
+    # below-ground pose is the proof: a refusal here did not get lifted, and on
+    # any capture the physics-free drift has nowhere to hide.
     if ($after.PhysicsFree) {
         Assert 'the physics-free object holds the pose it is written' `
             ($after.DriftMaxMeters -lt 5.0 -and $after.DriftMaxDeg -lt 5.0) `

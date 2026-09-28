@@ -22,8 +22,9 @@
 // be given:
 //
 //   * the sim's own (any stock title, an aircraft): it keeps its own simulation
-//     between the writes, so it can be pulled off the commanded pose, and it is
-//     clamped to the ground under it;
+//     between the writes and refuses a pose far below the ground under it (the
+//     object is held above the ground there); it is not otherwise pulled off the
+//     pose it is given;
 //   * one of ours, carrying this DLL's category GUID (CigiEntity.h): a custom
 //     ISimObject with no simulation and no contact with the ground, so the pose
 //     written is the pose that stays and a command below the sim's terrain is
@@ -33,11 +34,19 @@
 // the gap to the commanded pose is published, because that number is what says
 // which of the two is happening on this installation.
 //
+// One entity is special: the one the sim's view rides (`camera=`, and "The
+// camera" below). The eye is inside it, so it is created from its own container
+// (`own_ship_title`) -- one that carries no model, like the shipped
+// CigiStarter.Entity -- and only the drawing is missing: its pose is written and
+// read back like every other entity's.
+//
 // See ../../SimLinkIpc.h for the shared-memory contract, ../../SimLink.h for
 // the CigiStarter half, and README.md in this folder for how it is installed.
 //-----------------------------------------------------------------------------
 
 #include <windows.h>
+
+#include <cstdio>   // the opt-in camera log (camera_log=1) writes a file
 
 #include <Pdk.h>
 #include <ISimObject.h>
@@ -46,6 +55,10 @@
 // the DLL, so instantiate them here.
 #include <initguid.h>
 #include <IEventService.h>
+// The window-and-camera service: how the sim's own view is flown from an entity
+// (see "The camera" below). It is the same header the sim's CameraSystemPDK
+// sample uses, and it pulls in Helpers\ListBuilder.h for the window list.
+#include <IWindowPluginSystem.h>
 
 #include "CigiEntity.h"   // the physics-free ISimObject a container can be routed to
 #include "SimLinkIpc.h"
@@ -89,6 +102,17 @@ volatile LONG          g_modePauseOrSlew    = 0;
 wchar_t                g_title[260] = L"";
 bool                   g_haveTitle  = false;
 
+// The container the entity the camera rides is created from -- the view's own
+// aircraft, [simlink] own_ship_title.  The eye sits *inside* that entity, so it
+// must not be drawn: a model there is a hull across the whole picture, which is
+// exactly what the bench showed the first time the camera ran against a
+// container that had been given a model (see "The camera" below).  The default
+// is the model-less container that ships for this and nothing else
+// (SimObjects\CigiEntity.OwnShip\sim.cfg); leaving the key empty draws the own
+// ship too, from `title`, which is only wanted where the camera is not riding
+// the picture that matters.
+wchar_t                g_ownShipTitle[260] = L"CigiStarter.Entity.OwnShip";
+
 // One created object per entity slot.
 //
 // `seq` is deliberately not cached: the pose is re-asserted every tick even when
@@ -120,6 +144,87 @@ Slot                   g_slots[simlink::kMaxEntities];
 IEventServiceV400*     g_events  = nullptr;
 class LinkCallback;
 LinkCallback*          g_frameCb = nullptr;
+
+//-----------------------------------------------------------------------------
+// The camera
+//
+// CigiStarter's shared table is one-way and says nothing about the view. The
+// HOST's own View Control is a static definition (byte-identical in every frame
+// of the captures) and the sim's view never leaves the user's own aircraft while
+// the entity objects are separate, non-user objects -- so an entity can move
+// perfectly and the picture stays still. This is what flies the picture.
+//
+// The sim's camera is a per-window service. A ViewGroup renders its channels
+// from the window's *active* camera and applies each channel's frustum on top,
+// so the view flies iff that camera does. Prep3D already ships the camera for
+// exactly this job: the `Cigi View` definition in cameras.cfg is Origin = Fixed,
+// MenuHidden/CycleHidden, HideUserAircraft -- the out-the-window camera an IG
+// positions itself. A Fixed-origin camera is the only kind `SetLLA` applies to,
+// and driving it from entity 0 leaves every per-channel angle in viewgroup.xml
+// untouched, which is the whole point.
+//
+// The user chose an AI-object camera on entity 0; that route is not reachable
+// from a PDK add-on, and the README records why. This is the reachable one, and
+// it puts the eye in the same place.
+//
+// Entity objects are non-user objects, so Prepar3D does not treat the entity the
+// eye is inside as an own ship: it draws it like any other object, and the eye
+// ends up inside its model.  The entity that container was given on the bench
+// was the AS332's body -- the operator's words for the result were "the view is
+// inside the cabin of aircraft, not the cockpit view like usual".  Prepar3D
+// hides the sim's *own* aircraft for this camera (the definition's
+// HideUserAircraft) and this is the same rule for the entity this add-on
+// created: the entity the camera rides is created from `own_ship_title`, a
+// container that carries no model, so the pose is still written and read back
+// and only the drawing is gone.  Measured on the bench, 2026-09-29: with the
+// AS332 junctioned into the entities' container, the same parked pose that had
+// shown the inside of a fuselage showed the apron, the hangars and the
+// mountains instead.
+//-----------------------------------------------------------------------------
+IWindowPluginSystemV440* g_windows  = nullptr;
+class CameraPlugin;
+CameraPlugin*            g_camPlugin = nullptr;
+bool                     g_cameraOn  = false;  // [simlink] camera= is set
+int                      g_cameraEntity = -1;  // the entity the camera rides
+wchar_t                  g_cameraView[128] = L"Cigi View";
+
+// Bench diagnostics for the camera, [simlink] camera_log=1: a line per decision,
+// appended beside the DLL.  Off by default -- the add-on writes no files in
+// normal operation -- and it exists because the camera is the one part of this
+// that has no status word of its own: the shared region says the objects moved,
+// nothing says whether the sim accepted the camera.
+bool                     g_camLog = false;
+wchar_t                  g_logPath[260] = L"";
+unsigned                 g_camLogLines = 0;
+
+// Append one line beside the DLL. The path is worked out once and then cached;
+// the counter caps the file so a long session cannot fill a disk with it.
+void camLog(const wchar_t* line) {
+    if (!g_camLog || g_camLogLines > 5000) return;
+    ++g_camLogLines;
+
+    if (!*g_logPath) {
+        wchar_t path[MAX_PATH] = L"";
+        HMODULE self = nullptr;
+        if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                      GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                  reinterpret_cast<LPCWSTR>(&camLog), &self)) {
+            return;
+        }
+        if (!::GetModuleFileNameW(self, path, MAX_PATH)) return;
+        wchar_t* slash = wcsrchr(path, L'\\');
+        if (!slash) return;
+        wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path),
+                 L"PdkSimLink.camera.log");
+        wcscpy_s(g_logPath, path);
+    }
+
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, g_logPath, L"a, ccs=UTF-8") != 0 || !f) return;
+    fputws(line, f);
+    fputws(L"\n", f);
+    fclose(f);
+}
 
 // Deferral state, as in the terrain probe: the frame event is the fast path, and
 // the object simulation below only services the table until one has been seen
@@ -255,6 +360,24 @@ void loadConfig() {
     if (!slash) return;
     wcscpy_s(slash + 1, MAX_PATH - (slash + 1 - path), L"PdkSimLink.ini");
 
+    // The camera is read before the title, and separately from it: flying the
+    // sim's view needs no entity object to have been created, so a deployment
+    // that only wants the picture (or is still bringing the objects up) still
+    // gets one.
+    const int camera = ::GetPrivateProfileIntW(L"simlink", L"camera", -1, path);
+    g_cameraEntity = (camera >= 0) ? camera : -1;
+    g_cameraOn     = (camera >= 0);
+    ::GetPrivateProfileStringW(L"simlink", L"camera_view", L"Cigi View",
+                               g_cameraView, ARRAYSIZE(g_cameraView), path);
+    g_camLog = ::GetPrivateProfileIntW(L"simlink", L"camera_log", 0, path) != 0;
+
+    {
+        wchar_t line[512] = L"";
+        swprintf_s(line, L"config: camera=%d view='%s' log=%d",
+                   g_cameraEntity, g_cameraView, g_camLog ? 1 : 0);
+        camLog(line);
+    }
+
     const DWORD n = ::GetPrivateProfileStringW(L"simlink", L"title", L"",
                                                g_title, ARRAYSIZE(g_title), path);
     if (n == 0) {
@@ -266,6 +389,19 @@ void loadConfig() {
         return;
     }
     g_haveTitle = true;
+
+    // The own ship's container: read after the title, and independently of it.
+    // An absent key leaves the shipped default in place; a present but empty one
+    // means "no separate container", i.e. the own ship is drawn from `title`.
+    ::GetPrivateProfileStringW(L"simlink", L"own_ship_title",
+                               L"CigiStarter.Entity.OwnShip",
+                               g_ownShipTitle, ARRAYSIZE(g_ownShipTitle), path);
+    if (g_cameraOn) {
+        wchar_t line[512] = L"";
+        swprintf_s(line, L"config: title='%s' own_ship_title='%s' (entity %d)",
+                   g_title, g_ownShipTitle, g_cameraEntity);
+        camLog(line);
+    }
 }
 
 //-----------------------------------------------------------------------------
@@ -345,6 +481,18 @@ bool isOurCategory(IBaseObjectV400* base) {
     return ours;
 }
 
+// The container an entity's object is created from.  Normally the configured
+// `title`; for the entity the camera rides, the own-ship container instead,
+// because the eye is inside that object and drawing it fills the picture with
+// the model (the camera section above has the measurement that found this).
+const wchar_t* titleFor(const simlink::Entity& e) {
+    if (g_cameraOn && g_cameraEntity >= 0 &&
+        static_cast<int>(e.entityId) == g_cameraEntity && *g_ownShipTitle) {
+        return g_ownShipTitle;
+    }
+    return g_title;
+}
+
 void serviceTick(bool fromSim) {
     if (!g_shm) return;
     if (::InterlockedExchange(&g_servicing, 1) != 0) return;
@@ -380,7 +528,8 @@ void serviceTick(bool fromSim) {
 
             if (!g_slots[i].active) {
                 UINT id = 0;
-                const HRESULT hr = g_objects->CreateObject(g_title, id);
+                const wchar_t* const title = titleFor(e);
+                const HRESULT hr = g_objects->CreateObject(title, id);
                 if (FAILED(hr) || id == 0) {
                     ++g_shm->createFails;
                     publish(hr);
@@ -400,6 +549,13 @@ void serviceTick(bool fromSim) {
                 g_slots[i].active = true;
                 g_slots[i].physicsFree = isOurCategory(base);
                 ++g_shm->objectsCreated;
+                if (g_cameraOn && static_cast<int>(e.entityId) == g_cameraEntity) {
+                    wchar_t line[512] = L"";
+                    swprintf_s(line,
+                               L"own ship: entity %u created from '%s' (the view's own aircraft, not drawn)",
+                               e.entityId, title);
+                    camLog(line);
+                }
             }
 
             // What this object is and what it is doing, for the status word.  A
@@ -493,6 +649,264 @@ void serviceTick(bool fromSim) {
 }
 
 //-----------------------------------------------------------------------------
+// The camera, continued: reading the entity, and the window plugin that drives
+// the view from it.
+//-----------------------------------------------------------------------------
+// The pose the camera should be at this frame: entity `camera=` in the shared
+// table, read under its seqlock and only if the HOST is still driving it.  A row
+// that is gone, standby, destroyed or being rewritten leaves the camera where it
+// was, so a gap in the stream is a held picture and not a jump to nowhere.
+bool readCameraEntity(simlink::Entity& e) {
+    if (!g_shm || g_cameraEntity < 0) return false;
+    const uint32_t id = static_cast<uint32_t>(g_cameraEntity);
+    const simlink::Entity& row = g_shm->entities[simlink::slotOf(id)];
+    if (!simlink::readEntityRow(row, e)) return false;
+    if (e.entityId != id) return false;
+    return simlink::entityWanted(e);
+}
+
+// The window plugin.  OnPreCameraUpdate is the documented place for values the
+// camera's own update then uses for its position and orientation, which is why
+// the pose is applied there and not on the frame event -- set it earlier and the
+// camera's update would be free to overwrite it.
+class CameraPlugin final : public IWindowPluginV400
+{
+public:
+    ULONG STDMETHODCALLTYPE AddRef() override { return ::InterlockedIncrement(&m_ref); }
+
+    ULONG STDMETHODCALLTYPE Release() override {
+        const ULONG n = ::InterlockedDecrement(&m_ref);
+        if (n == 0) delete this;
+        return n;
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+        if (!ppv) return E_POINTER;
+        *ppv = nullptr;
+        if (::IsEqualIID(riid, IID_IUnknown) ||
+            ::IsEqualIID(riid, IID_IWindowPluginV400)) {
+            *ppv = static_cast<IWindowPluginV400*>(this);
+        }
+        if (!*ppv) return E_NOINTERFACE;
+        AddRef();
+        return S_OK;
+    }
+
+    void OnAdd(IWindowV400* /*pWindow*/, ICameraSystemV400* /*pCamera*/) override {}
+
+    void OnRemove(IWindowV400* /*pWindow*/, ICameraSystemV400* /*pCamera*/) override {}
+
+    void OnPreCameraUpdate(IWindowV400* pWindow, ICameraSystemV400* pCamera) override {
+        if (!pCamera) return;
+        simlink::Entity e;
+        if (!readCameraEntity(e)) return;
+
+        // SetPBH is on the V400 base, but SetLLA only arrived in V430 -- and a
+        // Fixed-origin camera is positioned with SetLLA, so ask for the newer
+        // interface rather than assuming it.  If the sim will not give it, the
+        // camera simply stays where it is rather than the DLL failing to load.
+        ICameraSystemV430* cam = nullptr;
+        if (FAILED(pCamera->QueryInterface(IID_ICameraSystemV430,
+                                           reinterpret_cast<void**>(&cam))) ||
+            !cam) {
+            return;
+        }
+
+        // CIGI's own units and order: degrees and metres MSL, roll/pitch/yaw --
+        // and the PDK's SetPBH is (pitch, bank, heading), so roll and heading
+        // swap places.  Getting that wrong flies the picture mirrored, which is
+        // exactly the kind of thing that looks right until it is banked.
+        cam->SetLLA(e.latDeg, e.lonDeg, e.altMeters);
+        cam->SetPBH(static_cast<float>(e.pitchDeg),
+                    static_cast<float>(e.rollDeg),
+                    static_cast<float>(e.yawDeg));
+
+        // The bench trace.  GetLLA/GetPBH read the camera *back* out of the sim,
+        // so the log shows the commanded pose and the pose the camera is actually
+        // on -- the camera has no status word in the shared region, and a camera
+        // that silently refuses SetLLA looks identical to one that has moved.
+        // Sampled about once a second; camera_log is off in normal operation.
+        if (g_camLog) {
+            static unsigned tick = 0;
+            if ((tick++ % 60u) == 0u) {
+                double lla[3] = {0.0, 0.0, 0.0};
+                float  pbh[3] = {0.0f, 0.0f, 0.0f};
+                pCamera->GetLLA(lla[0], lla[1], lla[2]);
+                pCamera->GetPBH(pbh[0], pbh[1], pbh[2]);
+
+                WCHAR name[128] = L"";
+                if (pWindow) {
+                    const LPCWSTR n = pWindow->GetWindowName();
+                    if (n) wcsncpy_s(name, n, _TRUNCATE);
+                }
+                wchar_t line[512] = L"";
+                swprintf_s(line,
+                           L"camera '%s' cmd %.6f %.6f %.2f | %.2f %.2f %.2f "
+                           L"reads %.6f %.6f %.2f | %.2f %.2f %.2f",
+                           name, e.latDeg, e.lonDeg, e.altMeters,
+                           e.pitchDeg, e.rollDeg, e.yawDeg,
+                           lla[0], lla[1], lla[2], pbh[0], pbh[1], pbh[2]);
+                camLog(line);
+            }
+        }
+
+        cam->Release();
+    }
+
+    void OnPostCameraUpdate(IWindowV400* /*pWindow*/, ICameraSystemV400* /*pCamera*/) override {}
+
+    void OnViewChange(IWindowV400* /*pWindow*/, ICameraSystemV400* /*pCamera*/) override {}
+
+    void OnClose(IWindowV400* /*pWindow*/, ICameraSystemV400* /*pCamera*/) override {}
+
+    bool OnUserInput(HWND /*wnd*/, UINT /*message*/, WPARAM /*wParam*/,
+                     LPARAM /*lParam*/) override {
+        return false;
+    }
+
+private:
+    volatile LONG m_ref = 1;
+};
+
+// Which windows already carry the plugin, and which have been put onto the
+// configured camera definition.
+//
+// A window is remembered by its *object*, not by its name: putting a window onto
+// another camera definition renames it (a view is named after its definition, so
+// `Cockpit - View 00` becomes `Cigi View - View 00`), and a name-keyed list would
+// read that as a brand-new window and add the plugin a second time.  The pointer
+// is only ever compared, never called through, so a window the sim has since
+// destroyed is harmless here.
+//
+// The list is bounded because a sim that opened and closed views forever would
+// otherwise grow it forever; past the cap the plugin is not attached to anything
+// new, which is the safe direction to fail in.
+struct CamWindow {
+    IWindowV400* window   = nullptr;  // borrowed; the sim owns it
+    std::wstring name;
+    bool         switched = false;    // SetCameraDefinition has been called on it
+    bool         logged   = false;    // the one-off bench dump has been written
+};
+std::vector<CamWindow> g_camWindows;
+constexpr size_t       kMaxCamWindows = 256;
+unsigned               g_camLogWide = 0;  // passes logged with window counts
+
+// One pass over the sim's 3D windows: attach the plugin to any window that has
+// not been seen, and put any that is not already on the configured camera
+// definition onto it.
+//
+// The definition switch is done here and not from inside the plugin because
+// SetCameraDefinition replaces the window's camera system mid-flight (the
+// previous one lives on behind GetPreviousCameraSystem) and re-entering that
+// from the pre-camera callback is not something the SDK promises.  On the frame
+// event the window is between updates, which is the safe place.
+//
+// That the camera definition can be *read* is itself versioned -- GetCameraDefinition
+// arrived after SetCameraDefinition -- so a sim that will not give V610 is
+// handled by switching once per window and trusting it to stay switched.
+void serviceCamera() {
+    if (!g_cameraOn || !g_windows || !g_camPlugin) return;
+
+    P3D::WindowList windows;
+    const HRESULT hr = g_windows->GetWindowList(windows);
+    if (g_camLog && g_camLogWide < 3) {
+        ++g_camLogWide;
+        wchar_t line[256] = L"";
+        swprintf_s(line, L"windows: hr=0x%08X count=%u",
+                   static_cast<unsigned>(hr),
+                   static_cast<unsigned>(windows.Items.size()));
+        camLog(line);
+    }
+    if (FAILED(hr)) return;
+
+    for (CComPtr<IWindowV400>& w : windows.Items) {
+        if (!w) continue;
+
+        IWindowV400* raw = w;
+        const LPCWSTR name = w->GetWindowName();
+        if (!name || !*name) continue;
+
+        CamWindow* entry = nullptr;
+        for (CamWindow& c : g_camWindows) {
+            if (c.window == raw) { entry = &c; break; }
+        }
+        if (!entry) {
+            if (g_camWindows.size() >= kMaxCamWindows) continue;
+            g_camWindows.push_back(CamWindow{raw, name, false, false});
+            entry = &g_camWindows.back();
+            w->AddPlugin(g_camPlugin);
+        } else if (entry->name != name) {
+            entry->name = name;   // the same window, renamed after a switch
+        }
+
+        // A window with no camera system is a panel or 2D view: there is no
+        // picture of the world to fly, and nothing to switch.
+        ICameraSystemV400* cam = w->GetCameraSystem();
+        if (!cam) continue;
+
+        if (g_camLog && !entry->logged) {
+            entry->logged = true;
+            WCHAR before[260] = L"";
+            bool  saw610 = false;
+            bool  saw451 = false;
+            int   origin = -1;
+            ICameraSystemV610* c610 = nullptr;
+            if (SUCCEEDED(cam->QueryInterface(IID_ICameraSystemV610,
+                                              reinterpret_cast<void**>(&c610))) &&
+                c610) {
+                saw610 = true;
+                c610->GetCameraDefinition(before);
+                c610->Release();
+            }
+            ICameraSystemV451* c451 = nullptr;
+            if (SUCCEEDED(cam->QueryInterface(IID_ICameraSystemV451,
+                                              reinterpret_cast<void**>(&c451))) &&
+                c451) {
+                saw451 = true;
+                origin = static_cast<int>(c451->GetCameraOrigin());
+                c451->Release();
+            }
+            wchar_t line[512] = L"";
+            swprintf_s(line, L"win '%s' cam=1 v610=%d v451=%d def='%s' origin=%d",
+                       name, saw610 ? 1 : 0, saw451 ? 1 : 0, before, origin);
+            camLog(line);
+        }
+
+        bool onTarget = entry->switched;
+        ICameraSystemV610* cam610 = nullptr;
+        if (SUCCEEDED(cam->QueryInterface(IID_ICameraSystemV610,
+                                          reinterpret_cast<void**>(&cam610))) &&
+            cam610) {
+            WCHAR def[260] = L"";
+            cam610->GetCameraDefinition(def);
+            onTarget = (_wcsicmp(def, g_cameraView) == 0);
+            cam610->Release();
+        }
+
+        if (!onTarget) {
+            w->SetCameraDefinition(g_cameraView);
+            entry->switched = true;
+            if (g_camLog) {
+                WCHAR after[260] = L"";
+                ICameraSystemV400* cam2 = w->GetCameraSystem();
+                ICameraSystemV610* c610 = nullptr;
+                if (cam2 &&
+                    SUCCEEDED(cam2->QueryInterface(
+                        IID_ICameraSystemV610, reinterpret_cast<void**>(&c610))) &&
+                    c610) {
+                    c610->GetCameraDefinition(after);
+                    c610->Release();
+                }
+                wchar_t line[512] = L"";
+                swprintf_s(line, L"switch '%s' -> '%s', reads back '%s'",
+                           name, g_cameraView, after);
+                camLog(line);
+            }
+        }
+    }
+}
+
+//-----------------------------------------------------------------------------
 // The frame event: once per rendered frame, the tick of a running sim
 //-----------------------------------------------------------------------------
 void linkOnFrame() {
@@ -501,6 +915,7 @@ void linkOnFrame() {
     g_lastFrameMs = ::GetTickCount();
     ::InterlockedExchange(&g_frameSeen, 1);
     serviceTick(true);
+    serviceCamera();
 }
 
 bool frameLive() {
@@ -570,7 +985,10 @@ public:
 
     STDMETHOD(Update)(double /*dDeltaT*/) override {
         if (!g_shm) return S_OK;
-        if (!frameLive()) serviceTick(true);
+        if (!frameLive()) {
+            serviceTick(true);
+            serviceCamera();
+        }
         return S_OK;
     }
 
@@ -705,6 +1123,27 @@ STDMETHODIMP_(void) DLLStart(__in __notnull IPdk* pPdk)
         g_objects->RegisterOnObjectRemoveCallback(onObjectRemove);
     }
 
+    // The camera.  Queried only when it is configured, so a deployment that does
+    // not want the sim's view touched never even holds the service.
+    if (g_cameraOn) {
+        if (FAILED(pPdk->QueryService(SID_WindowPluginSystem,
+                                      IID_IWindowPluginSystemV440,
+                                      reinterpret_cast<void**>(&g_windows))) ||
+            !g_windows) {
+            g_windows = nullptr;
+            publish(E_NOINTERFACE);
+            camLog(L"camera: QueryService(SID_WindowPluginSystem) FAILED");
+        } else {
+            g_camPlugin = new CameraPlugin();
+            camLog(L"camera: window plugin system obtained");
+            // Windows that exist already get the plugin now; the ones a ViewGroup
+            // opens later are picked up by serviceCamera() on the frame event.
+            serviceCamera();
+        }
+    } else {
+        camLog(L"camera: off");
+    }
+
     publishDiag();
 }
 
@@ -715,6 +1154,22 @@ STDMETHODIMP_(void) DLLStop()
         g_events = nullptr;
     }
     if (g_frameCb) { g_frameCb->Release(); g_frameCb = nullptr; }
+
+    // The camera next: the plugin is attached to the sim's own windows, so it
+    // has to be taken off every one of them before it is let go.
+    if (g_windows) {
+        if (g_camPlugin) {
+            P3D::WindowList windows;
+            if (SUCCEEDED(g_windows->GetWindowList(windows))) {
+                for (CComPtr<IWindowV400>& w : windows.Items) {
+                    if (w) w->RemovePlugin(g_camPlugin);
+                }
+            }
+        }
+        g_windows = nullptr;
+    }
+    if (g_camPlugin) { g_camPlugin->Release(); g_camPlugin = nullptr; }
+    g_camWindows.clear();
 
     if (g_objects) {
         g_objects->UnRegisterOnObjectCreateCallback(onObjectCreate);

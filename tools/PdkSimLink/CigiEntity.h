@@ -10,16 +10,16 @@
 // an aircraft that is a flight model, and two things follow from it that the
 // writer cannot live with (both measured on the bench, see README.md):
 //
-//   * the object is clamped to the terrain under it, so a commanded altitude
-//     below the sim's ground is held on the surface instead.  On gnd-fly-bank.bin
-//     that left the aircraft standing 277 m above the command;
+//   * a pose far below the ground under it is refused, and the object is held
+//     above it (the hold altitude is a property of the place, not the terrain
+//     surface, and a command only a little below the ground is followed);
 //   * it wants the sim paused or slewed to hold a pose, and a paused sim freezes
 //     the rotor (see TODO.md item 4).
 //
 // A custom ISimObject is the other way: Prepar3D hands the object's behaviour to
 // this DLL, and this implementation registers *no* ISimulation, so nothing moves
 // the object between writes.  The pose SetPosition is given is the pose that
-// stays, and a command below the terrain the sim would have clamped to is simply
+// stays, and a command below the ground the sim would have refused is simply
 // where the object goes.  The same registration also removes the need to pause:
 // the sim can run at its own rate while the HOST owns the pose.
 //

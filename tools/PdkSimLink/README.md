@@ -91,10 +91,10 @@ are two kinds of title, both created and moved the same way
 
 * **A stock title** (any aircraft or object the sim already has). Its own
   simulation runs between the add-on's writes. Measured on the bench (see *The
-  read-back*), that simulation does **not** drift a pose it is given — but the
-  object is clamped to the terrain under it, so a commanded altitude below the
-  sim's ground is held on the surface instead; and holding a pose with a stock
-  object is what makes pause or slew tempting, which is what freezes a rotor.
+  read-back*), that simulation does **not** drift a pose it is given — but a pose
+  far below the ground is refused and the object is held above it; and holding a
+  pose with a stock object is what makes pause or slew tempting, which is what
+  freezes a rotor.
 
 * **`CigiStarter.Entity`, the physics-free object** (`CigiEntity.h`, shipped in
   `SimObjects\CigiEntity\sim.cfg`). Its `[General] CategoryId` is a GUID this DLL
@@ -138,13 +138,19 @@ below the sim's own ground included. What it is not yet:
 * **Pose only.** Time of day, weather and effects are the next things the same
   channel will carry. The table has room and `kVersion` guards a half-updated
   pair.
-* **The camera is a separate decision.** The created objects are non-user
-  objects, so the sim's cockpit view is still attached to whatever the user
-  aircraft is. Putting the camera in a HOST entity -- if the operator wants to
-  fly the entities in cockpit view rather than watch them -- is done with the
-  same add-on (`IControllableCamera::ActivateEntityTracking`) and does not change
-  the contract. The per-channel angles of the immersive dome stay in each PC's
-  own `viewgroup.xml`.
+* **The camera follows an entity, with `camera=`.** The created objects are
+  non-user objects, so on their own they move without moving the picture: in
+  Prepar3D the view belongs to a *window*, and an object the add-on created is
+  not that window's camera. `[simlink] camera=<entity id>` puts every 3D view
+  onto a Fixed-origin camera definition and applies that entity's pose to it
+  every frame — `SetLLA` (lat/lon in degrees, altitude in metres) and `SetPBH`
+  (pitch, bank, heading) — so the HOST's own aircraft flies the picture. The
+  per-channel angles of an immersive dome are untouched: a ViewGroup renders its
+  channels from the window's *active* camera and applies each channel's frustum
+  offsets on top of it, so the dome keeps its angles and gains a moving origin.
+  The entity the camera rides is created from `own_ship_title` instead of
+  `title`, so the picture is the world rather than the inside of the model that
+  entity was given (see *The camera*). Off by default; see *Configuration*.
 
 ## Configuration: `PdkSimLink.ini`
 
@@ -153,6 +159,10 @@ The DLL reads `PdkSimLink.ini` from its own folder:
 ```ini
 [simlink]
 title=<a Prepar3D container title>
+own_ship_title=CigiStarter.Entity.OwnShip
+camera=<entity id the sim's view should fly from, or blank>
+camera_view=Cigi View
+camera_log=0
 ```
 
 There is no container title that exists in every installation, so it has to be
@@ -166,11 +176,92 @@ Two titles are meaningful, and it is the *object* that differs, not this file:
 | `title` | The object |
 |---|---|
 | `CigiStarter.Entity` | the physics-free object that ships with this add-on (see *The object* above) — no flight model, no ground contact |
-| any stock title | the sim's own object, with its own simulation and its ground clamp |
+| any stock title | the sim's own object, with its own simulation; it refuses a pose far below the ground |
 
 The default for a working link is `CigiStarter.Entity`. Point it at a stock title
-only for a like-for-like comparison on the bench: it is the object that used to
-be clamped to the terrain, and it shows what the terrain clamp costs.
+only for a like-for-like comparison on the bench: it is the object whose own
+simulation runs between the writes, and it shows what refusing a below-ground
+pose costs.
+
+`own_ship_title` is the container for the **view's own aircraft** — the one entity
+the camera rides, and the only entity created from a different title. It defaults
+to `CigiStarter.Entity.OwnShip`, the second model-less container that ships with
+this add-on (`SimObjects\CigiEntity.OwnShip\sim.cfg`), because the eye is *inside*
+that entity: a model there is a hull across the entire picture. Everything else
+about the own ship is as usual — it is created, moved to the HOST's pose every
+tick and read back like any other entity, so the link is proved on it too; only
+the drawing is gone. Setting the key **empty** draws the own ship from `title`
+instead, which is only wanted where the camera is not riding the picture that
+matters. With `camera` blank there is no own ship and every entity uses `title`.
+
+### The camera
+
+| Key | Meaning |
+|---|---|
+| `camera` | the CIGI entity id the sim's view should ride — normally `0`, the HOST's own aircraft. Blank or absent leaves the sim's view alone, which is the default. |
+| `camera_view` | the camera definition every 3D view is put onto before it is driven. Must be Fixed-origin. Default `Cigi View`. |
+| `camera_log` | `1` writes `PdkSimLink.camera.log` beside the DLL: what the camera is told and what it reports back. Default `0`. |
+
+**Why it is needed at all.** An entity object the add-on created is a *non-user*
+object, so moving it does not move the picture. Prepar3D's view belongs to a
+window; a ViewGroup renders its channels from that window's **active camera** and
+applies each channel's own frustum offsets on top. The dome's angles live in the
+ViewGroup, and they are the reason the camera is the thing to drive rather than
+the window: drive the camera and every channel keeps its own angle and gains a
+moving origin.
+
+**Why a Fixed camera.** `SetLLA` — the only PDK call that positions a camera in
+the world rather than relative to something else — applies to cameras whose
+`Origin` is `Fixed`, and to no others. Prepar3D already ships one for this job:
+`Cigi View` in `cameras.cfg` (`Origin = Fixed`, `MenuHidden`, `CycleHidden`,
+`HideUserAircraft`) is its own CIGI out-the-window camera. `camera_view` puts
+each 3D view onto it and then applies the entity's pose every frame.
+
+**How it is driven.** In the window plugin's `OnPreCameraUpdate` — the documented
+place for values the camera's own update then uses for its position and
+orientation — `SetLLA(lat, lon, alt)` and `SetPBH(pitch, bank, heading)` are
+called with the entity's row. CIGI carries roll/pitch/yaw and the PDK wants
+pitch/bank/heading, so roll and heading swap places; the contract test covers the
+conversion so the two halves cannot disagree. The definition switch itself
+happens on the frame event and not inside that callback, because
+`SetCameraDefinition` replaces the window's camera system mid-flight and
+re-entering it from the pre-camera callback is not something the SDK promises.
+Each window is switched once, and a window that renames itself when its
+definition changes (a view is named after its definition, so `Cockpit - View 00`
+becomes `Cigi View - View 00`) is recognised as the same window rather than a new
+one.
+
+**The view's own aircraft is not drawn.** The entity the camera rides has the eye
+*inside* it, and Prepar3D draws an entity object the add-on created like any other
+object: a non-user object has no reason to be treated as an own ship. Left alone,
+the same pose that flies the picture sits inside whatever model the entities'
+container was given — the operator's words for that were "the view is inside the
+cabin of aircraft, not the cockpit view like usual". Prepar3D hides the sim's
+*own* aircraft for this camera already (`HideUserAircraft` on the `Cigi View`
+definition) and this is the same rule for the entity this add-on created: the
+camera's entity is made from `own_ship_title`, a container that carries no model,
+while every other entity still draws from `title`.
+
+**Measured on the bench, 2026-09-29** (`camera=0`, `camera_log=1`, a replay of
+`gnd-fly-bank.bin`): every sample's `GetLLA`/`GetPBH` read back the commanded
+pose exactly — e.g. commanded `-6.546065 106.753881 318.72 | -2.31 0.60 276.93`
+read back identical, with the heading returned as the equivalent `-83.07` once it
+crossed 180°. The first sample read `0.0 0.0 1.00`, the definition's own fixed
+point, and every sample after the first `SetLLA` matched the entity row, so the
+pose is the entity's and not the definition's. The window reports
+`CAMERA_SYSTEM_ORIGIN_FIXED` after the switch. What the bench cannot show is the
+dome itself — one monitor, no Immersive Display Pro — so the per-channel angles
+are proved only where the ViewGroup is.
+
+**What was deliberately not done.** An "AI-object camera" (the pilot's eye inside
+another aircraft) was the first choice and is not reachable from a PDK add-on:
+the PDK can create *instances* only from a definition that already exists
+(`CreateCameraInstance`) and has no call that creates a definition, and an
+instance it did create is not a window's camera, so nothing would render it. The
+only exposed handler for `ActivateEntityTracking` is on `IControllableCamera`,
+which is a **look-at** — it aims a camera at an entity rather than putting the
+eye inside it — which is exactly wrong for a dome. The Fixed camera above is
+Prepar3D's own answer to the same problem, and it puts the eye in the same place.
 
 ## Building
 
@@ -210,7 +301,7 @@ by that. Build it where the SDK is, and ferry the DLL.
 ## Installing on the IG PC
 
 1. Put the DLL, `add-on.xml`, `PdkSimLink.ini` and the `SimObjects\` folder (the
-   physics-free object's container) in Prepar3D's default add-on discovery
+   physics-free object's containers) in Prepar3D's default add-on discovery
    folder, one level deep:
 
    ```
@@ -219,7 +310,14 @@ by that. Build it where the SDK is, and ferry the DLL.
        add-on.xml
        PdkSimLink.ini
        SimObjects\CigiEntity\sim.cfg
+       SimObjects\CigiEntity.OwnShip\sim.cfg
    ```
+
+   Both containers are needed: `CigiEntity` is the one `title` creates from, and
+   `CigiEntity.OwnShip` is the model-less one the view's own aircraft is created
+   from when `camera` is set. Copying only the first is a common slip and shows
+   up as a `createFails` count in the operator window — the e2e test names the
+   missing container rather than letting it pass.
 
    (use `...\Prepar3D v5 Add-ons\` on v5). The Documents folder is the one
    Prepar3D discovers; the `add-ons` folder beside `add-ons.cfg` under
@@ -294,31 +392,38 @@ its own table and seqlock), and measures the gap to the pose it last wrote into
 `driftMaxMeters` and `driftMaxDeg`. `held[]` is the add-on's; CigiStarter only
 reads it.
 
-Measured on the bench against the AS332 (2026-09-28), feeding the capture's own
-positions:
+Measured on the bench against the AS332, feeding the capture's own positions:
 
 * a fixed pose, and a 30 m/s climb, are held to **0.02 m** — for as long as the
   command is fed and after it stops;
 * roll, pitch and yaw are held to **<0.1°** on every axis, the heading wrap
   included;
-* an object is **clamped to the ground under it**: at the capture's positions the
-  sim's terrain is 456.4 m and 210.9 m, and commanding below that leaves the
-  object standing on the surface. On `gnd-fly-bank.bin`, whose command goes to
-  178.9 m and −0.3 m, that showed as 277 m / 211 m of "drift" — the sim refusing
-  to put the object underground, not the flight model moving it.
+* a pose far below the ground is **refused**, and the object is held above it.
+  Publishing below-ground poses directly through the SimLink region (2026-09-29):
+  over land (terrain 174.3 m) commands of 50–160 m were held at 176.6 m, and over
+  water (0.0 m) commands of −10 to −50 m were held at +26.7 m. The hold altitude
+  is a property of the place, not the terrain height, and a command only a little
+  below the ground is followed (land 168 m → 168.2 m, water −7 m → −6.8 m).
 
-So the native flight model does **not** drift a pose it is given. What it does
-instead is clamp an object to the ground — and that is exactly what the
-physics-free object removes.
+So the native flight model does **not** drift a pose it is given; replaying a
+moving capture, the worst measured drift was 0.19 m. What it does instead is
+refuse a pose far below the ground — and that is what the physics-free object
+removes.
+
+Note that `gnd-fly-bank.bin` never commands below the ground: entity 0 stays
+between 178.9 m and 913 m over terrain of 174.3 m, and entity 3 is 0.3 m under
+water. So it exercises no refusal and shows ~0.2 m of drift — **not** the 277 m /
+211 m an earlier note recorded, which came from terrain figures (456.4 m and
+210.9 m) that are not the terrain at those entities (it is 174.3 m and 0.0 m).
 
 Measured the same way against `CigiStarter.Entity`, on the same
-`gnd-fly-bank.bin` capture that clamped the stock object by up to 277 m:
+`gnd-fly-bank.bin` capture:
 
 * the pose is held **exactly** — 0.00 m and 0.00° over every comparison, static
   and moving;
-* **a command below the sim's terrain is where the object goes**: entity 0 held
-  at 178.9 m where the terrain under it is 456.4 m, and entity 3 at −0.3 m where
-  its terrain is 210.9 m, both with the same zero drift;
+* **a command below the ground is where the object goes**: it has no contact
+  points, so it is not refused a below-ground pose the way the stock object is,
+  and entity 3 sits at −0.3 m under the water surface at 0.0 m, with no drift;
 * the sim was never paused or in slew (`diag` bit 30 stayed clear), so a rotor
   has an unpaused, non-slew sim to turn in (TODO.md item 4).
 
@@ -396,7 +501,7 @@ sim:
   "the sim accepted it" becomes "the sim is holding it";
 * which object is in play is reported (`diag` bit 29), and when it is the
   physics-free one the drift is **asserted** to be zero rather than merely
-  reported — the capture that clamped the stock object by 277 m is the proof;
+  reported — a below-ground pose, which the stock object refuses, is the proof;
 * no object is paused or in slew (`diag` bit 30);
 * stopping the IG retires every row and the add-on takes its objects back out
   (`2 created, 2 removed`), so a stopped IG does not leave containers parked in
@@ -415,22 +520,26 @@ The objects it creates come from the container title in `PdkSimLink.ini`; with
 `CigiStarter.Entity` they are the physics-free ones. It reads each object's pose
 back and reports the drift against what was written (see *The read-back* above),
 so `-Bin '..\gnd-fly-bank.bin' -Speed 20` is the run that measures whether the sim
-is holding the pose on a moving aircraft rather than merely accepting it — and
-that the command below the sim's own ground is honoured.
+is holding the pose on a moving aircraft rather than merely accepting it. (That
+capture never commands below the ground, so the stock object's refusal is not
+exercised by it; see *The read-back* for how it was measured directly.)
 
 ## What to check on the rig
 
 The bench answers the link; these need the sim, the HOST and the flight model:
 
 * how the native flight model behaves between writes -- answered on the bench for
-  the AS332 (no drift in the air; clamped to the ground below it), so what is
-  left for the rig is whether the same holds for its own model and whether any
-  object is ever commanded below the sim's terrain in the deployed sorties. The
-  physics-free object makes the clamp moot where it is used, but the rig still has
-  to show that the custom category registers and its objects create and hold on
-  v6 **Professional** (TODO.md item 8);
+  the AS332 (no drift in the air; a pose far below the ground is refused and held
+  above it), so what is left for the rig is whether the same holds for its own
+  model and whether any object is ever commanded far below the sim's terrain in
+  the deployed sorties. The physics-free object makes the refusal moot where it is
+  used, but the rig still has to show that the custom category registers and its
+  objects create and hold on v6 **Professional** (TODO.md item 8);
 * that the sign and order of roll/pitch/yaw are right -- a level aircraft proves
   nothing, so roll it;
 * how many entities the HOST actually drives, and whether the entities that are
   not the aircraft should exist as objects at all;
-* whether the camera should follow a HOST entity, and if so which one.
+* whether the dome keeps its per-channel angles with the camera driven -- the
+  bench has one monitor and no Immersive Display Pro, so a ViewGroup's frustum
+  offsets are only proved on the rig. The mechanism itself is proved here: the
+  sim reports the camera back on the commanded pose every frame.
