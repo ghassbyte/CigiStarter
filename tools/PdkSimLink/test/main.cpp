@@ -33,7 +33,12 @@
 //      behind by a sim that has stopped ticking is not believed;
 //    * the read-back the add-on publishes is in the same units and order as the
 //      pose that was commanded, the drift between the two is measured correctly
-//      (including the heading wrap), and the layout that carries it is pinned.
+//      (including the heading wrap), and the layout that carries it is pinned;
+//    * the HOST's world beyond the entities -- its Celestial Sphere clock, its
+//      atmosphere and its weather -- decodes from the same wire layout, folds
+//      into one accumulated world, resolves with an operator override on top,
+//      and renders the METAR the sim's weather system is handed, while the
+//      publisher writes only on change and says which group moved.
 //
 //  Build/run:  msbuild test\PdkSimLinkTest.vcxproj /p:Configuration=Release
 //              test\x64\Release\PdkSimLinkTest.exe
@@ -54,6 +59,7 @@
 #include <thread>
 
 #include "cigi.h"          // the Entity Control decoder
+#include "Environment.h"   // the world beyond the entities: resolve and METAR
 #include "SimLink.h"       // the half under test (CigiStarter's)
 #include "SimLinkIpc.h"    // the contract
 #include "SimLinkMap.h"    // the half under test (the add-on's, PDK-free)
@@ -101,6 +107,104 @@ void buildEntityControl(uint8_t* msg, uint16_t id, uint8_t state,
     putF64(msg + 24, lat);
     putF64(msg + 32, lon);
     putF64(msg + 40, alt);
+}
+
+// The world messages, likewise written out byte by byte.  The three together are
+// the HOST's whole environment, and the test pins each field's offset because a
+// value read from the wrong one is still a plausible number.
+void buildCelestialSphere(uint8_t* msg, uint8_t hour, uint8_t minute,
+                          uint8_t flags, uint32_t date) {
+    std::memset(msg, 0, cigi::kCelestialSphereSize);
+    msg[0] = static_cast<uint8_t>(cigi::MsgCelestialSphere);
+    msg[1] = static_cast<uint8_t>(cigi::kCelestialSphereSize);
+    msg[2] = hour;                // 8-bit, the ICD's UTC field
+    msg[3] = minute;
+    msg[4] = flags;               // bit0 ephemeris, bit4 date valid, ...
+    // 5..7 reserved
+    std::memcpy(msg + 8, &date, 4);   // Month*1000000 + Day*10000 + Year
+    // 12..15 star intensity
+}
+
+void buildAtmosphere(uint8_t* msg, uint8_t humidity, float tempC, float visM,
+                     float horizWind, float vertWind, float windDir, float baroMb) {
+    std::memset(msg, 0, cigi::kAtmosphereSize);
+    msg[0] = static_cast<uint8_t>(cigi::MsgAtmosphere);
+    msg[1] = static_cast<uint8_t>(cigi::kAtmosphereSize);
+    msg[2] = 0x00;                // enable bit: the captures send 0, values count anyway
+    msg[3] = humidity;
+    putF32(msg + 4,  tempC);
+    putF32(msg + 8,  visM);
+    putF32(msg + 12, horizWind);
+    putF32(msg + 16, vertWind);
+    putF32(msg + 20, windDir);
+    putF32(msg + 24, baroMb);
+}
+
+void buildWeather(uint8_t* msg, uint8_t layerId, uint8_t humidity, uint8_t flags,
+                  uint8_t flags2, float tempC, float visM, float coverage,
+                  float baseElevM, float thicknessM, float horizWind,
+                  float vertWind, float windDir, float baroMb) {
+    std::memset(msg, 0, cigi::kWeatherControlSize);
+    msg[0] = static_cast<uint8_t>(cigi::MsgWeatherControl);
+    msg[1] = static_cast<uint8_t>(cigi::kWeatherControlSize);
+    putU16(msg + 2, 0);
+    msg[4] = layerId;             // the layer id names what is falling
+    msg[5] = humidity;
+    msg[6] = flags;               // bit0 weather en, bit3 lightning, high nibble cloud
+    msg[7] = flags2;              // bits 0-1 scope, bits 2-4 severity
+    putF32(msg + 8,  tempC);
+    putF32(msg + 12, visM);
+    putF32(msg + 16, 0.0f);       // scud
+    putF32(msg + 20, coverage);
+    putF32(msg + 24, baseElevM);
+    putF32(msg + 28, thicknessM);
+    putF32(msg + 32, 0.0f);       // transition
+    putF32(msg + 36, horizWind);
+    putF32(msg + 40, vertWind);
+    putF32(msg + 44, windDir);
+    putF32(msg + 48, baroMb);
+    putF32(msg + 52, 0.0f);       // aerosol
+}
+
+// The Component Control (id 4), written out byte by byte like the rest.  The
+// values the reference HOST puts in it are the pattern's footprint and altitude
+// in metres -- 8 x 1852 m across, 7 x 1852 m deep and 3000 ft up for the first
+// pattern -- which is what `cloudPattern()` below reproduces.
+void buildComponentControl(uint8_t* msg, uint16_t componentId, uint16_t instanceId,
+                           uint8_t componentClass, uint8_t state,
+                           float d1, float d2, float d3,
+                           float d4, float d5, float d6) {
+    std::memset(msg, 0, cigi::kComponentControlSize);
+    msg[0] = static_cast<uint8_t>(cigi::MsgComponentControl);
+    msg[1] = static_cast<uint8_t>(cigi::kComponentControlSize);
+    putU16(msg + 2, componentId);
+    putU16(msg + 4, instanceId);
+    msg[6] = componentClass;
+    msg[7] = state;
+    putF32(msg + 8,  d1);
+    putF32(msg + 12, d2);
+    putF32(msg + 16, d3);
+    putF32(msg + 20, d4);
+    putF32(msg + 24, d5);
+    putF32(msg + 28, d6);
+}
+
+// One of the HOST's three cloud patterns, exactly as its capture carries it:
+// component 0x1001 on the cloud entity 0x9001, class Entity, the state naming
+// the pattern, and the footprint/altitude in the first three data fields.
+// `state` of 0 is the same message with the pattern taken away -- and the data
+// fields are still filled in, which is exactly what the captures send, so a
+// mapping that keyed off the data rather than the state would leave the cloud
+// standing.
+void buildCloudPattern(uint8_t* msg, uint8_t state) {
+    float d1 = 14816.0f, d2 = 12964.0f, d3 = 914.4f;   // cloud pat1: 8 x 7 nmi @ 3000 ft
+    if (state == 2) {
+        d1 = 11112.0f; d2 = 9260.0f; d3 = 1066.8f;     // cloud pat2: 6 x 5 nmi @ 3500 ft
+    } else if (state == 3) {
+        d1 = 18520.0f; d2 = 22224.0f; d3 = 914.4f;     // cloud pat3: 10 x 12 nmi @ 3000 ft
+    }
+    buildComponentControl(msg, 0x1001, 0x9001, cigi::kComponentEntity, state,
+                          d1, d2, d3, 0.0f, 0.0f, 0.0f);
 }
 
 //-----------------------------------------------------------------------------
@@ -261,6 +365,8 @@ int main(int /*argc*/, char** /*argv*/) {
         // the add-on owns the mapping, and the IG only fills it.
         publishPose(0, kLat, kLon, kAlt, kRoll, kPitch, kYaw);
         check(!simlink::health().mappingOpen, "publishing creates nothing while the sim is away");
+        simlink::publishEnvironment(simlink::Environment{});
+        check(!simlink::health().mappingOpen, "and neither does publishing a world");
     }
 
     // The module re-tries the region every 2 s while the sim is away; stop() is
@@ -314,15 +420,26 @@ int main(int /*argc*/, char** /*argv*/) {
     // heading wrap unhandled would read as a large number that is not real.
     std::printf("\nthe read-back\n");
     {
-        check(simlink::kVersion == 3, "the contract version is 3 (the HOST's eye added)");
+        check(simlink::kVersion == 5,
+              "the contract version is 5 (the sim's sky read-back added)");
         check(sizeof(simlink::Held) == 80, "a Held row is 80 bytes");
         check(offsetof(simlink::Shared, entities) == 88, "entities[] starts at 88");
         check(offsetof(simlink::Shared, held) == 4696, "held[] starts at 4696");
         check(sizeof(simlink::View) == 64, "a View row is 64 bytes");
         check(offsetof(simlink::Shared, view) == 9816,
               "the view is appended after held[], so the tables keep their offsets");
-        check(sizeof(simlink::Shared) == 9880,
-              "the region is the header plus all three tables");
+        check(sizeof(simlink::Environment) == 128, "an Environment row is 128 bytes");
+        check(sizeof(simlink::EnvironmentStatus) == 256,
+              "an EnvironmentStatus row is 256 bytes");
+        check(offsetof(simlink::Shared, environment) == 9880,
+              "the world is appended after the view, so the tables keep their offsets");
+        check(offsetof(simlink::Shared, environmentStatus) == 10008,
+              "the add-on's answer goes beside it");
+        check(offsetof(simlink::Shared, environmentStatus) +
+                  offsetof(simlink::EnvironmentStatus, simMetar) == 10064,
+              "and the station observation the sim holds sits at the end of it");
+        check(sizeof(simlink::Shared) == 10264,
+              "the region is the header, the entity/held/view tables and the world");
 
         // The status word is a contract too.  The two object-kind bits are what
         // a reader uses to tell the physics-free object from the sim's own, and
@@ -487,6 +604,568 @@ int main(int /*argc*/, char** /*argv*/) {
         }
         check(sameSpan,
               "the eye is the offset's length from the reference point at every attitude");
+    }
+
+    // -- 3d. The HOST's world: clock, air and weather -------------------------
+    // The environment path has the same shape as the poses above, and the same
+    // opening trap: three messages that each carry part of one world, whose
+    // fields are the wrong way round in a way that still yields plausible
+    // numbers -- a date read without unpacking, a severity read from the layer
+    // id, a METAR that rounds instead of reporting.  Everything here is the
+    // real code: the decoders CigiStarter runs, the accumulation and the
+    // resolution Environment.h owns, the METAR the add-on hands the sim, and
+    // the publisher in SimLink.cpp.
+    std::printf("\nthe HOST's world (time of day, air and weather)\n");
+    {
+        // -- The Celestial Sphere Control: the wall clock and the date.  (id 9)
+        uint8_t cs[cigi::kCelestialSphereSize];
+        buildCelestialSphere(cs, 12, 0, 0x11, 1012000u);   // 2000-01-01 12:00
+
+        cigi::CelestialSphere c;
+        check(cigi::parseCelestialSphere(cs, sizeof(cs), c),
+              "a well-formed Celestial Sphere Control is decoded");
+        check(c.hour == 12 && c.minute == 0,
+              "the clock is the bytes at 2 and 3");
+        check(c.dateValid(), "date valid is bit 4 of the flags at 4");
+        check(c.date == 1012000u, "the packed date is the uint32 at 8");
+        check(!cigi::parseCelestialSphere(cs, sizeof(cs) - 1, c),
+              "a truncated Celestial Sphere Control is refused");
+        cs[0] = 99;
+        check(!cigi::parseCelestialSphere(cs, sizeof(cs), c),
+              "a message with the wrong id is refused");
+        cs[0] = static_cast<uint8_t>(cigi::MsgCelestialSphere);
+
+        // -- The Atmosphere Control: the air the aircraft flies in.  (id 10)
+        uint8_t at[cigi::kAtmosphereSize];
+        buildAtmosphere(at, 80, 29.9877f, 20000.0f, 0.0f, 0.0f, 0.0f, 1013.25f);
+
+        cigi::Atmosphere a;
+        check(cigi::parseAtmosphere(at, sizeof(at), a),
+              "a well-formed Atmosphere Control is decoded");
+        check(a.humidity == 80, "the humidity is the byte at 3");
+        check(std::fabs(a.airTempC - 29.9877f) < 1e-3,
+              "the temperature is the float at 4");
+        check(std::fabs(a.visibilityM - 20000.0f) < 1.0,
+              "the visibility is the float at 8");
+        check(std::fabs(a.baroPressureMb - 1013.25f) < 0.01,
+              "the pressure is the float at 24");
+        check(!cigi::parseAtmosphere(at, sizeof(at) - 1, a),
+              "a truncated Atmosphere Control is refused");
+        at[0] = 99;
+        check(!cigi::parseAtmosphere(at, sizeof(at), a),
+              "a message with the wrong id is refused");
+        at[0] = static_cast<uint8_t>(cigi::MsgAtmosphere);
+
+        // -- The Weather Control: cloud and precipitation.  (id 12)
+        // No capture carries one, so this is the ICD's layout pinned rather than
+        // a recording replayed: a cumulus deck, 60% cover, 900 m base, rain.
+        uint8_t wc[cigi::kWeatherControlSize];
+        buildWeather(wc, /*layer*/ 4, /*humidity*/ 80, /*flags*/ 0x71,
+                     /*flags2*/ 0x0C, 29.9877f, 20000.0f, 60.0f, 900.0f,
+                     600.0f, 0.0f, 0.0f, 0.0f, 1013.25f);
+
+        cigi::WeatherControl w;
+        check(cigi::parseWeatherControl(wc, sizeof(wc), w),
+              "a well-formed Weather Control is decoded");
+        check(w.layerId == 4,
+              "the layer id at 4 is what names the precipitation -- not the severity");
+        check(w.cloudType() == 7, "the cloud type is the high nibble of the flags at 6");
+        check(w.severity() == 3, "the severity is bits 2-4 of the flags at 7");
+        check(!w.lightningEnabled(), "lightning is bit 3 of the flags");
+        check(w.coverage >= 59.99f && w.coverage <= 60.01f,
+              "the coverage is the float at 20");
+        check(std::fabs(w.baseElevM - 900.0f) < 0.01f,
+              "and the cloud base is the float at 24");
+        check(!cigi::parseWeatherControl(wc, sizeof(wc) - 1, w),
+              "a truncated Weather Control is refused");
+        wc[0] = 99;
+        check(!cigi::parseWeatherControl(wc, sizeof(wc), w),
+              "a message with the wrong id is refused");
+        wc[0] = static_cast<uint8_t>(cigi::MsgWeatherControl);
+
+        // The layer id is resolved to a kind that falls, because the sim's
+        // weather system has no notion of CIGI's numbering.  The ids that are
+        // not precipitation -- ground fog, and the three cloud layers -- must
+        // come back as none rather than defaulting to rain.
+        check(cigienv::precipTypeFromLayer(4) == simlink::kPrecipRain &&
+              cigienv::precipTypeFromLayer(5) == simlink::kPrecipSnow &&
+              cigienv::precipTypeFromLayer(6) == simlink::kPrecipSleet &&
+              cigienv::precipTypeFromLayer(7) == simlink::kPrecipHail &&
+              cigienv::precipTypeFromLayer(8) == simlink::kPrecipSand &&
+              cigienv::precipTypeFromLayer(9) == simlink::kPrecipDust,
+              "layer ids 4-9 name rain/snow/sleet/hail/sand/dust");
+        check(cigienv::precipTypeFromLayer(0) == simlink::kPrecipNone &&
+              cigienv::precipTypeFromLayer(1) == simlink::kPrecipNone &&
+              cigienv::precipTypeFromLayer(3) == simlink::kPrecipNone,
+              "and ground fog and the cloud layers are no precipitation");
+
+        // -- Accumulating the world, one message at a time -------------------
+        // The messages are partial and arrive independently, so the fold is
+        // sticky: each fills its own part and leaves the rest standing.
+        cigienv::HostEnvironment host;
+        check(!host.haveTime && !host.haveAtmos && !host.haveWeather,
+              "a world nothing has been sent for is empty");
+
+        cigienv::applyCelestialSphere(host, c);
+        check(host.haveTime && host.hour == 12 && host.minute == 0,
+              "a Celestial Sphere Control fills the clock");
+        check(host.dateValid && host.year == 2000 && host.month == 1 && host.day == 1,
+              "and unpacks Month*1000000 + Day*10000 + Year");
+
+        cigienv::applyAtmosphere(host, a);
+        check(host.haveAtmos && host.humidityPct == 80 &&
+              std::fabs(host.baroPressureMb - 1013.25f) < 0.01,
+              "an Atmosphere Control fills the air");
+        check(host.hour == 12 && !host.haveWeather,
+              "and leaves the clock and the weather exactly as they were");
+
+        // The Weather Control carries the air again; the newest wins.
+        cigi::WeatherControl wRain = w;
+        wRain.airTempC = 21.0f;
+        cigienv::applyWeather(host, wRain);
+        check(host.haveWeather && host.cloudType == 7 &&
+              std::fabs(host.coverage - 60.0) < 0.01 &&
+              host.precipType == simlink::kPrecipRain && host.severity == 3,
+              "a Weather Control fills the cloud and resolves the precipitation");
+        check(host.haveAtmos && std::fabs(host.airTempC - 21.0f) < 0.01,
+              "and refreshes the air it also carries (newest wins)");
+
+        // Now put the temperature back for the METAR below, whose exact string
+        // is easier to read with the numbers the captures carry.
+        cigienv::applyWeather(host, w);
+        check(std::fabs(host.airTempC - 29.9877f) < 1e-3,
+              "the newest message is the one the world carries");
+
+        // -- Resolving with the operator's override on top -------------------
+        using cigienv::TimePreset;
+        using cigienv::WeatherPreset;
+
+        // Host/Host: exactly the HOST's world, no override claimed.
+        simlink::Environment hostWorld =
+            cigienv::resolve(host, TimePreset::Host, WeatherPreset::Host);
+        check(hostWorld.hour == 12 && hostWorld.minute == 0 && hostWorld.second == 0,
+              "the HOST's own clock is carried through");
+        check((hostWorld.flags & simlink::kEnvTimeManual) == 0 &&
+              (hostWorld.flags & simlink::kEnvWeatherManual) == 0,
+              "with no operator override claimed");
+        check((hostWorld.flags & simlink::kEnvDateValid) != 0 &&
+              hostWorld.year == 2000 && hostWorld.month == 1 && hostWorld.day == 1,
+              "the date is present and rides with the clock");
+        check(hostWorld.cloudType == 7 && hostWorld.precipType == simlink::kPrecipRain &&
+              hostWorld.severity == 3,
+              "and the HOST's own cloud and precipitation stand");
+        check((hostWorld.flags & simlink::kEnvTimeValid) != 0 &&
+              (hostWorld.flags & simlink::kEnvAtmosValid) != 0 &&
+              (hostWorld.flags & simlink::kEnvWeatherValid) != 0,
+              "and every group is marked present, so all of it will be applied");
+
+        char metar[256];
+        int n = cigienv::metarFor(hostWorld, metar, sizeof(metar));
+        check(n > 0 &&
+              std::strcmp(metar, "GLOB 1200Z 00000KT 9999 RA BKN030 30/26 Q1013") == 0,
+              "the HOST's world renders the expected METAR");
+
+        // The clock is the one group an operator preset owns, and pinning it
+        // must not touch the sky -- a clear afternoon is still a clear
+        // afternoon at dusk.
+        simlink::Environment dawn =
+            cigienv::resolve(host, TimePreset::Dawn, WeatherPreset::Host);
+        check(dawn.hour == 6 && dawn.minute == 15 && dawn.second == 0,
+              "Dawn pins 06:15");
+        check((dawn.flags & simlink::kEnvTimeManual) != 0,
+              "and says the clock is the operator's, not the HOST's");
+        check((dawn.flags & simlink::kEnvDateValid) != 0 && dawn.year == 2000,
+              "while the date is still the HOST's -- pinning a time is not choosing a day");
+        check(dawn.cloudType == 7 && dawn.precipType == simlink::kPrecipRain,
+              "and the sky is untouched by a clock preset");
+
+        // The weather preset is the mirror: it replaces cloud, precipitation and
+        // visibility, and deliberately leaves temperature, pressure and wind to
+        // the flight model.
+        simlink::Environment storm =
+            cigienv::resolve(host, TimePreset::Host, WeatherPreset::Storm);
+        check(storm.cloudType == 6 && storm.coverage == 100.0 && storm.severity == 5 &&
+              storm.precipType == simlink::kPrecipRain,
+              "Storm is a full cumulonimbus deck of rain");
+        check((storm.flags & simlink::kEnvLightning) != 0,
+              "with lightning, which is the bit the METAR turns into TS");
+        check((storm.flags & simlink::kEnvWeatherManual) != 0,
+              "and says the weather is the operator's");
+        check(storm.visibilityMeters == 1500.0,
+              "the preset brings its own visibility");
+        check(storm.airTempC == host.airTempC &&
+              storm.baroPressureMb == host.baroPressureMb &&
+              storm.horizWindMps == host.horizWindMps,
+              "but leaves the air -- temperature, pressure and wind -- to the HOST");
+        check(storm.hour == 12 && storm.minute == 0,
+              "and the clock to the HOST as well");
+
+        n = cigienv::metarFor(storm, metar, sizeof(metar));
+        check(n > 0 &&
+              std::strcmp(metar, "GLOB 1200Z 00000KT 1500 +TSRA OVC013CB 30/26 Q1013") == 0,
+              "a storm renders as heavy rain, a thunderstorm and a CB deck");
+
+        // Clear is an instruction, not an absence: it has to name a clear sky,
+        // or switching back from Cloudy would leave the sim's last observation
+        // standing.
+        simlink::Environment clear =
+            cigienv::resolve(host, TimePreset::Host, WeatherPreset::Clear);
+        check(clear.cloudType == 0 && clear.coverage == 0.0 &&
+              clear.precipType == simlink::kPrecipNone,
+              "Clear takes the cloud and the precipitation away");
+        check(clear.visibilityMeters == 200000.0, "and opens the visibility");
+        n = cigienv::metarFor(clear, metar, sizeof(metar));
+        check(n > 0 &&
+              std::strcmp(metar, "GLOB 1200Z 00000KT 9999 SKC 30/26 Q1013") == 0,
+              "and the observation names SKC rather than omitting the cloud");
+
+        // A sky with no air: an operator's preset is a sky without an
+        // Atmosphere Control behind it, and the METAR must name only what is
+        // actually present.  The wind, temperature/dew point and pressure
+        // groups are air, and carrying the resolved row's place-holder 0 C /
+        // 1013 mb would parse those into the sim.
+        {
+            cigienv::HostEnvironment noAir;
+            simlink::Environment skyOnly =
+                cigienv::resolve(noAir, TimePreset::Host, WeatherPreset::Storm);
+            check((skyOnly.flags & simlink::kEnvAtmosValid) == 0 &&
+                  (skyOnly.flags & simlink::kEnvWeatherValid) != 0,
+                  "a preset sky with no HOST atmosphere is present without air");
+            n = cigienv::metarFor(skyOnly, metar, sizeof(metar));
+            check(n > 0 &&
+                  std::strcmp(metar, "GLOB 0000Z 1500 +TSRA OVC013CB") == 0,
+                  "so its METAR carries the sky and not the air-derived groups");
+        }
+
+        // The dew point is derived, not round-tripped: the sim wants a number
+        // where the HOST gives temperature and humidity.
+        check(std::fabs(cigienv::dewPointC(30.0, 80.0) - 26.15) < 0.2,
+              "the dew point is the Magnus approximation");
+        check(std::fabs(cigienv::dewPointC(20.0, 100.0) - 20.0) < 1e-6,
+              "saturated air has a dew point equal to its temperature");
+        check(std::isfinite(cigienv::dewPointC(20.0, 0.0)),
+              "and an absent humidity is clamped rather than sent to infinity");
+
+        // -- Publishing: write on change, name the group that moved ----------
+        // Begin with the operator's clock pinned to dawn and the HOST's own
+        // sky, so the change that follows is a sky change and nothing else:
+        // both rows agree on the clock already.
+        simlink::Environment pinnedDawn =
+            cigienv::resolve(host, TimePreset::Dawn, WeatherPreset::Host);
+        simlink::publishEnvironment(pinnedDawn);
+
+        simlink::Environment row{};
+        check(simlink::readEnvironmentRow(fake.shm()->environment, row),
+              "a published world is readable under its seqlock");
+        check(row.generation == 1, "the first write is generation 1");
+        check((row.flags & simlink::kEnvApplyTime) != 0 &&
+              (row.flags & simlink::kEnvApplyAtmos) != 0 &&
+              (row.flags & simlink::kEnvApplyWeather) != 0,
+              "and marks every group as changed, because the add-on has seen none of it");
+        check(row.hour == 6 && row.minute == 15 && row.cloudType == 7 &&
+              row.precipType == simlink::kPrecipRain,
+              "with the resolved values");
+        check((row.flags & simlink::kEnvTimeManual) != 0,
+              "the operator's clock override rides through as state");
+
+        simlink::Health h = simlink::health();
+        check(h.envCarried, "the writer reports the world as carried");
+        check(h.envGeneration == 1, "and the generation it is at");
+
+        // The repeat the HOST sends every frame is dropped: re-publishing the
+        // same world must not advance the generation, because the add-on keys
+        // its clock-set on that generation and re-setting it would stop it.
+        simlink::publishEnvironment(pinnedDawn);
+        check(simlink::health().envGeneration == 1,
+              "an unchanged world is not published again (the generation does not move)");
+
+        // A sky-only change: the same clock, a different cloud.  It must move
+        // the weather group -- and the air group with it, because the preset's
+        // visibility is part of the air -- but leave the clock alone.
+        simlink::Environment stormDawn =
+            cigienv::resolve(host, TimePreset::Dawn, WeatherPreset::Storm);
+        simlink::publishEnvironment(stormDawn);
+        check(simlink::health().envGeneration == 2,
+              "a changed sky advances the generation");
+        check(simlink::readEnvironmentRow(fake.shm()->environment, row) &&
+              row.generation == 2,
+              "and is written");
+        check((row.flags & simlink::kEnvApplyWeather) != 0,
+              "the weather group is flagged as changed");
+        check((row.flags & simlink::kEnvApplyTime) == 0,
+              "and the clock is not, so a new sky does not move the time");
+        check((row.flags & simlink::kEnvApplyAtmos) != 0,
+              "the preset's visibility is air, so that group moves too");
+        check((row.flags & simlink::kEnvWeatherManual) != 0,
+              "and the weather override is visible as state");
+
+        // A clock-only change: the same storm, a different hour.  The mirror
+        // check -- a new clock must not re-send the sky or the air.
+        simlink::Environment stormDay =
+            cigienv::resolve(host, TimePreset::Day, WeatherPreset::Storm);
+        simlink::publishEnvironment(stormDay);
+        check(simlink::health().envGeneration == 3,
+              "a changed clock advances the generation again");
+        check(simlink::readEnvironmentRow(fake.shm()->environment, row) &&
+              row.generation == 3 && row.hour == 12,
+              "and is written");
+        check((row.flags & simlink::kEnvApplyTime) != 0,
+              "the clock group is flagged as changed");
+        check((row.flags & simlink::kEnvApplyWeather) == 0,
+              "and the sky is not, so a new clock does not re-send the weather");
+        check((row.flags & simlink::kEnvApplyAtmos) == 0,
+              "nor the air, which the storm did not change either");
+
+        // Both overrides at once, which is the case the window's two combo
+        // boxes make: the state bits for both have to survive one publish,
+        // because the publisher replaces the flags word rather than OR-ing it.
+        simlink::Environment both =
+            cigienv::resolve(host, TimePreset::Dawn, WeatherPreset::Storm);
+        simlink::publishEnvironment(both);
+        check(simlink::health().envGeneration == 4,
+              "an operator with both overrides set publishes one world");
+
+        // The add-on's own answer, which CigiStarter reads for the window: the
+        // generation it applied and the time of day the sim actually reported.
+        // The DLL writes this; the harness stands in for it.
+        {
+            simlink::EnvironmentStatus& st = fake.shm()->environmentStatus;
+            st.appliedGeneration = 4;
+            st.applies           = 4;
+            st.flags             = row.flags;
+            st.timeOfDay         = 0;   // TIMEOFDAY::DAWN, as the sim might report
+            st.lastError         = 0;
+            // The sky the sim says it holds, in the shape the add-on writes it:
+            // a cumulus layer at 914 m, broken, with the observation it parsed.
+            st.cloudLayers        = 1;
+            st.simCloudType       = 3;   // P3D::CLOUD_CUMULUS
+            st.simCloudCover      = 5;   // P3D::CLOUD_BROKEN_5_8
+            st.simPrecipType      = 0;   // P3D::PRECIP_NONE
+            st.simCloudBaseMeters = 914.4;
+            st.simCloudTopsMeters = 1814.4;
+            std::strncpy(st.simMetar, "GLOB 1200Z 00000KT 9999 BKN030 30/26 Q1013",
+                         sizeof(st.simMetar) - 1);
+            st.simMetar[sizeof(st.simMetar) - 1] = '\0';
+        }
+        h = simlink::health();
+        check(h.envApplies == 4, "the writer surfaces the generations the add-on applied");
+        check(h.envTimeOfDay == 0,
+              "and the time of day the sim reported back -- how a test sees the clock move");
+        check(h.envManualTime && h.envManualWeather,
+              "the operator's overrides are visible in the writer's health");
+
+        // The sky read-back, which is the add-on's answer to "did the cloud
+        // actually reach the sim?" rather than "was it written into the region?".
+        check(h.envSimCloudLayers == 1 && h.envSimCloudType == 3 &&
+              h.envSimCloudCover == 5 && h.envSimPrecipType == 0,
+              "the sim's own cloud layer is surfaced to the window and the tests");
+        check(std::fabs(h.envSimCloudBaseM - 914.4) < 1e-9 &&
+              std::fabs(h.envSimCloudTopsM - 1814.4) < 1e-9,
+              "with the metres the sim reports, not the ones that were asked for");
+        {
+            simlink::EnvironmentStatus stSky{};
+            check(simlink::readEnvironmentStatus(fake.shm()->environmentStatus, stSky) &&
+                  std::strcmp(stSky.simMetar,
+                              "GLOB 1200Z 00000KT 9999 BKN030 30/26 Q1013") == 0,
+                  "and the station observation the sim holds comes back as a string");
+        }
+        check(cigienv::p3dCloudTypeName(3)[0] == 'c' &&
+              std::strcmp(cigienv::p3dCloudCoverName(5), "BKN") == 0 &&
+              std::strcmp(cigienv::p3dCloudCoverName(0), "clear") == 0,
+              "the read-back's own numbering is named the way the window shows it");
+
+        simlink::EnvironmentStatus stIn{};
+        check(simlink::readEnvironmentStatus(fake.shm()->environmentStatus, stIn) &&
+              stIn.applies == 4 && stIn.appliedGeneration == 4,
+              "and the add-on's status row reads back under its own seqlock");
+
+        // The group-presence gate: a world the HOST has never spoken for must
+        // not become a command.  This is the real HOST's case -- its per-frame
+        // list has an Atmosphere Control and no Celestial Sphere or Weather
+        // Control -- and without the gate the 00:00 and clear-sky defaults
+        // would pin the sim's clock to midnight and clear its weather on the
+        // first atmosphere message.
+        {
+            cigienv::HostEnvironment empty;
+            simlink::Environment quiet =
+                cigienv::resolve(empty, TimePreset::Host, WeatherPreset::Host);
+            check((quiet.flags & simlink::kEnvTimeValid) == 0 &&
+                  (quiet.flags & simlink::kEnvAtmosValid) == 0 &&
+                  (quiet.flags & simlink::kEnvWeatherValid) == 0,
+                  "a world the HOST never spoke for has no group present");
+
+            simlink::publishEnvironment(quiet);
+            simlink::Environment quietRow{};
+            check(simlink::readEnvironmentRow(fake.shm()->environment, quietRow) &&
+                  quietRow.generation == 5,
+                  "publishing it still records a generation");
+            check((quietRow.flags & simlink::kEnvApplyTime) == 0 &&
+                  (quietRow.flags & simlink::kEnvApplyAtmos) == 0 &&
+                  (quietRow.flags & simlink::kEnvApplyWeather) == 0,
+                  "but applies nothing -- the sim keeps its own clock and sky");
+        }
+
+        // -- The cloud pattern: the HOST's other way of describing a sky ------
+        // The three `cloud pat*.bin` captures have no Weather Control at all.
+        // What they have instead is a Component Control (id 4) on the entity
+        // they create for it, and it is the only description of their sky there
+        // is.  The wire layout is pinned first, then the mapping, then the
+        // publication -- a pattern that decodes perfectly and never reaches the
+        // add-on's weather group is a message that renders nothing.
+        std::printf("\nthe HOST's cloud pattern (a Component Control, id 4)\n");
+        {
+            uint8_t cc[cigi::kComponentControlSize];
+            buildCloudPattern(cc, 1);
+
+            cigi::ComponentControl c;
+            check(cigi::parseComponentControl(cc, sizeof(cc), c),
+                  "a well-formed Component Control is decoded");
+            check(c.componentId == 0x1001,
+                  "the component id is the uint16 at 2");
+            check(c.instanceId == 0x9001,
+                  "the instance -- the entity it is attached to -- is the uint16 at 4");
+            check(c.componentClass == cigi::kComponentEntity,
+                  "the class is the byte at 6");
+            check(c.componentState == 1, "the state is the byte at 7");
+            check(std::fabs(c.data1 - 14816.0f) < 0.01f &&
+                  std::fabs(c.data2 - 12964.0f) < 0.01f &&
+                  std::fabs(c.data3 - 914.4f) < 0.01f,
+                  "the first three data words are the floats at 8, 12 and 16");
+            check(c.data4 == 0.0f && c.data5 == 0.0f && c.data6 == 0.0f,
+                  "and the last three are the zeroes the captures send");
+            check(!cigi::parseComponentControl(cc, sizeof(cc) - 1, c),
+                  "a truncated Component Control is refused");
+            {
+                const uint8_t saved = cc[0];
+                cc[0] = 99;
+                check(!cigi::parseComponentControl(cc, sizeof(cc), c),
+                      "a message with the wrong id is refused");
+                cc[0] = saved;
+            }
+
+            check(cigi::parseComponentControl(cc, sizeof(cc), c) &&
+                  cigienv::isCloudPattern(c),
+                  "the HOST's cloud pattern is recognised by its component id");
+            // A component that is neither the id nor the class is not a sky.
+            // The class is the trap: what the vendor describes is weather but
+            // what it *sends* is class Entity, so the check has to be Entity
+            // (what the capture carries) and not Global Layered Weather (what
+            // the ICD would call it) -- while still refusing an unrelated
+            // component that merely shares the id.
+            cigi::ComponentControl other = c;
+            other.componentId = 0x1002;
+            check(!cigienv::isCloudPattern(other),
+                  "another component id is not the cloud pattern");
+            other = c;
+            other.componentClass = cigi::kComponentGlobalLayeredWeather;
+            check(!cigienv::isCloudPattern(other),
+                  "and neither is the pattern's id on a class that is not an entity's");
+
+            // Each pattern's sky, from the numbers its own capture carries: the
+            // base is the pattern's altitude (3000 ft, sent as 914.4 m) and the
+            // coverage is its footprint (8 x 7 nmi = 56 square nautical miles).
+            const cigienv::WeatherSpec p1 = cigienv::cloudPatternSpec(1, c);
+            check(p1.cloudType == cigienv::kCloudCumulus,
+                  "a pattern is a cumulus deck -- the wire carries no type");
+            check(std::fabs(p1.baseElevMeters - 914.4) < 0.05,
+                  "its base is the altitude in data 3 (914.4 m = 3000 ft)");
+            check(std::fabs(p1.coverage - 56.0) < 0.5,
+                  "and its coverage is the footprint's area in square nautical miles");
+            check(p1.precipType == simlink::kPrecipNone && !p1.lightning &&
+                  p1.severity == 0,
+                  "with no precipitation -- a cloud pattern is cloud, not rain");
+
+            cigi::ComponentControl c2;
+            buildCloudPattern(cc, 2);
+            check(cigi::parseComponentControl(cc, sizeof(cc), c2),
+                  "the second capture's pattern is decoded too");
+            const cigienv::WeatherSpec p2 = cigienv::cloudPatternSpec(2, c2);
+            check(std::fabs(p2.baseElevMeters - 1066.8) < 0.05 &&
+                  std::fabs(p2.coverage - 30.0) < 0.5,
+                  "it is its own footprint and altitude, not the first pattern's");
+
+            cigi::ComponentControl c3;
+            buildCloudPattern(cc, 3);
+            check(cigi::parseComponentControl(cc, sizeof(cc), c3),
+                  "and the third");
+            const cigienv::WeatherSpec p3 = cigienv::cloudPatternSpec(3, c3);
+            check(std::fabs(p3.coverage - 100.0) < 0.01,
+                  "a pattern wider than the coverage scale is capped at 100 %");
+            check(p3.baseElevMeters > 900.0 && p3.baseElevMeters < 920.0,
+                  "and keeps its own 3000 ft base");
+            // The three captures are three different skies, which is the whole
+            // point of a pattern; a mapping that flattened them would show here.
+            check(p1.coverage != p2.coverage && p2.coverage != p3.coverage,
+                  "the three patterns resolve to three different skies");
+
+            // State 0: the HOST taking the cloud away (it sends it a thousand
+            // datagrams later, with the data fields still filled in) has to be
+            // an explicit clear sky, because a group that is merely absent
+            // leaves the sim holding the last pattern.
+            cigi::ComponentControl off;
+            buildCloudPattern(cc, 0);
+            check(cigi::parseComponentControl(cc, sizeof(cc), off) &&
+                  off.componentState == 0,
+                  "the state-0 form of the message is the same message");
+            const cigienv::WeatherSpec none = cigienv::cloudPatternSpec(0, off);
+            check(none.cloudType == cigienv::kCloudNone && none.coverage == 0.0,
+                  "and it takes the cloud away rather than leaving the last pattern");
+            check(cigienv::cloudPatternSpec(0, off).precipType == simlink::kPrecipNone,
+                  "without inventing any precipitation");
+
+            // Folded in, a pattern *is* the world's sky, and it is marked as the
+            // pattern so a reader can tell it from a Weather Control's.
+            cigienv::HostEnvironment cp;
+            cigienv::applyCloudPattern(cp, c);
+            check(cp.haveWeather && cp.havePattern && cp.patternIndex == 1,
+                  "the pattern is folded in as the world's sky");
+            check(!cp.haveAtmos,
+                  "and brings no air with it -- a pattern is a sky, not an atmosphere");
+
+            simlink::Environment patWorld =
+                cigienv::resolve(cp, TimePreset::Host, WeatherPreset::Host);
+            check((patWorld.flags & simlink::kEnvWeatherValid) != 0,
+                  "so the resolved world has a sky present");
+            check((patWorld.flags & simlink::kEnvWeatherPattern) != 0,
+                  "marked as the HOST's cloud pattern rather than a Weather Control");
+            check((patWorld.flags & simlink::kEnvAtmosValid) == 0,
+                  "with no air group: the real HOST's cloud captures carry no Atmosphere Control");
+            check((patWorld.flags & simlink::kEnvTimeValid) == 0,
+                  "and no clock, so the sim keeps its own time through a cloud capture");
+
+            n = cigienv::metarFor(patWorld, metar, sizeof(metar));
+            check(n > 0 && std::strcmp(metar, "GLOB 0000Z 9999 BKN030") == 0,
+                  "and its METAR is the sky alone: broken cloud at 3000 ft, "
+                  "no wind, temperature or pressure");
+
+            // The operator's own weather still wins over the HOST's pattern, the
+            // same way it wins over a Weather Control.
+            simlink::Environment patStorm =
+                cigienv::resolve(cp, TimePreset::Host, WeatherPreset::Storm);
+            check(patStorm.cloudType == 6 && (patStorm.flags & simlink::kEnvWeatherManual) != 0,
+                  "an operator's weather preset overrides the HOST's pattern");
+            check((patStorm.flags & simlink::kEnvWeatherPattern) == 0,
+                  "and the pattern bit goes with the sky it described");
+
+            // And it publishes: the pattern has to reach the add-on as a weather
+            // change, or the cloud never gets built.
+            simlink::publishEnvironment(patWorld);
+            simlink::Environment patRow{};
+            check(simlink::readEnvironmentRow(fake.shm()->environment, patRow),
+                  "the pattern's world is published");
+            check((patRow.flags & simlink::kEnvApplyWeather) != 0,
+                  "and the add-on is told to re-apply the sky");
+            check((patRow.flags & simlink::kEnvApplyAtmos) == 0,
+                  "but not the air, which the pattern did not touch");
+            check((patRow.flags & simlink::kEnvWeatherPattern) != 0,
+                  "with the pattern bit carried as state");
+            check(simlink::health().envWeatherPattern,
+                  "so the window and the tests can see the sky came from a pattern");
+
+            simlink::EnvironmentStatus patSt{};
+            check(simlink::readEnvironmentStatus(fake.shm()->environmentStatus, patSt),
+                  "the add-on's status row reads back with the sky in it");
+        }
     }
 
     // -- 4. The HOST's own aircraft ------------------------------------------

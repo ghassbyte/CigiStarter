@@ -27,6 +27,10 @@ namespace cigi {
 enum MsgId : uint8_t {
     MsgIGControl         = 1,   // host -> IG : IG control / mode
     MsgEntityControl     = 2,   // host -> IG : entity state + pose
+    MsgComponentControl  = 4,   // host -> IG : a component attached to an entity
+    MsgCelestialSphere   = 9,   // host -> IG : time of day / date
+    MsgAtmosphere        = 10,  // host -> IG : temperature, visibility, wind, pressure
+    MsgWeatherControl    = 12,  // host -> IG : cloud, precipitation, region weather
     MsgViewControl       = 16,  // host -> IG : where the HOST's own eye is
     MsgHATHOTRequest     = 24,  // host -> IG : height-above/height-of terrain request
     MsgStartOfFrame      = 101, // IG -> host : start-of-frame (frame sync)
@@ -39,6 +43,10 @@ enum MsgId : uint8_t {
 //-----------------------------------------------------------------------------
 constexpr uint8_t kSofSize            = 24;  // Start of Frame
 constexpr uint8_t kEntityControlSize  = 48;  // Entity Control
+constexpr uint8_t kComponentControlSize = 32; // Component Control
+constexpr uint8_t kCelestialSphereSize = 16; // Celestial Sphere Control
+constexpr uint8_t kAtmosphereSize      = 32; // Atmosphere Control
+constexpr uint8_t kWeatherControlSize  = 56; // Weather Control
 constexpr uint8_t kViewControlSize    = 32;  // View Control
 constexpr uint8_t kHatHotReqSize      = 32;  // HAT/HOT Request
 constexpr uint8_t kHatHotRespSize     = 16;  // HAT/HOT Response
@@ -257,6 +265,219 @@ struct ViewControl {
 // Decode a View Control message.  Returns false when `msg` is not a
 // well-formed one (wrong id, or shorter than the 32-byte form).
 bool parseViewControl(const uint8_t* msg, size_t size, ViewControl& out);
+
+//-----------------------------------------------------------------------------
+// Celestial Sphere Control (message id 9) decoding -- the HOST's time of day
+//-----------------------------------------------------------------------------
+// The one CIGI message that carries a wall clock, and the only way a HOST tells
+// its IG what time of day to render.  It carries an hour and a minute (no
+// seconds), a date, and a set of enables; the captured sorties use exactly one
+// such message at the start of each replay, with the date 2000-01-01 and the
+// star field off.
+//
+//   off  len  field
+//   0    1    message id       = 9
+//   1    1    message size     = 16
+//   2    1    hour             (uint8, UTC)
+//   3    1    minute           (uint8, UTC)
+//   4    1    flags            (bit0 Ephemeris En, bit1 Sun En, bit2 Moon En,
+//                               bit3 Star En, bit4 Date Valid)
+//   5    3    reserved
+//   8    4    date             (uint32, Month * 1000000 + Day * 10000 + Year)
+//   12   4    star intensity   (float)
+//
+// The four "time of day" captures carry 12:00, 06:15, 17:30 and 23:30 with all
+// four enables set and Date Valid clear-or-set the same way; the flags byte
+// reads 0x11 (Ephemeris + Date Valid) in all of them.
+struct CelestialSphere {
+    uint8_t  hour         = 0;
+    uint8_t  minute       = 0;
+    uint8_t  flags        = 0;
+    uint32_t date         = 0;   // Month*1000000 + Day*10000 + Year
+    float    starIntensity = 0.0f;
+
+    bool dateValid() const { return (flags & 0x10u) != 0u; }
+    bool sunEnabled() const { return (flags & 0x02u) != 0u; }
+    bool moonEnabled() const { return (flags & 0x04u) != 0u; }
+    bool starEnabled() const { return (flags & 0x08u) != 0u; }
+};
+
+// Decode a Celestial Sphere Control message.  Returns false when `msg` is not a
+// well-formed one (wrong id, or shorter than the 16-byte form).
+bool parseCelestialSphere(const uint8_t* msg, size_t size, CelestialSphere& out);
+
+//-----------------------------------------------------------------------------
+// Atmosphere Control (message id 10) decoding -- temperature, visibility, wind
+//-----------------------------------------------------------------------------
+//   off  len  field
+//   0    1    message id       = 10
+//   1    1    message size     = 32
+//   2    1    atmosphere enable (bit 0)
+//   3    1    humidity         (uint8, percent)
+//   4    4    air temperature  (float, degrees C)
+//   8    4    visibility range (float, metres)
+//   12   4    horizontal wind  (float, m/s)
+//   16   4    vertical wind    (float, m/s)
+//   20   4    wind direction   (float, degrees, the direction it comes FROM)
+//   24   4    barometric press (float, millibars)
+//   28   4    reserved
+//
+// The atmospheric enable bit is NOT honoured here: the captured warm-up frames
+// send 0x00 in it while carrying the meaningful values the aircraft is meant to
+// fly in, so gating on it would throw the whole message away.  A field is taken
+// when the message is present, which is the only reading that matches the wire.
+struct Atmosphere {
+    uint8_t atmosEnable   = 0;   // byte 2, bit 0 -- informational only
+    uint8_t humidity      = 0;   // percent
+    float   airTempC      = 0.0f;
+    float   visibilityM   = 0.0f;
+    float   horizWindMps  = 0.0f;
+    float   vertWindMps   = 0.0f;
+    float   windDirDeg    = 0.0f;
+    float   baroPressureMb = 0.0f;
+};
+
+// Decode an Atmosphere Control message.  Returns false when `msg` is not a
+// well-formed one (wrong id, or shorter than the 32-byte form).
+bool parseAtmosphere(const uint8_t* msg, size_t size, Atmosphere& out);
+
+//-----------------------------------------------------------------------------
+// Weather Control (message id 12) decoding -- cloud, precipitation, region
+//-----------------------------------------------------------------------------
+//   off  len  field
+//   0    1    message id       = 12
+//   1    1    message size     = 56
+//   2    2    entity/region ID (uint16)
+//   4    1    layer ID         (0 ground fog, 1-3 cloud layer, 4 rain, 5 snow,
+//                               6 sleet, 7 hail, 8 sand, 9 dust -- this, not the
+//                               severity, is what names the precipitation:
+//                               CigiBaseWeatherCtrl.h `LayerIDGrp`)
+//   5    1    humidity         (uint8, percent)
+//   6    1    flags            (bit0 Weather En, bit1 Scud En, bit2 Random Winds
+//                               En, bit3 Random Lightning En, bits 4-7 cloud type)
+//   7    1    flags2           (bits 0-1 scope 0=Global 1=Regional 2=Entity,
+//                               bits 2-4 severity 0-5, least..most severe)
+//   8    4    air temperature  (float, C)
+//   12   4    visibility range (float, m)
+//   16   4    scud frequency   (float)
+//   20   4    coverage         (float, 0..100 percent)
+//   24   4    base elevation   (float, m)
+//   28   4    thickness        (float, m)
+//   32   4    transition       (float, m)
+//   36   4    horizontal wind  (float, m/s)
+//   40   4    vertical wind    (float, m/s)
+//   44   4    wind direction   (float, degrees)
+//   48   4    barometric press (float, mb)
+//   52   4    aerosol          (float)
+//
+// No capture carries one of these -- the reference HOST commanded a whole
+// environment with the warm-up Atmosphere Control alone and never sent weather
+// -- so this layout is the ICD's, parsed faithfully and exercised by the
+// contract test rather than against a recording.
+struct WeatherControl {
+    uint16_t entityOrRegionId = 0;
+    uint8_t  layerId          = 0;
+    uint8_t  humidity         = 0;
+    uint8_t  flags            = 0;
+    uint8_t  flags2           = 0;
+    float    airTempC         = 0.0f;
+    float    visibilityM      = 0.0f;
+    float    scudFreq         = 0.0f;
+    float    coverage         = 0.0f;
+    float    baseElevM        = 0.0f;
+    float    thicknessM       = 0.0f;
+    float    transitionM      = 0.0f;
+    float    horizWindMps     = 0.0f;
+    float    vertWindMps      = 0.0f;
+    float    windDirDeg       = 0.0f;
+    float    baroPressureMb   = 0.0f;
+    float    aerosol          = 0.0f;
+
+    bool weatherEnabled() const { return (flags & 0x01u) != 0u; }
+    bool lightningEnabled() const { return (flags & 0x08u) != 0u; }
+    unsigned cloudType() const { return (flags >> 4) & 0x0Fu; }
+    unsigned scope() const { return flags2 & 0x03u; }       // 0 global, 1 regional, 2 entity
+    unsigned severity() const { return (flags2 >> 2) & 0x07u; }
+};
+
+// Decode a Weather Control message.  Returns false when `msg` is not a
+// well-formed one (wrong id, or shorter than the 56-byte form).
+bool parseWeatherControl(const uint8_t* msg, size_t size, WeatherControl& out);
+
+//-----------------------------------------------------------------------------
+// Component Control (message id 4) decoding -- a component on an entity
+//-----------------------------------------------------------------------------
+//   off  len  field
+//   0    1    message id       = 4
+//   1    1    message size     = 32
+//   2    2    component ID     (uint16; which component on the entity)
+//   4    2    instance ID      (uint16; for an Entity component, the entity ID)
+//   6    1    component class  (ComponentClass below)
+//   7    1    component state  (class-specific: off/on, or an index)
+//   8    4    data 1           (float)
+//   12   4    data 2
+//   16   4    data 3
+//   20   4    data 4
+//   24   4    data 5
+//   28   4    data 6
+//
+// CIGI's way of attaching something to an entity that is not the entity
+// itself: a light, a sensor, a weather volume.  The class says *what kind* of
+// thing it is and the id says which one, and what the six data fields mean is
+// the class's business, not the protocol's.
+//
+// The class enum, as in the ICD and in Wireshark's packet-cigi.c:
+enum ComponentClass : uint8_t {
+    kComponentEntity               = 0,  // an entity's own appearance
+    kComponentView                 = 1,
+    kComponentViewGroup            = 2,
+    kComponentSensor               = 3,
+    kComponentRegionalSeaSurface   = 4,
+    kComponentRegionalTerrainSurface = 5,
+    kComponentRegionalLayeredWeather = 6,
+    kComponentGlobalSeaSurface     = 7,
+    kComponentGlobalTerrainSurface = 8,
+    kComponentGlobalLayeredWeather = 9,
+    kComponentAtmosphere           = 10,
+    kComponentCelestialSphere      = 11,
+    kComponentEvent                = 12,
+    kComponentSystem               = 13,
+};
+//
+// The reference HOST uses exactly one component id, and it is the cloud
+// pattern: the three `cloud pat*.bin` captures -- and no other capture beside
+// this repository -- carry a Component Control naming component 0x1001 on the
+// entity 0x9001 they also create for it, class Entity, with the state 1/2/3
+// and then 0 and with the first three data fields set.  Those three are a
+// footprint and an altitude, all in metres as CIGI carries them: 14816 = 8 x
+// 1852 m across, 12964 = 7 x 1852 m deep and 914.4 m = 3000 ft up for the first
+// pattern -- the vendor's tool writing nautical miles and feet and converting
+// both.  That is why the cloud pattern is decoded as a *size* and a *height*
+// rather than as a position: the position is the entity's own Entity Control,
+// in the same datagram.  Environment.h turns the pair into the sky Prepar3D can
+// actually be given.
+//
+// The class is *not* checked against Global Layered Weather: the vendor sends
+// Entity (0) for a cloud, so gating on the class that would make sense would
+// silently drop every pattern.  It is checked to *be* Entity (0) instead, which
+// is what the captures carry, so an unrelated component on another entity is
+// not mistaken for a sky.
+struct ComponentControl {
+    uint16_t componentId    = 0;
+    uint16_t instanceId     = 0;
+    uint8_t  componentClass = 0;   // ComponentClass
+    uint8_t  componentState = 0;
+    float    data1 = 0.0f;
+    float    data2 = 0.0f;
+    float    data3 = 0.0f;
+    float    data4 = 0.0f;
+    float    data5 = 0.0f;
+    float    data6 = 0.0f;
+};
+
+// Decode a Component Control message.  Returns false when `msg` is not a
+// well-formed one (wrong id, or shorter than the 32-byte form).
+bool parseComponentControl(const uint8_t* msg, size_t size, ComponentControl& out);
 
 //-----------------------------------------------------------------------------
 // Parsing helper

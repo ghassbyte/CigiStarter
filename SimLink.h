@@ -14,14 +14,19 @@
 //    Publishers the HOST's commanded pose for each entity into a block of shared
 //    memory (SimLinkIpc.h); PdkSimLink.dll, an add-on loaded into the local
 //    Prepar3D, reads it on the sim's own frame tick and moves a sim object to
-//    it.  The link is one-way: the CIGI stream already carries everything the
-//    sim needs, so nothing of this crosses the wire back to the HOST, and the
-//    IG never touches the sim itself.
+//    it.  The same block also carries the HOST's world beyond the entities --
+//    its time of day, atmosphere and weather -- which the add-on applies on the
+//    sim's own clock and weather systems.  The link is one-way: the CIGI stream
+//    already carries everything the sim needs, so nothing of this crosses the
+//    wire back to the HOST, and the IG never touches the sim itself.
 //
 //  Scope of this first cut
-//    Pose only -- position and attitude.  Time of day, weather and effects are
-//    the next things the same channel will carry; the table has room and the
-//    version field is the guard against a half-updated pair.
+//    Pose, plus the environment above.  The sky is either the HOST's Weather
+//    Control or its cloud pattern (a Component Control on the cloud entity, the
+//    way the `cloud pat*.bin` captures describe one), resolved to one layer the
+//    add-on applies to the sim's own weather system.  Effects (lights, smoke,
+//    damage) are the next things the same channel will carry; the table has room
+//    and the version field is the guard against a half-updated pair.
 //
 //  Failure behaviour
 //    If Prepar3D is not running, or the add-on is not installed, or it has not
@@ -34,6 +39,7 @@
 #include <cstdint>
 
 #include "cigi.h"
+#include "SimLinkIpc.h"
 
 namespace simlink {
 
@@ -49,6 +55,23 @@ void publish(const cigi::EntityControl& e);
 // the difference is what a cockpit view is.  Same contract and the same lazy
 // re-open as publish(), and safe to call from the same thread.
 void publishView(const cigi::ViewControl& v);
+
+// Publish the world the HOST wants rendered: the clock, the atmosphere and the
+// cloud/precipitation.  `env` is the *resolved* row -- the HOST's own values
+// with any operator override already applied -- because that resolution is
+// policy the IG owns (Environment.h) and the add-on should only have to apply
+// what it is given.
+//
+// This is not the once-per-message write the two above are: an unchanged row is
+// dropped here rather than pushed, `generation` advances only when something
+// actually changed, and `flags`' apply bits say which groups did.  That is what
+// keeps a commanded 12:00 from being re-applied every frame, which would pin the
+// sim's own clock to the second instead of letting it run.  The state bits the
+// caller set (manual overrides, date valid, lightning) are carried through
+// unchanged.
+//
+// Safe to call from the CIGI receive thread, like the others.
+void publishEnvironment(const Environment& env);
 
 // A picture of the writer for the operator window and a bench readout: whether
 // the add-on is there, whether it is applying, and why not.  Everything here is
@@ -79,6 +102,25 @@ struct Health {
     bool     hasReadback    = false;  // a pose has been read back from the sim
     bool     noTitle        = false;  // PdkSimLink.ini has no container title
     bool     viewCarried    = false;  // the HOST's own eye has been published
+    bool     envCarried     = false;  // an environment row has been published
+    uint32_t envGeneration  = 0;      // the published environment generation
+    bool     envManualTime  = false;  // the operator is overriding the clock
+    bool     envManualWeather = false;// the operator is overriding the weather
+    bool     envWeatherPattern = false;// the sky is the HOST's cloud pattern
+    uint32_t envApplies     = 0;      // environment generations the add-on applied
+    int32_t  envTimeOfDay   = -1;     // TIMEOFDAY the sim last reported (-1 none)
+    int32_t  envLastError   = 0;      // last HRESULT from a time/weather call
+    // What the sim itself says the sky is, read back out of the weather system
+    // by the add-on (SimLinkIpc.h, kVersion 5): the cloud layer count and the
+    // lowest layer.  A METAR that names a cloud is a request, and this is the
+    // only evidence that it became cloud -- the same role `envTimeOfDay` plays
+    // for the clock.
+    uint32_t envSimCloudLayers = 0;   // cloud layers the sim now holds
+    uint32_t envSimCloudType   = 0;   // P3D::CLOUD_TYPE of layer 0
+    uint32_t envSimCloudCover  = 0;   // P3D::CLOUD_COVER of layer 0
+    int32_t  envSimPrecipType  = -1;  // P3D::PRECIPTYPE of layer 0 (-1 = no layer)
+    double   envSimCloudBaseM  = 0.0; // layer 0 base, metres
+    double   envSimCloudTopsM  = 0.0; // layer 0 tops, metres
 };
 
 Health health();

@@ -47,13 +47,22 @@
 #include <windows.h>
 
 #include <cstdio>   // the opt-in camera log (camera_log=1) writes a file
+#include <cstring>  // the sky read-back copies the station METAR into the region
 
 #include <Pdk.h>
 #include <ISimObject.h>
-// The EVENTID_* GUIDs are declared with DEFINE_GUID, which is an extern
-// declaration unless INITGUID is in scope. This is the only translation unit in
-// the DLL, so instantiate them here.
+// The EVENTID_* and service/interface GUIDs are declared with DEFINE_GUID,
+// which is an extern declaration unless INITGUID is in scope. This is the only
+// translation unit in the DLL, so instantiate them here -- the two environment
+// service headers included below must therefore follow initguid.h.
 #include <initguid.h>
+// The two services the world beyond the entities needs: the sim's own clock
+// (IGlobalData: SetDate/SetTime/GetGeneralTimeOfDay) and its weather system
+// (IWeatherSystem: SetMetarData plus the global setters).  Neither has a
+// SimConnect equivalent for time, which is why the world is applied here and not
+// by a second channel.
+#include <IGlobalData.h>
+#include <IWeatherSystem.h>
 #include <IEventService.h>
 // The window-and-camera service: how the sim's own view is flown from an entity
 // (see "The camera" below). It is the same header the sim's CameraSystemPDK
@@ -61,6 +70,7 @@
 #include <IWindowPluginSystem.h>
 
 #include "CigiEntity.h"   // the physics-free ISimObject a container can be routed to
+#include "Environment.h"  // the METAR and dew point for the resolved world
 #include "SimLinkIpc.h"
 #include "SimLinkMap.h"   // the PDK-free half: what to render, and into what units
 
@@ -93,6 +103,17 @@ ObjectManager*         g_objects = nullptr;
 // configuration hoped -- so `diag` says what is actually happening.
 volatile LONG          g_physicsFreeObjects = 0;
 volatile LONG          g_modePauseOrSlew    = 0;
+
+// The world beyond the entities: the sim's own clock and weather system, and the
+// generation of SimLinkIpc.h's `Environment` row last applied.  Both services
+// are borrowed from the PDK (never released) and may be absent on an
+// installation that does not offer them, in which case the row is still read and
+// its read-back still published, just with a failing time-of-day.  The
+// generation is what makes this apply-on-change rather than every frame: the IG
+// bumps it only when the resolved world actually differs.
+IGlobalDataV430*       g_globalData = nullptr;
+IWeatherSystemV500*    g_weather    = nullptr;
+uint32_t               g_envAppliedGeneration = 0;
 
 // The container title every entity object is created from.  There is no title
 // that is guaranteed to exist in an arbitrary installation, so this is a deploy-
@@ -315,6 +336,202 @@ void clearHeld(int i) {
 }
 
 //-----------------------------------------------------------------------------
+// The world beyond the entities: the clock and the weather
+//
+// SimLinkIpc.h's `Environment` row is the IG's resolved world -- the HOST's own
+// clock, atmosphere and weather with any operator override already applied
+// (Environment.h).  This is where it becomes sim state, and it is the only place
+// in the link that calls into the sim's *services* rather than its objects.
+//
+// It applies on *change*, keyed by the row's generation, not every tick.  That
+// is deliberate: SetTime pins the sim's clock to the second it is given, so
+// re-applying an unchanged clock would stop the clock rather than set it.  The
+// IG's publisher only bumps the generation when the resolved world differs, so a
+// steady world costs one compare a frame.
+//
+// The time is applied as LOCAL, not Zulu: the four time-of-day captures read as
+// local wall-clock (Environment.h has the reasoning; the site is UTC+7).  The
+// sky goes through a synthesised METAR for what Prepar3D's weather parser can
+// express -- cloud, precipitation, lightning -- and then the air through the
+// exact global setters, which win wherever the two disagree.  A METAR is sent
+// whenever a sky is applied, a clear one included (`SKC`), because otherwise
+// switching from Cloudy back to Clear would leave the sim's previous cloud
+// standing.
+//
+// The air and the sky are gated separately, and on *presence*, because the two
+// come from different CIGI messages and either can arrive without the other:
+//
+//   * the METAR -- the sky -- is sent only when a sky is actually present (the
+//     HOST's Weather Control, or an operator preset).  A METAR always names a
+//     sky, SKC included, so sending one for an atmosphere-only change would
+//     clear the sim's cloud that nobody commanded.  This is the presence gate's
+//     whole point and it has to hold here as well as in the publisher: an
+//     Atmosphere Control is not a weather message.  The reference HOST sends an
+//     Atmosphere Control and no Weather Control at all, so without this the
+//     sim's sky would be cleared at warm-up.
+//   * the exact air values are applied only when the HOST has actually sent the
+//     air (`kEnvAtmosValid`), so an operator's weather preset chosen before the
+//     warm-up Atmosphere Control cannot push the resolved row's place-holder
+//     temperature and pressure (or its METAR's) onto the sim.
+//
+// Visibility is the one value both groups own -- the HOST's atmosphere carries
+// it and a preset overrides it -- so it is applied whenever either group is.
+//-----------------------------------------------------------------------------
+void applyEnvironment(const simlink::Environment& e) {
+    HRESULT hr = S_OK;
+
+    if (e.flags & simlink::kEnvApplyTime) {
+        if (g_globalData) {
+            // Date first, then the clock: setting the date can move the clock's
+            // day and this keeps the two consistent.
+            if (e.flags & simlink::kEnvDateValid) {
+                const HRESULT dh = g_globalData->SetDate(
+                    e.year, e.month, e.day, TIMEREF_LOCAL);
+                if (FAILED(dh)) hr = dh;
+            }
+            const HRESULT th = g_globalData->SetTime(
+                e.hour, e.minute, e.second, TIMEREF_LOCAL);
+            if (FAILED(th)) hr = th;
+        }
+    }
+
+    if (e.flags & (simlink::kEnvApplyAtmos | simlink::kEnvApplyWeather)) {
+        if (g_weather) {
+            // Global mode is what makes the `GLOB` observation render; a
+            // station-addressed one is stored but not drawn.
+            const HRESULT mh = g_weather->SetWeatherMode(WEATHER_MODE_GLOBAL,
+                                                         nullptr);
+            if (FAILED(mh)) hr = mh;
+
+            if (e.flags & simlink::kEnvApplyWeather) {
+                char metar[256] = "";
+                cigienv::metarFor(e, metar, sizeof(metar));
+
+                wchar_t wmetar[256] = L"";
+                ::MultiByteToWideChar(CP_ACP, 0, metar, -1, wmetar,
+                                      ARRAYSIZE(wmetar));
+
+                // Seconds = 0: apply the observation now, not blended in.
+                const HRESULT sh = g_weather->SetMetarData(wmetar, 0);
+                if (FAILED(sh)) hr = sh;
+            }
+
+            // The exact values, in the units the setters take (m/s for wind,
+            // degrees, millibars), so a value the METAR rounds never becomes the
+            // reading.  Dew point is derived the same way the METAR derives it.
+            if (e.flags & simlink::kEnvAtmosValid) {
+                g_weather->SetGlobalTemp(static_cast<float>(e.airTempC));
+                g_weather->SetGlobalHorizWindSpeed(
+                    static_cast<float>(e.horizWindMps));
+                g_weather->SetGlobalWindDirection(
+                    static_cast<float>(e.windDirDeg));
+                g_weather->SetGlobalBaroPressure(
+                    static_cast<float>(e.baroPressureMb));
+                g_weather->SetGlobalDewPoint(
+                    static_cast<float>(cigienv::dewPointC(e.airTempC,
+                                                          e.humidityPct)));
+            }
+
+            g_weather->SetGlobalVisRange(static_cast<float>(e.visibilityMeters));
+        }
+    }
+
+    // The read-back: the generation acted on, how many have been, and what the
+    // sim now says the time of day is.  Strictly this add-on's row (the IG only
+    // reads it), guarded by its own seqlock.
+    if (g_shm) {
+        simlink::EnvironmentStatus& st = g_shm->environmentStatus;
+        const int32_t tod = g_globalData
+                                ? static_cast<int32_t>(g_globalData->GetGeneralTimeOfDay())
+                                : static_cast<int32_t>(-1);
+        ++st.seq;
+        st.appliedGeneration = e.generation;
+        st.applies           = st.applies + 1;
+        st.flags             = e.flags;
+        st.timeOfDay         = tod;
+        st.lastError         = static_cast<int32_t>(hr);
+        ++st.seq;
+    }
+    g_envAppliedGeneration = e.generation;
+}
+
+//-----------------------------------------------------------------------------
+// What the sim says the sky is
+//
+// `SetMetarData` returning S_OK says the observation parsed, not that cloud
+// exists; the layer the weather system reports afterwards is the only evidence
+// there is, and it is what lets an outside test say the HOST's cloud reached the
+// sim rather than the shared region.  Same idea as `GetGeneralTimeOfDay` for the
+// clock.
+//
+// It is refreshed on *every* tick rather than once per apply, because the
+// weather system settles asynchronously: an observation applied this frame can
+// still be showing the previous sky, so a reading taken once would sometimes
+// record the sky that was there before.  The cost is one count and one small
+// struct copy, and the caller (the IG's window) only has to read the row.
+//
+// Both readings come from the station the world is applied to (`GLOB`), not from
+// the weather system: the cloud layers belong to a *station* in Prepar3D's model
+// (`IWeatherStationV430`), and the system only hands one out.  Layer 0 is the
+// lowest -- the one a viewer is under -- and is the one recorded.
+// `precipType` is -1 when the station has no layer at all, which is how the
+// read-out tells "no sky" from "a clear sky".
+//-----------------------------------------------------------------------------
+void publishSimSky() {
+    if (!g_shm || !g_weather) return;
+
+    uint32_t layers = 0;
+    uint32_t type   = 0;
+    uint32_t cover  = 0;
+    int32_t  precip = -1;
+    double   baseM  = 0.0;
+    double   topsM  = 0.0;
+    char     metar[simlink::kSimMetarChars];
+    metar[0] = '\0';
+
+    P3D::IWeatherStationV430* station = nullptr;
+    if (SUCCEEDED(g_weather->GetWeatherStation(cigienv::kMetarStation, &station)) &&
+        station) {
+        const int n = station->GetCloudLayerCount();
+        if (n > 0) {
+            layers = static_cast<uint32_t>(n);
+            P3D::CloudLayer layer{};
+            if (SUCCEEDED(station->GetCloudAtIndex(0, layer))) {
+                type   = static_cast<uint32_t>(layer.eCloudType);
+                cover  = static_cast<uint32_t>(layer.eCloudCover);
+                precip = static_cast<int32_t>(layer.ePrecipType);
+                baseM  = static_cast<double>(layer.fCloudBase);
+                topsM  = static_cast<double>(layer.fCloudTops);
+            }
+        }
+        station->Release();
+    }
+
+    // The observation the sim holds for that station -- what its parser made of
+    // the string the add-on handed it, which is as close as an add-on can get to
+    // reading back "the sim read it".
+    wchar_t wmetar[512];
+    wmetar[0] = L'\0';
+    if (SUCCEEDED(g_weather->GetStationMetarData(
+            cigienv::kMetarStation, wmetar, ARRAYSIZE(wmetar)))) {
+        ::WideCharToMultiByte(CP_ACP, 0, wmetar, -1, metar,
+                              static_cast<int>(sizeof(metar)), nullptr, nullptr);
+        metar[sizeof(metar) - 1] = '\0';
+    }
+
+    simlink::EnvironmentStatus& st = g_shm->environmentStatus;
+    ++st.seq;
+    st.cloudLayers        = layers;
+    st.simCloudType       = type;
+    st.simCloudCover      = cover;
+    st.simPrecipType      = precip;
+    st.simCloudBaseMeters = baseM;
+    st.simCloudTopsMeters = topsM;
+    std::memcpy(st.simMetar, metar, simlink::kSimMetarChars);
+    ++st.seq;
+}
+
+//-----------------------------------------------------------------------------
 // Shared memory
 //-----------------------------------------------------------------------------
 void openShared() {
@@ -339,6 +556,13 @@ void openShared() {
     g_shm->simPid   = ::GetCurrentProcessId();
     g_shm->alive    = 0;
     g_shm->lastError = 0;
+    // -1 means "no time has been applied yet"; zero would read as dawn. The
+    // rest of the status row is already zero from ZeroMemory above, and the sky
+    // read-back is the same shape: -1 precipitation is "no cloud layer at all",
+    // which publishSimSky() writes on its first tick anyway.
+    g_shm->environmentStatus.timeOfDay     = -1;
+    g_shm->environmentStatus.simPrecipType = -1;
+    g_envAppliedGeneration = 0;
     publishDiag();  // sets kPresent, so a reader knows the diag word is meaningful
 }
 
@@ -520,6 +744,24 @@ void serviceTick(bool fromSim) {
     (void)fromSim;
 
     publishDiag();
+
+    // The world beyond the entities: apply a generation the IG has published and
+    // this add-on has not yet acted on.  Independent of the object manager and
+    // the title, so a deployment with no entities yet still gets its clock and
+    // weather; the IG's publisher only moves the generation when something
+    // changed, which is what keeps an unchanged clock from re-pinning the sim.
+    {
+        simlink::Environment env;
+        if (simlink::readEnvironmentRow(g_shm->environment, env) &&
+            env.generation != 0 && env.generation != g_envAppliedGeneration) {
+            applyEnvironment(env);
+        }
+    }
+
+    // And what the sim turned that into, read back from its own weather system.
+    // Cheap, and independent of the object manager and the title, so the sky is
+    // reported even on a deployment with no entities at all.
+    publishSimSky();
 
     if (g_objects && g_haveTitle) {
         uint32_t applied = 0;
@@ -1171,6 +1413,19 @@ STDMETHODIMP_(void) DLLStart(__in __notnull IPdk* pPdk)
         publish(E_NOINTERFACE);
     }
 
+    // The environment services: the sim's own clock and its weather system.
+    // Queried unconditionally, unlike the camera, because the HOST's world is
+    // always worth applying; a failure just leaves the corresponding read-back
+    // (the time of day) unset, which is how the bench tells.
+    if (FAILED(pPdk->QueryService(SID_GlobalData, IID_IGlobalDataV430,
+                                  reinterpret_cast<void**>(&g_globalData)))) {
+        g_globalData = nullptr;
+    }
+    if (FAILED(pPdk->QueryService(SID_WeatherSystem, IID_IWeatherSystemV500,
+                                  reinterpret_cast<void**>(&g_weather)))) {
+        g_weather = nullptr;
+    }
+
     if (g_objects) {
         // The physics-free object: a container whose sim.cfg carries this GUID as
         // [General] CategoryId is routed to CigiEntity, and every entity object
@@ -1245,5 +1500,13 @@ STDMETHODIMP_(void) DLLStop()
     }
 
     if (g_host) { g_host->Release(); g_host = nullptr; }
+
+    // The environment services are borrowed, not owned, so there is nothing to
+    // release -- only the pointers to forget, and the applied generation to
+    // reset so a restart of the add-on applies the current world afresh.
+    g_globalData = nullptr;
+    g_weather    = nullptr;
+    g_envAppliedGeneration = 0;
+
     closeShared();
 }

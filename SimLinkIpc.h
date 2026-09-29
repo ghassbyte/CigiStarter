@@ -76,7 +76,16 @@ constexpr uint32_t kMagic   = 0x4B4C5350u;  // 'P','S','L','K'
 //    own reference point.  It is appended after `held[]`, so the two existing
 //    tables keep the offsets they had and a reader written against version 2
 //    still finds them where it expects them.
-constexpr uint32_t kVersion = 3u;
+//   4: adds `environment`, the HOST's world beyond the entities -- time of day,
+//    atmosphere and weather -- and the add-on's `environmentStatus` read-back.
+//    Both are appended after `view`, so the three tables above keep the offsets
+//    they had and a version-3 reader still finds them where it expects them.
+//   5: `environmentStatus` gains the sim's own answer about the sky it now
+//    holds -- the cloud layer the weather system reports after an apply -- so a
+//    cloud the HOST commanded can be shown to have reached the sim and not
+//    merely been written into the region.  Nothing above it moves: the row is
+//    the last thing in the region, so it only grows.
+constexpr uint32_t kVersion = 5u;
 
 // Slots in the entity table. CIGI entity IDs are 16-bit, but the HOST in this
 // deployment drives a handful of entities (its capture has three Entity Controls
@@ -223,6 +232,140 @@ struct View {
     double   yawDeg;              // degrees, relative to the entity
 };
 
+// The HOST's world beyond the entities: the time of day it wants rendered, the
+// atmosphere (temperature, visibility, wind, pressure, humidity) and its clouds
+// and precipitation.  This is the one block the IG resolves before it publishes,
+// because the operator can override parts of it by hand: the row already carries
+// what is to be applied, not the raw CIGI fields, so the add-on does no policy
+// of its own beyond deciding what changed.
+//
+// The CIGI messages behind it (cigi.h): a Celestial Sphere Control (id 9) is the
+// wall clock -- the four time-of-day captures carry one each, 06:15 / 12:00 /
+// 17:30 / 23:30 local, date 2000-01-01; an Atmosphere Control (id 10) is the
+// air the aircraft flies in, and the captures carry it in their warm-up frames
+// (temperature, visibility, wind, pressure); a Weather Control (id 12) is cloud
+// and precipitation, and no capture carries one, so that path is built to the
+// ICD and contract-tested rather than replayed.
+//
+// A row is written only when the resolved world actually changes, and
+// `generation` advances with each change: that is what tells the add-on "there
+// is something new to apply" without it having to diff the whole block on every
+// sim frame, and -- just as important -- it is why an unchanged time is not
+// re-applied every frame, which would pin the sim's own clock to the commanded
+// second.  `flags` says *which* parts of this generation changed, so a weather
+// edit does not move the clock.
+struct Environment {
+    volatile uint32_t seq;         // seqlock: odd while the IG rewrites this row
+    uint32_t generation;           // 0 = nothing published yet; advances on change
+    uint32_t flags;                // EnvFlags: what is present and what changed
+    uint32_t hour;                 // local wall clock (the captures read as local)
+    uint32_t minute;
+    uint32_t second;
+    uint32_t year;                 // only meaningful with kEnvDateValid
+    uint32_t month;
+    uint32_t day;
+    uint32_t cloudType;            // CIGI CloudTypeGrp (cigi.h): 0 none, 6 Cb, 7 Cu
+    uint32_t severity;             // 0..5, least..most severe (CIGI Weather Control)
+    uint32_t precipType;           // PrecipType: what the layer is dropping
+    double   airTempC;             // degrees C
+    double   visibilityMeters;
+    double   coverage;             // cloud coverage, 0..100
+    double   baseElevMeters;       // cloud base, metres
+    double   thicknessMeters;      // cloud layer thickness, metres
+    double   horizWindMps;         // horizontal wind, m/s
+    double   vertWindMps;          // vertical wind, m/s
+    double   windDirDeg;           // direction the wind comes FROM, degrees
+    double   baroPressureMb;       // millibars
+    double   humidityPct;          // relative humidity, percent (for the dew point)
+};
+
+// Bits in `Environment::flags`.  The first three are "this group changed in this
+// generation, apply it"; the `*Valid` bits are what makes that safe -- they say
+// the group is actually *present*, from the HOST or an operator override, so a
+// group nobody has spoken for is not applied at all.  Without them a HOST that
+// never sends a Celestial Sphere (the real one does not: AGENTS.md's per-frame
+// list has an Atmosphere Control and no clock) would resolve to the default
+// 00:00 and slam the sim's own clock to midnight on the first atmosphere
+// message.  The manual bits are state, so a reader can say whether an operator
+// is overriding the HOST; the date is a property of the time.
+//
+// Keeping "changed" in the same word as "present" and "manual" is deliberate:
+// the add-on only ever acts on the apply bits and `generation`, so it never has
+// to know why the value changed -- an operator preset and a HOST command are the
+// same thing to it, which is exactly the point of resolving on the IG side.
+enum EnvFlags : uint32_t {
+    kEnvApplyTime    = 1u << 0,  // the wall clock changed; apply it
+    kEnvApplyAtmos   = 1u << 1,  // temperature/visibility/wind/pressure changed
+    kEnvApplyWeather = 1u << 2,  // cloud/precipitation changed
+    kEnvTimeManual   = 1u << 3,  // the clock is an operator override, not the HOST's
+    kEnvWeatherManual = 1u << 4, // cloud/visibility are an operator override
+    kEnvDateValid    = 1u << 5,  // year/month/day are present and to be applied
+    kEnvLightning    = 1u << 6,  // lightning is present (CIGI Random Lightning En)
+    kEnvTimeValid    = 1u << 7,  // a clock is present (HOST or override); apply it
+    kEnvAtmosValid   = 1u << 8,  // the air is present (HOST atmosphere); apply it
+    kEnvWeatherValid = 1u << 9,  // a sky is present (HOST weather or override)
+    kEnvWeatherPattern = 1u << 10, // the sky is the HOST's *cloud pattern*
+                                   // (a Component Control on the cloud entity),
+                                   // not an operator preset or a Weather Control
+};
+
+// What is falling out of the sky.  The CIGI Weather Control names it with its
+// LayerID rather than with the severity or the cloud type -- `CigiBaseWeatherCtrl.h`
+// `LayerIDGrp`: 0 ground fog, 1-3 cloud layers, 4 rain, 5 snow, 6 sleet, 7 hail,
+// 8 sand, 9 dust -- so this is that field resolved to the kinds that fall, and
+// the add-on synthesises "-RA" / "+SN" from it and the severity without having
+// to re-derive CIGI's numbering.  The cloud-layer and fog ids are no
+// precipitation, which is why `kPrecipNone` is the zero value.
+enum PrecipType : uint32_t {
+    kPrecipNone  = 0,
+    kPrecipRain  = 1,
+    kPrecipSnow  = 2,
+    kPrecipSleet = 3,
+    kPrecipHail  = 4,
+    kPrecipSand  = 5,
+    kPrecipDust  = 6,
+};
+
+// The add-on's answer: what it last applied, and what the sim now says the time
+// of day and the cloud are.  Strictly the add-on's table (the IG only reads it),
+// guarded by its own seqlock.
+//
+// `timeOfDay` is Prepar3D's own `TIMEOFDAY` (DAWN 0, DAY 1, DUSK 2, NIGHT 3,
+// INVALID -1), read back with `IGlobalData::GetGeneralTimeOfDay()` after the
+// clock is set -- the only way an outside test can tell that a commanded 12:00
+// actually became day rather than merely being accepted.
+//
+// The sky is the same idea, and it takes two forms because the two answer
+// different questions.  `simMetar` is the *observation* the sim now holds for
+// the station the world was applied to (`GLOB`), read back with
+// `GetStationMetarData`: it is what the weather parser made of the string the
+// add-on sent, which is as close as an add-on can get to "the sim read it".  The
+// `simCloud*` words are the cloud *layers* that observation became, from
+// `IWeatherStationV430::GetCloudLayerCount`/`GetCloudAtIndex` on that station:
+// the cloud that is actually being drawn.  Layer 0 is the lowest -- the one a
+// viewer is under -- and is the one recorded; `simPrecipType` is -1 when the
+// station holds no layer at all, which is how a reader tells "no sky" from "a
+// clear sky".  Both are refreshed every tick, because the weather system settles
+// asynchronously.
+constexpr size_t kSimMetarChars = 200;   // narrow characters, NUL-terminated
+
+struct EnvironmentStatus {
+    volatile uint32_t seq;         // seqlock: odd while the add-on rewrites it
+    uint32_t appliedGeneration;    // the last `Environment::generation` applied
+    uint32_t applies;              // generations applied since the add-on loaded
+    uint32_t flags;                // EnvFlags the add-on last acted on
+    int32_t  timeOfDay;            // TIMEOFDAY the sim reports (-1 = never applied)
+    int32_t  lastError;            // last HRESULT from a weather/time call
+    // The sim's own sky, read back from its weather system (kVersion 5).
+    uint32_t cloudLayers;          // cloud layers the station now holds
+    uint32_t simCloudType;         // P3D::CLOUD_TYPE of layer 0 (0 = none)
+    uint32_t simCloudCover;        // P3D::CLOUD_COVER of layer 0 (0 = clear)
+    int32_t  simPrecipType;        // P3D::PRECIPTYPE of layer 0 (-1 = no layer)
+    double   simCloudBaseMeters;   // layer 0 base, metres
+    double   simCloudTopsMeters;   // layer 0 tops, metres
+    char     simMetar[kSimMetarChars];  // the station's observation, as the sim holds it
+};
+
 struct Shared {
     uint32_t magic;         // kMagic
     uint32_t version;       // kVersion
@@ -256,10 +399,16 @@ struct Shared {
     Entity entities[kMaxEntities];
     Held   held[kMaxEntities];
 
-    // Appended last on purpose: the two tables above keep the offsets they had
-    // at kVersion 2, so the change is visible in the version and in the size,
-    // not in the middle of the region.
+    // Appended last on purpose: the tables above keep the offsets they had at
+    // kVersion 2 (and view at 9816, where kVersion 3 put it), so a change is
+    // visible in the version and in the size, not in the middle of the region.
     View   view;
+
+    // The resolved world (kVersion 4): what the IG wants applied, and the
+    // add-on's answer. The clock and weather rows are the IG's to write; only
+    // the add-on writes `environmentStatus`, and the IG only reads it.
+    Environment       environment;
+    EnvironmentStatus environmentStatus;
 };
 #pragma pack(pop)
 
@@ -272,14 +421,25 @@ struct Shared {
 //   entities 64 * 72 = 4608, starting at 88
 //   held     64 * 80 = 5120, starting at 88 + 4608 = 4696
 //   view     4 u32 (16) + 6 doubles (48) = 64, starting at 4696 + 5120 = 9816
-//            sizeof(Shared) = 9816 + 64 = 9880
+//   environment       12 u32 (48) + 10 doubles (80) = 128, starting at 9880
+//   environmentStatus 10 u32 (40) + 2 doubles (16) + 200 chars = 256,
+//                     starting at 9880 + 128 = 10008
+//            sizeof(Shared) = 10008 + 256 = 10264
 static_assert(sizeof(Entity) == 72, "Entity must stay 72 bytes");
 static_assert(sizeof(Held) == 80, "Held must stay 80 bytes");
 static_assert(sizeof(View) == 64, "View must stay 64 bytes");
+static_assert(sizeof(Environment) == 128, "Environment must stay 128 bytes");
+static_assert(sizeof(EnvironmentStatus) == 256,
+              "EnvironmentStatus must stay 256 bytes");
 static_assert(offsetof(Shared, entities) == 88, "entities[] must start at 88");
 static_assert(offsetof(Shared, held) == 4696, "held[] must start at 4696");
 static_assert(offsetof(Shared, view) == 9816, "view must start at 9816");
-static_assert(sizeof(Shared) == 9880,
-              "Shared must be the header plus the entity, held and view tables");
+static_assert(offsetof(Shared, environment) == 9880,
+              "environment must start at 9880");
+static_assert(offsetof(Shared, environmentStatus) == 10008,
+              "environmentStatus must start at 10008");
+static_assert(sizeof(Shared) == 10264,
+              "Shared must be the header, the entity/held/view tables and the "
+              "environment block");
 
 } // namespace simlink

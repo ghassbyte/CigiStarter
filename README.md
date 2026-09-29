@@ -37,7 +37,10 @@ when picking this back up. `agents.md` is the network view of the link.
 5. **Puts the HOST's world on screen.** Every Entity Control is decoded — attitude
    as well as position — and published for the `PdkSimLink` add-on inside the
    local Prepar3D, which creates a sim object per entity and moves it to the
-   commanded pose on the sim's own frame tick. The IG never touches the sim, and
+   commanded pose on the sim's own frame tick. The same channel carries the
+   HOST's **clock, air and cloud** — including the *cloud pattern* the real
+   captures describe their sky with — and the add-on applies them to the sim's
+   own time and weather systems. The IG never touches the sim, and
    nothing goes back to the HOST — see
    [Rendering the HOST's world](#rendering-the-hosts-world). `--no-sim-link`
    switches it off.
@@ -265,7 +268,8 @@ below.
 The asserted version of the same run is `tools\test-simlink-e2e.ps1`: it replays
 a capture, then reads PdkSimLink's own report out of the running Prepar3D. What
 `play-bin.ps1` shows on screen, the e2e proves on the wire and in the shared
-region.
+region — the entities, the HOST's eye, the world it resolved, and the sky the
+sim's own weather system ended up with.
 
 ### Local bench, one command
 
@@ -734,11 +738,66 @@ the sim is left to be a sim — it just gets told where the entities are.
   above it instead — which is the like-for-like comparison the bench uses. The
   add-on also reads each object's pose back (`GetPosition`) and publishes it, so
   the sim can be seen *holding* the pose rather than merely accepting it.
-- **This cut is pose only.** Time of day, weather and effects are the next things
-  the same channel will carry. The object ships with no model, so nothing is
+- **This cut is pose, plus the world.** Time of day, the air (temperature,
+  visibility, wind, pressure, humidity) and cloud and precipitation ride the
+  same channel as the entities, and so does the HOST's *cloud pattern* — the way
+  a real capture actually describes a sky; effects (lights, smoke, damage) are
+  the next things it will carry. The object ships with no model, so nothing is
   drawn until its container is given one — a content decision per entity type, not
   part of the link. The one entity that is never drawn, whatever its container is
   given, is the one the camera rides: the eye is inside it.
+- **The world comes from the HOST, with the operator on top.** A **Celestial
+  Sphere Control** (id 9) is the wall clock and date, an **Atmosphere Control**
+  (id 10) the air, a **Weather Control** (id 12) the cloud and precipitation,
+  and a **Component Control** (id 4) the cloud *pattern* — which is how the
+  reference HOST actually describes a sky, and the only description of it in the
+  three `cloud pat*.bin` captures. The captures carry the clock only in the four
+  `*_replay.bin` files (the four local times 06:15 / 12:00 / 17:30 / 23:30; the
+  site is UTC+7, so the clock is applied **local**) and the warm-up atmosphere in
+  every sortie, and no capture carries a Weather Control. CigiStarter accumulates
+  them and folds the
+  operator's `Host` / Dawn / Day / Dusk / Night and `Host` / Clear / Cloudy /
+  Rain / Storm presets on top (`Environment.h`), then publishes the resolved row
+  (`environment`, `kVersion` 4) **only when something changed**: the add-on keys
+  its clock-set on that change, so an unchanged world costs one compare a frame
+  instead of re-pinning the sim's clock every frame. A group nobody has spoken
+  for is not applied at all, which is what keeps the real HOST — whose per-frame
+  list has an Atmosphere Control and no clock or weather — from being read as
+  "midnight and clear". The add-on applies the clock through
+  `IGlobalData::SetTime`/`SetDate` (**local**) and the air and sky through
+  `IWeatherSystemV500`: a synthesised METAR (`SetMetarData`, `GLOB` station,
+  cloud and precipitation) whenever a sky is present, then the exact metric
+  values through the global setters, which win wherever the METAR rounds. Both
+  gates are honoured on the sim side too — the METAR is not sent for an
+  atmosphere-only change (a METAR always names a sky, so that is what would
+  clear the sim's cloud), and the air setters are not used for a sky with no
+  atmosphere behind it, so an operator's preset chosen before warm-up cannot
+  push the resolved row's place-holder 0 °C / 1013 mb into the sim. The add-on's answer — the generation it
+  applied, the time of day the sim itself reports (`GetGeneralTimeOfDay`) and
+  the sky the sim itself holds — is `environmentStatus`, which is how the bench
+  sees a commanded 12:00 become *day* rather than merely being accepted, and how
+  it sees a cloud rather than a cloud *request*: the row carries the sim's `GLOB`
+  station, its layer count, type, cover and base, and the observation it parsed.
+- **The cloud pattern.** A **Component Control** (id 4) is the HOST's third way
+  of describing weather and the one a real capture uses: in `cloud pat1/2/3.bin`
+  a component `0x1001` on the entity `0x9001` the same capture creates, class
+  Entity, carries the pattern's index in its state (1, 2, 3, then 0 for "take it
+  away") and, in its first three data floats, the pattern's own footprint and
+  altitude — **all in metres**, because the vendor's tool writes nautical miles
+  and feet and converts (`14816` = 8 × 1852 across, `12964` = 7 × 1852 deep,
+  `914.4` = 3000 ft up). Prepar3D can be given layers, not cloud volumes at a
+  place, so a pattern resolves to one layer over the world: cumulus, base = the
+  pattern's altitude, coverage = the footprint's area in square nautical miles at
+  1 %/nmi² (floored at 30 % so the smallest pattern still puts cloud in the sky,
+  capped at 100 %), ~900 m thick, no precipitation; state 0 is an explicit clear
+  sky. The three captures therefore come out as three visibly different skies —
+  56 % broken at 3000 ft, 30 % scattered at 3500 ft, 100 % overcast at 3000 ft —
+  and the sim reads them back as `5CU030`, `3CU035` and `8CU030`. **The mapping
+  is this IG's, not the wire's**; the vendor's own mapping is not in the capture,
+  so the numbers it chose are recorded in `Environment.h` as an assumption rather
+  than a decode. The pattern's *place* (the cloud entity's pose) is deliberately
+  unused: the Component Control arrives before that entity's Entity Control in
+  the same datagram, so it is not available when the sky is resolved.
 - **The eye comes from the HOST.** The HOST says where its own viewpoint is in a
   **View Control** message, and in every capture it is one static definition —
   2.8 m forward of entity 0's reference point, half a metre above it and 5 cm
@@ -796,14 +855,17 @@ the sim is left to be a sim — it just gets told where the entities are.
   Standby or Remove one means "take the object out", that the pose crosses in the
   PDK's units and order, that the HOST's View Control decodes from the offsets the
   captures put it at and that the eye it produces is the offset's length from the
-  reference point at every attitude, and that a row caught mid-rewrite is never
-  believed. `tools\test-all.ps1` runs it with the terrain probe's.
+  reference point at every attitude, that a row caught mid-rewrite is never
+  believed, and that the world — the clock, the air, the weather and a cloud
+  pattern decoded from its own bytes — resolves, gates and synthesises the METAR
+  it should. `tools\test-all.ps1` runs it with the terrain probe's.
 - **Testing it with the sim, on this PC.** `tools\test-simlink-e2e.ps1` replays a
   recorded HOST stream into a bench CigiStarter and reads the add-on's own report
   back out of the running Prepar3D, so the objects it created, the poses it
-  applied, the poses the sim is actually holding and the eye that crossed the link
-  are checked here instead of
-  for the first time on the rig. It fails up
+  applied, the poses the sim is actually holding, the eye that crossed the link
+  and the sky the sim's own weather station holds are checked here instead of
+  for the first time on the rig. `cloud pat1/2/3.bin` are the captures that
+  exercise the last of those. It fails up
   front on a stale `PdkSimLink.dll` or a `title=` that is not in the
   installation. The mechanism is in `tools\PdkSimLink\README.md`; `-Bin
   '..\gnd-fly-bank.bin' -Speed 20` is the run that measures the drift on a
@@ -841,6 +903,8 @@ with the window up instead, which is the behaviour the sketch below shows.
 |  Relay     : 4 clients, 4 reachable, 1567 datagrams forwarded            |
 |  Relay NIC : Killer E2600 Gigabit Ethernet Controller                    |
 |  SimLink   : 3 entities applied, 3 objects in the sim, eye from the HOST    |
+|  World     : time 12:00 (HOST), weather HOST; sim says day, 3 applied    |
+|  Sky       : sim says 1 layer cumulus 914-1814 m BKN                     |
 |                                                                          |
 |  TerrainDB : 2 tile(s), 1 in memory, 25 MB                               |
 |  HAT/HOT   : answering from the sim's own terrain                        |
@@ -949,6 +1013,30 @@ with the window up instead, which is the behaviour the sketch below shows.
   is not running, or an object the sim refused — and `disabled with
   --no-sim-link` when the publisher was switched off at the command line.
   `tools\PdkSimLink\README.md` lists every diagnostic.
+- `World` reports the HOST's clock and weather as they are being applied —
+  `Host` meaning the HOST's own value, with the clock it actually carries
+  (`12:00 (HOST)`, or `HOST (no clock yet)` before one has arrived) — and then
+  what the sim itself made of them: its own time of day, from
+  `IGlobalData::GetGeneralTimeOfDay()` (`dawn` / `day` / `dusk` / `night`), and
+  how many generations of the world the add-on has applied. It reads `nothing
+  published yet` until a world first crosses the link. When the sky is being
+  applied from a **cloud pattern** the weather half says `HOST cloud pattern N`
+  rather than `HOST`, because that is a sky no weather message carries and the
+  line would otherwise look like a HOST that sent nothing.
+- `Sky` is the sim's own weather station, read back by the add-on: the layer
+  count, the cloud's type, base and tops in metres and its cover in eighths, or
+  `no cloud` when the station holds none. This is the half that matters — a
+  METAR and a cloud pattern are both *requests*, and this is the cloud that
+  exists — so a sky that only reached the shared region reads here as
+  `no cloud`. The line counts the HOST's cloud-pattern components for the
+  session too (`; 5 cloud patterns from the HOST`), which is otherwise invisible
+  on a window where a pattern and no weather at all both say `HOST`.
+- **Time of day** and **Weather** are the operator's override, both `Host` by
+  default: `Dawn` 06:15 / `Day` 12:00 / `Dusk` 17:30 / `Night` 23:30 (local) pin
+  the clock, and `Clear` / `Cloudy` / `Rain` / `Storm` take over the cloud,
+  precipitation and visibility while temperature, wind and pressure stay the
+  HOST's. Either takes effect on the next publish, so it can be changed while
+  the stream runs.
 
 ## Fan-out to the other IG PCs
 
@@ -1127,6 +1215,38 @@ defaults; see [Usage](#usage) for the bench-test overrides.
   them yaw-first — reading it the other way round would bank the picture a
   degree instead of turning it. `TODO.md` carries it with the other
   rig confirmations.
+- The **environment messages** are the world beyond the entities. Their layouts
+  are the ICD's rather than a capture's — only the first two appear in any
+  recording here. A **Celestial Sphere Control** (id 9, 16 bytes): `hour` and
+  `minute` as bytes at 2/3, `flags` at 4 (bit 0 Ephemeris En, … bit 4 **Date
+  Valid**), a packed `date` `uint32` at 8 as `Month*1000000 + Day*10000 + Year`
+  (all four time captures carry `2000-01-01`). An **Atmosphere Control** (id 10,
+  32 bytes): humidity byte at 3, then little-endian floats — temperature °C at
+  4, visibility m at 8, horizontal wind m/s at 12, vertical wind m/s at 16, wind
+  direction (the direction it comes **from**) at 20, pressure mb at 24. Its
+  enable bit is ignored: the captures send `0` there while carrying the values
+  the aircraft is meant to fly in. A **Weather Control** (id 12, 56 bytes)
+  carries the same air fields plus `layerId` at 4 (0 fog, 1–3 cloud layers,
+  **4 rain, 5 snow, 6 sleet, 7 hail, 8 sand, 9 dust** — this, not the severity,
+  names the precipitation), `flags` at 6 (bit 0 Weather En, bit 3 Random
+  Lightning En, bits 4–7 cloud type), `flags2` at 7 (bits 0–1 scope, bits 2–4
+  severity 0–5), and coverage % at 20, cloud base m at 24, thickness m at 28.
+  No recording here contains one, so the weather path is exercised by the
+  contract test and the operator presets rather than replayed.
+- The **Component Control** (id 4, 32 bytes) is how the reference HOST describes a
+  cloud *pattern*, and the only description of the sky in the three
+  `cloud pat*.bin` captures: `componentId` as a little-endian `uint16` at 2,
+  `instanceId` at 4, a `class` byte at 6 and `state` at 7, then six little-endian
+  floats at 8/12/16/20/24/28. The cloud messages carry component `0x1001` on
+  instance `0x9001` — the entity the same capture creates — and class **Entity**
+  (0), *not* the class the ICD reserves for weather (Global Layered Weather, 9),
+  which is why the decode matches on the component id and the class the captures
+  actually carry. `state` is the pattern in force, 1/2/3, and 0 for the HOST
+  taking it away; `data1`/`data2` are the footprint's width and depth and
+  `data3` its base altitude, **all in metres** (the vendor's tool writes
+  8 × 1852, 7 × 1852 and 3000 ft and converts them), and data 4–6 are zero.
+  [Rendering the HOST's world](#rendering-the-hosts-world) has the mapping from a
+  pattern to a Prepar3D cloud layer and what is assumed in it.
 - HAT/HOT responses use the CIGI 3.3 layouts: the 16-byte Response (102) carries
   a single `Height` double at offset 8, and the 40-byte Extended Response (103)
   carries `HAT` at offset 8 and `HOT` at offset 16. **Both** have a 3-byte
@@ -1141,8 +1261,8 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 |--------------------|------------------------------------------------|
 | `main.cpp`         | entry point, sockets, SOF + receive threads, window callbacks |
 | `SofPacer.h`       | flow-control rule: whether a due SOF may be sent |
-| `Gui.h`            | operator-window API: status snapshot + start/stop/HAT-HOT/flow-control/rate/quit hooks |
-| `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT + flow-control check boxes, SOF rate box) |
+| `Gui.h`            | operator-window API: status snapshot + start/stop/HAT-HOT/flow-control/rate/time-of-day/weather/quit hooks |
+| `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT + flow-control check boxes, SOF rate box, time-of-day and weather combo boxes) |
 | `cigi.h`           | CIGI 3.3 message IDs, sizes, pack/parse API    |
 | `cigi.cpp`         | explicit little-endian message packing         |
 | `TerrainDb.h`      | offline SRTM `.hgt` terrain database API — the HAT/HOT fallback when the sim's own probe cannot answer |
@@ -1150,10 +1270,11 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `TerrainProbe.h`   | API to the sim's own terrain, through the `PdkTerrainProbe` add-on — the preferred HAT/HOT source |
 | `TerrainProbe.cpp` | CigiStarter's half of the shared-memory link to `PdkTerrainProbe.dll` |
 | `TerrainProbeIpc.h`| the shared-memory contract between CigiStarter and the add-on |
-| `SimLink.h`        | API to the sim's rendering path, through the `PdkSimLink` add-on — publishes the HOST's entities for the sim to draw |
+| `SimLink.h`        | API to the sim's rendering path, through the `PdkSimLink` add-on — publishes the HOST's entities, its eye and its world (clock, air, sky) for the sim to draw and apply |
 | `SimLink.cpp`      | CigiStarter's half of the shared-memory link to `PdkSimLink.dll` |
-| `SimLinkIpc.h`     | the shared-memory contract between CigiStarter and the entity writer |
-| `SimLinkMap.h`     | the add-on's PDK-free half: which rows to render, the seqlock read, and the CIGI→PDK units |
+| `SimLinkIpc.h`     | the shared-memory contract between CigiStarter and the entity writer: entities, the HOST's eye, the resolved world and the add-on's answers |
+| `SimLinkMap.h`     | the add-on's PDK-free half: which rows to render, the seqlock reads, and the CIGI→PDK units |
+| `Environment.h`    | the PDK-free world: the operator presets, the resolve of the HOST's clock/air/weather, the cloud-pattern decode and the METAR synthesis — shared by CigiStarter, the add-on and the test |
 | `Relay.h`          | fan-out API: start/stop, per-datagram copy, status snapshot |
 | `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |

@@ -2,8 +2,9 @@
 .SYNOPSIS
     Prove the entity writer works end to end on this PC: replay a recorded HOST
     stream into CigiStarter, and read PdkSimLink's own report out of the running
-    Prepar3D to show the sim created the HOST's entities and is holding them on
-    the poses the HOST commanded.
+    Prepar3D to show the sim created the HOST's entities, is holding them on the
+    poses the HOST commanded, and has taken the HOST's own clock, air and sky
+    into its own time and weather systems.
 
 .DESCRIPTION
     The contract test (tools\test-simlink.ps1) covers everything either side of
@@ -60,6 +61,20 @@
       The status word also says whether any object is paused or in slew
       (`ModePauseOrSlew`); a physics-free object needs neither, and item 4's
       rotor cannot turn with either.
+
+    The world
+      The same region also carries the HOST's clock, air and cloud and the
+      add-on's answer to them (SimLinkIpc.h, kVersion 4, with the sim's own sky
+      read-back at 5), so this test reads the world the IG resolved, the
+      generation the add-on applied, and the sky the sim's own weather system
+      holds -- the GLOB station's cloud layers and the observation the sim
+      parsed. The last is the only witness that a sky became cloud rather than
+      merely being requested, and it is what makes the three `cloud pat*.bin`
+      captures checkable at all: they describe their sky with a Component
+      Control (a cloud pattern) and nothing else. The sky is sampled while the
+      pattern is up, because a capture takes it away again before the run ends
+      and a reading taken afterwards is a clear sky that is perfectly correct and
+      proves nothing.
 
     Prepar3D must be running with the current PdkSimLink.dll loaded, and the
     DLL must be the build in this tree: the add-on is loaded once, at sim
@@ -130,6 +145,26 @@ $addonDir = Join-Path $env:USERPROFILE 'Documents\Prepar3D v6 Add-ons\PdkSimLink
 $deployedDll = Join-Path $addonDir 'PdkSimLink.dll'
 $mappingName = 'Local\CigiStarter.SimLink.v1'
 
+# SimLinkIpc.h EnvFlags, by the number the region carries, so the checks below
+# read as the contract rather than as masks.
+$EnvApplyTime     = 0x001
+$EnvApplyAtmos    = 0x002
+$EnvApplyWeather  = 0x004
+$EnvTimeManual    = 0x008
+$EnvWeatherManual = 0x010
+$EnvDateValid     = 0x020
+$EnvLightning     = 0x040
+$EnvTimeValid     = 0x080
+$EnvAtmosValid    = 0x100
+$EnvWeatherValid  = 0x200
+$EnvWeatherPattern = 0x400
+
+# SimLinkIpc.h kVersion, and the version the e2e reads the region as.  The
+# layout it walks is the one this number names, so a stale DLL (the add-on is
+# loaded once, at sim startup) has to be caught here rather than read as a
+# nonsense world.
+$ExpectedVersion = 5
+
 if (-not $Bin) {
     $Bin = Join-Path (Split-Path -Parent $repo) 'hlm.bin'
     if (-not (Test-Path $Bin)) {
@@ -140,7 +175,7 @@ if (-not $Bin) {
 #-----------------------------------------------------------------------------
 # The shared region, re-derived from SimLinkIpc.h
 #
-#   header   magic 0, version 4, capacity 8, simPid 12, alive 16, lastError 20,
+#   header   magic 0, version 5, capacity 8, simPid 12, alive 16, lastError 20,
 #            ticks 24, frameTicks 28, objectsCreated 32, objectsRemoved 36,
 #            createFails 40, setFails 44, applied 48, diag 52,
 #            positionReads 56, getFails 60, driftSamples 64, heldValid 68,
@@ -150,6 +185,13 @@ if (-not $Bin) {
 #   held[64] at 4696, each row 80 bytes: seq 0, entityId 4, tick 8, valid 12,
 #            lat 16, lon 24, alt 32, roll 40, pitch 48, yaw 56,
 #            driftMeters 64, driftDeg 72
+#   view     at 9816, 4 u32 (16) + 6 doubles (48) = 64: the HOST's own eye
+#   environment       at 9880, 12 u32 (48) + 10 doubles (80) = 128: the
+#            resolved world (generation, flags, clock, cloud, air)
+#   environmentStatus at 10008, 10 u32 (40) + 2 doubles (16) + 200 chars = 256:
+#            what the add-on applied, the time of day the sim reported back, and
+#            the sky the sim itself holds (its cloud layers and the station
+#            observation it parsed)
 #-----------------------------------------------------------------------------
 Add-Type @"
 using System;
@@ -162,6 +204,17 @@ public static class SimLinkShm {
   public static long   I64(IntPtr v, int o) { return Marshal.ReadInt64(IntPtr.Add(v, o)); }
   public static double F64(IntPtr v, int o) { return BitConverter.Int64BitsToDouble(Marshal.ReadInt64(IntPtr.Add(v, o))); }
   public static uint   U32(IntPtr v, int o) { return (uint)((long)Marshal.ReadInt32(IntPtr.Add(v, o)) & 0xFFFFFFFFL); }
+  // A NUL-terminated narrow string, for the station observation the add-on
+  // copies out of the sim's own weather system.
+  public static string Ansi(IntPtr v, int o, int max) {
+    var sb = new System.Text.StringBuilder();
+    for (int i = 0; i < max; i++) {
+      byte b = Marshal.ReadByte(IntPtr.Add(v, o + i));
+      if (b == 0) break;
+      sb.Append((char)b);
+    }
+    return sb.ToString();
+  }
 }
 "@
 
@@ -319,7 +372,73 @@ function Get-ViewRow {
     return $null
 }
 
-# Where is the container title the add-on will create from?  A title that is not
+# The resolved world the IG publishes (SimLinkIpc.h, kVersion 4): one row at
+# 9880, appended after the view.  It carries what the IG wants applied -- the
+# clock, the air and the cloud -- already resolved with any operator override,
+# so this is exactly the sim side's input.  Read under its seqlock like the rest.
+function Get-EnvironmentRow {
+    $o = 9880
+    for ($try = 0; $try -lt 200; $try++) {
+        $before = Region-U32 $o
+        if ($before -band 1) { Start-Sleep -Milliseconds 1; continue }
+        $row = [pscustomobject]@{
+            Seq              = $before
+            Generation       = Region-U32 ($o + 4)
+            Flags            = Region-U32 ($o + 8)
+            Hour             = Region-U32 ($o + 12)
+            Minute           = Region-U32 ($o + 16)
+            Second           = Region-U32 ($o + 20)
+            Year             = Region-U32 ($o + 24)
+            Month            = Region-U32 ($o + 28)
+            Day              = Region-U32 ($o + 32)
+            CloudType        = Region-U32 ($o + 36)
+            Severity         = Region-U32 ($o + 40)
+            PrecipType       = Region-U32 ($o + 44)
+            AirTempC         = Region-F64 ($o + 48)
+            VisibilityMeters = Region-F64 ($o + 56)
+            Coverage         = Region-F64 ($o + 64)
+            BaseElevMeters   = Region-F64 ($o + 72)
+            ThicknessMeters  = Region-F64 ($o + 80)
+            HorizWindMps     = Region-F64 ($o + 88)
+            VertWindMps      = Region-F64 ($o + 96)
+            WindDirDeg       = Region-F64 ($o + 104)
+            BaroPressureMb   = Region-F64 ($o + 112)
+            HumidityPct      = Region-F64 ($o + 120)
+        }
+        if ((Region-U32 $o) -eq $before) { return $row }
+    }
+    return $null
+}
+
+# The add-on's answer (at 10008): the generation it applied, how many it has
+# applied, the time of day Prepar3D itself reports -- the one reading that says a
+# commanded 12:00 became *day* rather than merely being accepted -- and the sky
+# the sim says it holds, which is the same reading for the cloud: a METAR that
+# names a cloud is a request, and this is the layer that exists.
+function Get-EnvironmentStatus {
+    $o = 10008
+    for ($try = 0; $try -lt 200; $try++) {
+        $before = Region-U32 $o
+        if ($before -band 1) { Start-Sleep -Milliseconds 1; continue }
+        $row = [pscustomobject]@{
+            Seq               = $before
+            AppliedGeneration = Region-U32 ($o + 4)
+            Applies           = Region-U32 ($o + 8)
+            Flags             = Region-U32 ($o + 12)
+            TimeOfDay         = Region-I32 ($o + 16)
+            LastError         = Region-I32 ($o + 20)
+            CloudLayers       = Region-U32 ($o + 24)
+            SimCloudType      = Region-U32 ($o + 28)
+            SimCloudCover     = Region-U32 ($o + 32)
+            SimPrecipType     = Region-I32 ($o + 36)
+            SimCloudBaseM     = Region-F64 ($o + 40)
+            SimCloudTopsM     = Region-F64 ($o + 48)
+            SimMetar          = [SimLinkShm]::Ansi($script:view, $o + 56, 200)
+        }
+        if ((Region-U32 $o) -eq $before) { return $row }
+    }
+    return $null
+}
 # in the installation is the one misconfiguration that makes a run look half
 # successful -- the add-on loads, ticks, reports the object manager, and creates
 # nothing.  The sim's own tree and the per-user add-on folder are searched; a
@@ -404,6 +523,83 @@ function Get-ViewControls([byte[]]$p) {
         $i += $size
     }
     return ,$out
+}
+
+# A Component Control (id 4), which is how the HOST describes its cloud pattern:
+# 32 bytes, the component id at 2, the entity it is attached to at 4, the class
+# at 6, the state -- the pattern's index, 0 for "take it away" -- at 7 and six
+# single-precision floats from 8.  The three `cloud pat*.bin` captures are the
+# only ones in this deployment that carry one, and their component is 0x1001 on
+# the entity 0x9001 with a footprint and an altitude in the first three data
+# fields (metres: 8 x 1852 across, 7 x 1852 deep and 3000 ft up for the first).
+function Get-CloudPatterns([byte[]]$p) {
+    $out = New-Object System.Collections.Generic.List[object]
+    $i = 0
+    while ($i + 2 -le $p.Length) {
+        $id = $p[$i]; $size = $p[$i + 1]
+        if ($size -lt 2 -or ($i + $size) -gt $p.Length) { $i++; continue }
+        if ($id -eq 4 -and $size -ge 32) {
+            $out.Add([pscustomobject]@{
+                ComponentId = [BitConverter]::ToUInt16($p, $i + 2)
+                InstanceId  = [BitConverter]::ToUInt16($p, $i + 4)
+                Class       = [int]$p[$i + 6]
+                State       = [int]$p[$i + 7]
+                Data1       = [double]([BitConverter]::ToSingle($p, $i + 8))
+                Data2       = [double]([BitConverter]::ToSingle($p, $i + 12))
+                Data3       = [double]([BitConverter]::ToSingle($p, $i + 16))
+            })
+        }
+        $i += $size
+    }
+    return ,$out
+}
+
+# The HOST's world, re-derived from cigi.h the same way: a Celestial Sphere
+# Control (id 9, the clock and the packed date), an Atmosphere Control (id 10,
+# the air) and a Weather Control (id 12, cloud and precipitation -- which no
+# capture in this deployment carries).  One datagram can carry any of them, and
+# the last of each kind in the run is what the accumulated world holds.
+function Get-EnvironmentMessages([byte[]]$p) {
+    $time = $null; $atmos = $null; $weather = $null
+    $i = 0
+    while ($i + 2 -le $p.Length) {
+        $id = [int]$p[$i]; $size = [int]$p[$i + 1]
+        if ($size -lt 2 -or ($i + $size) -gt $p.Length) { $i++; continue }
+        if ($id -eq 9 -and $size -ge 16) {
+            $time = [pscustomobject]@{
+                Hour   = [int]$p[$i + 2]
+                Minute = [int]$p[$i + 3]
+                Flags  = [int]$p[$i + 4]
+                Date   = [BitConverter]::ToUInt32($p, $i + 8)
+            }
+        } elseif ($id -eq 10 -and $size -ge 32) {
+            $atmos = [pscustomobject]@{
+                Humidity   = [int]$p[$i + 3]
+                TempC      = [double]([BitConverter]::ToSingle($p, $i + 4))
+                Visibility = [double]([BitConverter]::ToSingle($p, $i + 8))
+                HorizWind  = [double]([BitConverter]::ToSingle($p, $i + 12))
+                WindDir    = [double]([BitConverter]::ToSingle($p, $i + 20))
+                Baro       = [double]([BitConverter]::ToSingle($p, $i + 24))
+            }
+        } elseif ($id -eq 12 -and $size -ge 56) {
+            $flags  = [int]$p[$i + 6]
+            $flags2 = [int]$p[$i + 7]
+            $weather = [pscustomobject]@{
+                LayerId    = [int]$p[$i + 4]
+                Humidity   = [int]$p[$i + 5]
+                CloudType  = ($flags -shr 4) -band 0x0F
+                Lightning  = (($flags -shr 3) -band 1) -eq 1
+                Severity   = ($flags2 -shr 2) -band 0x07
+                TempC      = [double]([BitConverter]::ToSingle($p, $i + 8))
+                Visibility = [double]([BitConverter]::ToSingle($p, $i + 12))
+                Coverage   = [double]([BitConverter]::ToSingle($p, $i + 20))
+                BaseElevM  = [double]([BitConverter]::ToSingle($p, $i + 24))
+                ThicknessM = [double]([BitConverter]::ToSingle($p, $i + 28))
+            }
+        }
+        $i += $size
+    }
+    return [pscustomobject]@{ Time = $time; Atmos = $atmos; Weather = $weather }
 }
 
 # Walk one datagram's CIGI messages, as cigi::forEachMessage does: a frame that
@@ -641,8 +837,9 @@ try {
 
     $h = Get-WriterHealth
     Assert 'the region speaks the contract this build expects' `
-        ($h.Magic -eq 0x4B4C5350 -and $h.Version -eq 3 -and $h.Capacity -eq 64) `
-        ("magic 0x{0:X8}, version {1}, capacity {2}" -f $h.Magic, $h.Version, $h.Capacity)
+        ($h.Magic -eq 0x4B4C5350 -and $h.Version -eq $ExpectedVersion -and $h.Capacity -eq 64) `
+        ("magic 0x{0:X8}, version {1} (expected {2}), capacity {3}" -f `
+            $h.Magic, $h.Version, $ExpectedVersion, $h.Capacity)
 
     Assert 'the add-on obtained the sim object manager' $h.HasManager `
         $(if ($h.HasManager) { '' } else { 'QueryService(SID_SimObjectManager) failed' })
@@ -703,7 +900,24 @@ Run-Test 'the HOST entities reach the sim' {
     # built the same way the publisher builds the table.
     $lastBySlot = @{}
     $lastView = $null
+    $lastTime = $null
+    $lastAtmos = $null
+    $lastWeather = $null
+    $sawEnv = $false
+    # The HOST's cloud pattern (a Component Control), when the capture describes
+    # its sky that way: the pattern is turned off again near the end, so what it
+    # asked for has to be remembered as the run goes by, and the sim's own answer
+    # has to be sampled while it is still up.
+    $sawPattern = $false
+    $sawPatternOff = $false
+    $lastPattern = $null
+    $patternStates = @{}
+    $simSky = $null
+    $simSkyLayers = 0
+    $patternRow = $null
+    $simSkyEnd = $null
     $sampled = @()
+    $sentPoses = @{}
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $target = 0.0
     $sent = 0
@@ -716,6 +930,12 @@ Run-Test 'the HOST entities reach the sim' {
 
         foreach ($e in (Get-EntityControls $rec.Payload)) {
             if (-not (Test-PoseUsable $e)) { continue }
+            if ($e.EntityId -eq 0) {
+                # What the capture itself commanded for the aircraft, so the
+                # movement check below can tell a frozen capture (the four
+                # *_replay.bin time captures) from a link that stopped moving.
+                $sentPoses[('{0:F6}/{1:F6}/{2:F2}' -f $e.Lat, $e.Lon, $e.Alt)] = $true
+            }
             $slot = Get-SlotOf $e.EntityId
             if ((-not $lastBySlot.ContainsKey($slot)) -or ($lastBySlot[$slot].EntityId -eq $e.EntityId)) {
                 $lastBySlot[$slot] = [pscustomobject]@{
@@ -730,10 +950,55 @@ Run-Test 'the HOST entities reach the sim' {
         # flown from, so the last one seen is kept to check against the row.
         foreach ($v in (Get-ViewControls $rec.Payload)) { $lastView = $v }
 
+        # The world beyond the entities, likewise: the last of each kind in the
+        # run is what the accumulated HostEnvironment holds and the IG resolves.
+        $envMsg = Get-EnvironmentMessages $rec.Payload
+        if ($null -ne $envMsg.Time)    { $lastTime    = $envMsg.Time;    $sawEnv = $true }
+        if ($null -ne $envMsg.Atmos)   { $lastAtmos   = $envMsg.Atmos;   $sawEnv = $true }
+        if ($null -ne $envMsg.Weather) { $lastWeather = $envMsg.Weather; $sawEnv = $true }
+
+        # The HOST's cloud pattern, when the capture has one: the component id is
+        # the vendor's (0x1001) and the state is the pattern's index, 0 being the
+        # HOST taking the cloud away again.
+        foreach ($cc in (Get-CloudPatterns $rec.Payload)) {
+            if ($cc.ComponentId -ne 0x1001) { continue }
+            $sawEnv = $true
+            $sawPattern = $true
+            if ($cc.State -gt 0) {
+                $lastPattern = $cc
+                $patternStates[$cc.State] = $true
+            } else {
+                $sawPatternOff = $true
+            }
+        }
+
         if (($sent % $every) -eq 0) {
             $row = Get-EntityRow (Get-SlotOf 0)
             if ($null -ne $row -and $row.Enabled -ne 0) {
                 $sampled += [pscustomobject]@{ Lat = $row.Lat; Lon = $row.Lon; Alt = $row.Alt }
+            }
+
+            # The sky the *sim* holds, which is the whole point of a cloud
+            # pattern: the region carrying it only proves the IG decoded it.
+            # Sampled while the pattern is up, because the HOST takes it away
+            # again before the run ends and a reading taken afterwards would be a
+            # clear sky that is perfectly correct and proves nothing.  The region
+            # row is sampled here for the same reason -- it is the world as the IG
+            # resolved it, and by the end of the run the HOST has taken the
+            # pattern away and the row is a clear sky.
+            if ($sawPattern -and -not $sawPatternOff) {
+                if ($null -eq $patternRow) {
+                    $now = Get-EnvironmentRow
+                    if ($null -ne $now -and ($now.Flags -band $EnvWeatherPattern) -ne 0 -and
+                        $now.CloudType -ne 0 -and $now.Coverage -gt 0) {
+                        $patternRow = $now
+                    }
+                }
+                $st = Get-EnvironmentStatus
+                if ($null -ne $st -and $st.CloudLayers -gt $simSkyLayers) {
+                    $simSky = $st
+                    $simSkyLayers = $st.CloudLayers
+                }
             }
         }
 
@@ -748,6 +1013,11 @@ Run-Test 'the HOST entities reach the sim' {
 
     # Let the add-on take a few ticks on the last frames before reading it.
     Start-Sleep -Milliseconds 1200
+
+    # The sky the sim holds *now*, after the HOST has taken its pattern away
+    # again: the last thing the capture asked for is a clear sky, so this is what
+    # a pattern turned off has to leave behind.
+    if ($sawPatternOff) { $simSkyEnd = Get-EnvironmentStatus }
 
     $wanted = @($lastBySlot.Values | Where-Object { $_.State -eq 1 })
     $after = Get-WriterHealth
@@ -916,11 +1186,196 @@ Run-Test 'the HOST entities reach the sim' {
             ("attached to entity {0}; the camera is on entity 0" -f $view.EntityId)
     }
 
+    # The HOST's world (SimLinkIpc.h, kVersion 4): the clock, the air and the
+    # cloud, which the IG resolves and publishes for the add-on to apply on the
+    # sim's own clock and weather systems.  No sortie capture carries a Celestial
+    # Sphere or a Weather Control -- those are the four *_replay.bin time captures
+    # and the operator presets -- so each group is checked against what the
+    # capture actually carried, and the absence of a clock is checked as a case of
+    # its own: a capture that never sent one must not have moved the sim's clock.
+    # The three `cloud pat*.bin` captures describe their sky a third way, with a
+    # Component Control on the cloud entity, and are checked below.
+    if ($sawEnv) {
+        $envRow  = Get-EnvironmentRow
+        $envStat = Get-EnvironmentStatus
+        Assert 'the HOST''s world crossed the link' `
+            ($null -ne $envRow -and $envRow.Generation -ne 0) `
+            ("the region's world generation is {0}" -f `
+                $(if ($null -eq $envRow) { 'unreadable' } else { $envRow.Generation }))
+        if ($null -ne $envRow -and $envRow.Generation -ne 0) {
+            Write-Host ("    the world: gen {0} flags 0x{1:X3}  {2:D2}:{3:D2}:{4:D2}  cloud {5} cov {6:F0} sev {7} precip {8}  {9:F1}C vis {10:F0}m {11:F0}mb" -f `
+                $envRow.Generation, $envRow.Flags, $envRow.Hour, $envRow.Minute, $envRow.Second,
+                $envRow.CloudType, $envRow.Coverage, $envRow.Severity, $envRow.PrecipType,
+                $envRow.AirTempC, $envRow.VisibilityMeters, $envRow.BaroPressureMb)
+
+            Assert 'the add-on applied the world the IG published' `
+                ($null -ne $envStat -and $envStat.AppliedGeneration -eq $envRow.Generation -and $envStat.Applies -gt 0) `
+                ("applied gen {0}, {1} application(s), lastError 0x{2:X8}" -f `
+                    $(if ($null -eq $envStat) { '?' } else { $envStat.AppliedGeneration }),
+                    $(if ($null -eq $envStat) { 0 } else { $envStat.Applies }),
+                    $(if ($null -eq $envStat) { 0 } else { $envStat.LastError }))
+
+            # The air the capture carried: the region's exact values are the
+            # HOST's, converted to the units the METAR rounds around.
+            if ($null -ne $lastAtmos) {
+                Assert 'the air in the region is the air the HOST sent' `
+                    ((Compare-Number $envRow.AirTempC $lastAtmos.TempC 1e-4) -and
+                     (Compare-Number $envRow.VisibilityMeters $lastAtmos.Visibility 0.5) -and
+                     (Compare-Number $envRow.BaroPressureMb $lastAtmos.Baro 0.01) -and
+                     (Compare-Number $envRow.HorizWindMps $lastAtmos.HorizWind 1e-4) -and
+                     ($envRow.Flags -band $EnvAtmosValid) -ne 0) `
+                    ("sent {0:F4}C vis {1:F1}m baro {2:F2}mb wind {3:F3}m/s" -f `
+                        $lastAtmos.TempC, $lastAtmos.Visibility, $lastAtmos.Baro, $lastAtmos.HorizWind)
+            }
+
+            # The clock, only where the capture carried one (the *_replay.bin
+            # captures).  The region's clock is the HOST's, and the sim's own
+            # answer -- GetGeneralTimeOfDay -- is the evidence that a commanded
+            # 12:00 actually became day.
+            if ($null -ne $lastTime) {
+                Assert 'the HOST''s clock is the clock in the region' `
+                    ($envRow.Hour -eq $lastTime.Hour -and $envRow.Minute -eq $lastTime.Minute -and
+                     ($envRow.Flags -band $EnvTimeValid) -ne 0) `
+                    ("sent {0:D2}:{1:D2}, region {2:D2}:{3:D2}" -f `
+                        $lastTime.Hour, $lastTime.Minute, $envRow.Hour, $envRow.Minute)
+                Assert 'the sim reports a time of day after the clock was set' `
+                    ($null -ne $envStat -and $envStat.TimeOfDay -ge 0 -and $envStat.TimeOfDay -le 3) `
+                    ("GetGeneralTimeOfDay -> {0} (0 dawn, 1 day, 2 dusk, 3 night; -1 never applied)" -f `
+                        $(if ($null -eq $envStat) { '?' } else { $envStat.TimeOfDay }))
+            } else {
+                # The real HOST's case (AGENTS.md): an Atmosphere Control and no
+                # clock at all, so the presence gate must keep the 00:00 default
+                # from becoming a command.
+                Assert 'a capture with no clock leaves the sim''s clock alone' `
+                    (($envRow.Flags -band $EnvTimeValid) -eq 0) `
+                    ("flags 0x{0:X3}: no kEnvTimeValid, so the clock was not applied" -f $envRow.Flags)
+            }
+
+            # No capture carries a Weather Control, so nothing should have been
+            # applied from the weather group either -- no operator is at the
+            # window during a replay.  kEnvApplyWeather is the bit the add-on
+            # keys its METAR on, and a METAR always names a sky, so this is what
+            # keeps a capture with an Atmosphere Control and no weather from
+            # clearing the sim's cloud.  The three `cloud pat*.bin` captures are
+            # the exception and are checked below: they describe their sky with a
+            # Component Control instead of a Weather Control.
+            if ($null -eq $lastWeather -and -not $sawPattern) {
+                Assert 'a capture with no weather leaves the sim''s sky alone' `
+                    ((($envRow.Flags -band $EnvWeatherValid) -eq 0) -and
+                     (($envRow.Flags -band $EnvApplyWeather) -eq 0)) `
+                    ("flags 0x{0:X3}: neither kEnvWeatherValid nor kEnvApplyWeather" -f $envRow.Flags)
+            }
+
+            # The HOST's cloud pattern: a Component Control on the cloud entity,
+            # which is the only description of the sky in the three `cloud
+            # pat*.bin` captures (no Weather Control, no clock, no atmosphere).
+            # The region is where it has to land and the add-on has to be told to
+            # apply it; the sim's own weather system is where it has to become
+            # cloud.  Both are read *while the pattern is up* and not at the end:
+            # the HOST takes its pattern away again a thousand datagrams later,
+            # and the last thing the capture asks for is a clear sky -- correct,
+            # and no evidence that the cloud was ever there.
+            if ($sawPattern) {
+                Assert 'the HOST''s cloud pattern is the sky in the region' `
+                    ($null -ne $patternRow) `
+                    $(if ($null -eq $patternRow) { 'no sample taken while the pattern was up had a sky: the pattern never reached the region' }
+                      else { "flags 0x{0:X3}: cloud {1} cov {2:F0}% base {3:F1}m for pattern {4}" -f `
+                          $patternRow.Flags, $patternRow.CloudType, $patternRow.Coverage,
+                          $patternRow.BaseElevMeters, $lastPattern.State })
+                if ($null -ne $patternRow) {
+                    Assert 'it is marked as the HOST''s pattern and not an operator''s sky' `
+                        ((($patternRow.Flags -band $EnvWeatherValid) -ne 0) -and
+                         (($patternRow.Flags -band $EnvWeatherPattern) -ne 0) -and
+                         (($patternRow.Flags -band $EnvWeatherManual) -eq 0) -and
+                         (($patternRow.Flags -band $EnvApplyWeather) -ne 0) -and
+                         (($patternRow.Flags -band $EnvAtmosValid) -eq 0) -and
+                         (($patternRow.Flags -band $EnvTimeValid) -eq 0)) `
+                        ("flags 0x{0:X3}: kEnvWeatherValid|kEnvWeatherPattern|kEnvApplyWeather, and no air or clock" -f $patternRow.Flags)
+
+                    # The mapping is this IG's, but it is not arbitrary: the base
+                    # is the pattern's own altitude and the coverage its footprint,
+                    # so the numbers in the region have to be the numbers on the
+                    # wire (metres, converted), not a default that happened to look
+                    # like cloud.
+                    $wantCoverage = [math]::Min(100.0, [math]::Max(30.0,
+                        ($lastPattern.Data1 / 1852.0) * ($lastPattern.Data2 / 1852.0)))
+                    Assert 'the cloud is that pattern''s footprint and altitude' `
+                        ((Compare-Number $patternRow.Coverage $wantCoverage 0.5) -and
+                         (Compare-Number $patternRow.BaseElevMeters $lastPattern.Data3 0.1)) `
+                        ("sent {0:F0} x {1:F0} m at {2:F1} m -> coverage {3:F0}% base {4:F1} m" -f `
+                            $lastPattern.Data1, $lastPattern.Data2, $lastPattern.Data3,
+                            $patternRow.Coverage, $patternRow.BaseElevMeters)
+                }
+
+                # One pattern per capture (1, 2 or 3): a state read from the wrong
+                # byte would vary from message to message, and a pattern index
+                # mistaken for something else would arrive as several.
+                Assert 'the capture''s pattern reached the link as one pattern' `
+                    ($patternStates.Count -eq 1 -and $lastPattern.State -ge 1 -and $lastPattern.State -le 3) `
+                    ("pattern states seen: {0}" -f (($patternStates.Keys | Sort-Object) -join ', '))
+
+                # The sim's own weather system, which is the only witness that
+                # the cloud was built rather than merely written down.
+                Assert 'the HOST''s pattern became cloud in the sim' `
+                    ($null -ne $simSky -and $simSky.CloudLayers -gt 0) `
+                    ("the sim reported {0} cloud layer(s) during the replay{1}" -f `
+                        $(if ($null -eq $simSky) { '?' } else { $simSky.CloudLayers }), `
+                        $(if ($null -eq $simSky -or -not $simSky.SimMetar) { '' } else { " (station observation '$($simSky.SimMetar)')" }))
+                if ($null -ne $simSky) {
+                    Write-Host ("    the sim's own sky: {0} layer(s) type {1} cover {2} base {3:F0}m tops {4:F0}m precip {5}" -f `
+                        $simSky.CloudLayers, $simSky.SimCloudType, $simSky.SimCloudCover, `
+                        $simSky.SimCloudBaseM, $simSky.SimCloudTopsM, $simSky.SimPrecipType)
+                    Write-Host ("    the sim's station observation: {0}" -f $simSky.SimMetar)
+
+                    # The sim's layer is the pattern's, in the sim's own units --
+                    # metres, so the altitude on the wire has to come back as it
+                    # went out (a base converted one way too many would read as a
+                    # tenth of it).
+                    Assert 'the sim''s cloud carries the pattern''s base' `
+                        (Compare-Number $simSky.SimCloudBaseM $lastPattern.Data3 6.0) `
+                        ("the pattern's altitude {0:F1} m, the sim's layer {1:F1} m" -f `
+                            $lastPattern.Data3, $simSky.SimCloudBaseM)
+                    Assert 'the sim''s cloud is the pattern''s coverage bucket' `
+                        ($simSky.SimCloudCover -gt 0 -and $simSky.SimCloudCover -le 8) `
+                        ("the sim's cover value {0} (0-8 eighths)" -f $simSky.SimCloudCover)
+                }
+
+                # And the HOST taking the pattern away is a clear sky, not a
+                # leftover: the state-0 message carries the same footprint, so a
+                # mapping that keyed off the data rather than the state would
+                # leave the cloud standing for the rest of the session.
+                if ($sawPatternOff) {
+                    Assert 'the HOST taking its pattern away clears the cloud in the sim' `
+                        ($null -ne $simSkyEnd -and $simSkyEnd.CloudLayers -eq 0) `
+                        ("after the state-0 message the sim reports {0} layer(s){1}" -f `
+                            $(if ($null -eq $simSkyEnd) { '?' } else { $simSkyEnd.CloudLayers }), `
+                            $(if ($null -eq $simSkyEnd -or -not $simSkyEnd.SimMetar) { '' } else { " (station observation '$($simSkyEnd.SimMetar)')" }))
+                    Assert 'and the region carries the clear sky the HOST asked for' `
+                        (($envRow.Flags -band $EnvWeatherValid) -ne 0 -and
+                         ($envRow.Flags -band $EnvWeatherPattern) -ne 0 -and
+                         $envRow.CloudType -eq 0) `
+                        ("flags 0x{0:X3}: cloud {1} cov {2:F0}% -- present and empty, not absent" -f `
+                            $envRow.Flags, $envRow.CloudType, $envRow.Coverage)
+                }
+            }
+        }
+    } else {
+        Write-Host '  -this capture carries no environment message; the world path is not exercised'
+    }
+
     # Movement: entity 0's published pose has to change over the run, or the
-    # table is being filled once and left.
+    # table is being filled once and left.  Whether that is askable depends on
+    # the capture: the four *_replay.bin time captures are a single frozen pose,
+    # so a link that showed one pose is exactly right for them.  The check is on
+    # the capture's own motion -- if the capture moved, the region has to have
+    # moved with it.
     $distinct = @($sampled | ForEach-Object { '{0:F6}/{1:F6}/{2:F2}' -f $_.Lat, $_.Lon, $_.Alt } | Select-Object -Unique)
-    Assert 'the aircraft pose is moving through the link, not frozen' ($distinct.Count -gt 1) `
-        ("{0} distinct poses sampled during the replay" -f $distinct.Count)
+    if ($sentPoses.Count -gt 1) {
+        Assert 'the aircraft pose is moving through the link, not frozen' ($distinct.Count -gt 1) `
+            ("{0} distinct poses sampled during the replay, of {1} the capture sent" -f $distinct.Count, $sentPoses.Count)
+    } else {
+        Write-Host '  -the capture is a single frozen pose; movement is not exercised'
+    }
 }
 
 #-----------------------------------------------------------------------------

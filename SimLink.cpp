@@ -49,6 +49,60 @@ constexpr DWORD kReopenIntervalMs = 2000;
 // The writer is treated as gone when its heartbeat has not moved for this long.
 constexpr DWORD kStaleAfterMs = 1500;
 
+// The environment publisher's memory.  publishEnvironment() is called from the
+// CIGI receive loop for every Atmosphere Control -- the HOST repeats those far
+// more often than it changes them -- so the row is only written when the
+// resolved world differs from what was last written.  `g_envHaveCache` is
+// cleared whenever the mapping is (re)opened, so the first write after a
+// reconnect pushes the whole world rather than assuming the region already holds
+// this IG's last values.  Guarded by g_mutex, like everything else here.
+Environment g_envCache;
+bool        g_envHaveCache = false;
+
+// The bits of `Environment::flags` that are *state* rather than "this changed":
+// they ride through the publisher untouched, and a change in one of them is a
+// reason to rewrite the row even when no value moved (an operator preset can
+// land on exactly the HOST's numbers).
+constexpr uint32_t kEnvStateMask = kEnvTimeManual | kEnvWeatherManual |
+                                   kEnvDateValid  | kEnvLightning |
+                                   kEnvTimeValid  | kEnvAtmosValid |
+                                   kEnvWeatherValid | kEnvWeatherPattern;
+
+// Which group changed, so the add-on is told what to re-apply and, just as
+// importantly, what not to.  Exact compares are right here: both sides of each
+// comparison are values that were set, not computed results that might differ in
+// the last bit for the same input.
+bool envTimeChanged(const Environment& a, const Environment& b) {
+    return a.hour != b.hour || a.minute != b.minute || a.second != b.second ||
+           a.year != b.year || a.month != b.month || a.day != b.day ||
+           (a.flags & kEnvDateValid) != (b.flags & kEnvDateValid);
+}
+
+bool envAtmosChanged(const Environment& a, const Environment& b) {
+    return a.airTempC != b.airTempC ||
+           a.visibilityMeters != b.visibilityMeters ||
+           a.horizWindMps != b.horizWindMps ||
+           a.vertWindMps != b.vertWindMps ||
+           a.windDirDeg != b.windDirDeg ||
+           a.baroPressureMb != b.baroPressureMb ||
+           a.humidityPct != b.humidityPct;
+}
+
+bool envWeatherChanged(const Environment& a, const Environment& b) {
+    return a.cloudType != b.cloudType || a.severity != b.severity ||
+           a.precipType != b.precipType || a.coverage != b.coverage ||
+           a.baseElevMeters != b.baseElevMeters ||
+           a.thicknessMeters != b.thicknessMeters ||
+           (a.flags & kEnvLightning) != (b.flags & kEnvLightning) ||
+           (a.flags & kEnvWeatherPattern) != (b.flags & kEnvWeatherPattern);
+}
+
+bool envAnyChanged(const Environment& a, const Environment& b) {
+    return envTimeChanged(a, b) || envAtmosChanged(a, b) ||
+           envWeatherChanged(a, b) ||
+           (a.flags & kEnvStateMask) != (b.flags & kEnvStateMask);
+}
+
 bool tryOpen() {
     if (g_shm) return true;
 
@@ -82,6 +136,7 @@ bool tryOpen() {
     g_shm     = s;
     g_lastTicks  = 0;
     g_lastChange = 0;
+    g_envHaveCache = false;   // first publish pushes the whole world again
     return true;
 }
 
@@ -159,6 +214,71 @@ void publishView(const cigi::ViewControl& v) {
     ++row.seq;
 }
 
+void publishEnvironment(const Environment& env) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+
+    if (!tryOpen()) return;
+
+    // Most calls land here: the HOST repeats its atmosphere, and the operator's
+    // overrides do not move between messages.  Dropping an unchanged row is the
+    // whole point -- pushing it with a new generation would make the add-on
+    // re-apply the clock every frame and pin the sim's own time to the second.
+    if (g_envHaveCache && !envAnyChanged(env, g_envCache)) return;
+
+    uint32_t flags = env.flags & kEnvStateMask;
+    // A group is applied only when it is both present and changed.  The
+    // presence gate is what keeps the defaults in a group nobody has spoken
+    // for -- the 00:00 clock, the clear sky -- from becoming a command: the
+    // HOST in this deployment sends an Atmosphere Control and no Celestial
+    // Sphere or Weather Control, so without it the sim's own clock would be
+    // pinned to midnight and its weather cleared on startup.
+    if ((env.flags & kEnvTimeValid) &&
+        (!g_envHaveCache || envTimeChanged(env, g_envCache)))
+        flags |= kEnvApplyTime;
+    if ((env.flags & kEnvAtmosValid) &&
+        (!g_envHaveCache || envAtmosChanged(env, g_envCache)))
+        flags |= kEnvApplyAtmos;
+    if ((env.flags & kEnvWeatherValid) &&
+        (!g_envHaveCache || envWeatherChanged(env, g_envCache)))
+        flags |= kEnvApplyWeather;
+
+    Environment& row = g_shm->environment;
+    const uint32_t generation = row.generation + 1;
+
+    // Seqlock, exactly as an entity row: an odd `seq` says the row is being
+    // rewritten, so the add-on retries rather than applying half a world.
+    ++row.seq;
+    row.generation     = generation;
+    row.flags          = flags;
+    row.hour           = env.hour;
+    row.minute         = env.minute;
+    row.second         = env.second;
+    row.year           = env.year;
+    row.month          = env.month;
+    row.day            = env.day;
+    row.cloudType      = env.cloudType;
+    row.severity       = env.severity;
+    row.precipType     = env.precipType;
+    row.airTempC       = env.airTempC;
+    row.visibilityMeters = env.visibilityMeters;
+    row.coverage       = env.coverage;
+    row.baseElevMeters = env.baseElevMeters;
+    row.thicknessMeters = env.thicknessMeters;
+    row.horizWindMps   = env.horizWindMps;
+    row.vertWindMps    = env.vertWindMps;
+    row.windDirDeg     = env.windDirDeg;
+    row.baroPressureMb = env.baroPressureMb;
+    row.humidityPct    = env.humidityPct;
+    ++row.seq;
+
+    // Remember what was actually written, flags included, so the next call
+    // compares against the region's contents rather than the caller's wish.
+    g_envCache = env;
+    g_envCache.generation = generation;
+    g_envCache.flags      = flags;
+    g_envHaveCache = true;
+}
+
 Health health() {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
 
@@ -192,6 +312,30 @@ Health health() {
     }
 
     s.viewCarried = g_shm->view.valid != 0;
+
+    s.envCarried      = g_shm->environment.generation != 0;
+    s.envGeneration   = g_shm->environment.generation;
+    s.envManualTime   = (g_shm->environment.flags & kEnvTimeManual) != 0;
+    s.envManualWeather = (g_shm->environment.flags & kEnvWeatherManual) != 0;
+    s.envWeatherPattern = (g_shm->environment.flags & kEnvWeatherPattern) != 0;
+
+    // The add-on's own row is rewritten on every tick -- it carries the sim's
+    // sky read-back -- so it is read under its seqlock like every other row here
+    // rather than as a run of independent words: the window would otherwise
+    // occasionally show a half-written altitude, and the applies count that goes
+    // with a generation could belong to the previous one.
+    EnvironmentStatus st{};
+    if (readEnvironmentStatus(g_shm->environmentStatus, st)) {
+        s.envApplies        = st.applies;
+        s.envTimeOfDay      = st.timeOfDay;
+        s.envLastError      = st.lastError;
+        s.envSimCloudLayers = st.cloudLayers;
+        s.envSimCloudType   = st.simCloudType;
+        s.envSimCloudCover  = st.simCloudCover;
+        s.envSimPrecipType  = st.simPrecipType;
+        s.envSimCloudBaseM  = st.simCloudBaseMeters;
+        s.envSimCloudTopsM  = st.simCloudTopsMeters;
+    }
 
     s.ticking = s.alive && tickFresh();
     return s;
@@ -232,6 +376,7 @@ void stop() {
     g_nextTryAtMs = 0;
     g_lastTicks   = 0;
     g_lastChange  = 0;
+    g_envHaveCache = false;
 }
 
 } // namespace simlink

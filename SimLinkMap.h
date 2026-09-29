@@ -193,6 +193,28 @@ inline bool readViewRow(const View& row, View& out) {
     return row.seq == before;
 }
 
+// Read the resolved world under its seqlock, the same discipline as the rows
+// above: applying half a world -- last frame's temperature with this frame's
+// clock -- is exactly what this prevents.
+inline bool readEnvironmentRow(const Environment& row, Environment& out) {
+    const uint32_t before = row.seq;
+    if (before & 1u) return false;
+    out = row;
+    return row.seq == before;
+}
+
+// Read the add-on's environment status under the same seqlock.  It is the
+// add-on's row (only it writes it), but CigiStarter reads it back for the
+// operator window and the e2e test, so the read sits beside the other readers
+// rather than being re-spelled in the test.
+inline bool readEnvironmentStatus(const EnvironmentStatus& row,
+                                  EnvironmentStatus& out) {
+    const uint32_t before = row.seq;
+    if (before & 1u) return false;
+    out = row;
+    return row.seq == before;
+}
+
 // Where the HOST wants its eye, given the entity its view is attached to.
 //
 // The offsets are body offsets from the entity's reference point, so they have

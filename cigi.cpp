@@ -19,6 +19,7 @@ inline void writeF32LE(uint8_t* p, float v)   { std::memcpy(p, &v, 4); }
 inline void writeF64LE(uint8_t* p, double v)  { std::memcpy(p, &v, 8); }
 
 inline uint16_t readU16LE(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
+inline uint32_t readU32LE(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 inline float    readF32LE(const uint8_t* p) { float    v; std::memcpy(&v, p, 4); return v; }
 inline double   readF64LE(const uint8_t* p) { double   v; std::memcpy(&v, p, 8); return v; }
 
@@ -237,6 +238,157 @@ bool parseViewControl(const uint8_t* msg, size_t size, ViewControl& out) {
     out.rollDeg  = readF32LE(msg + 20);
     out.pitchDeg = readF32LE(msg + 24);
     out.yawDeg   = readF32LE(msg + 28);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Celestial Sphere Control (16 bytes)
+//
+//   off  len  field
+//   0    1    message id      = 0x09 (9)
+//   1    1    message size    = 16
+//   2    1    hour            (uint8, UTC)
+//   3    1    minute          (uint8, UTC)
+//   4    1    flags           (bit0 Ephemeris, bit1 Sun, bit2 Moon, bit3 Star,
+//                              bit4 Date Valid)
+//   5    3    reserved        = 0
+//   8    4    date            (uint32 LE, Month*1000000 + Day*10000 + Year)
+//   12   4    star intensity  (float LE)
+//
+// The four time-of-day captures carry 12:00, 06:15, 17:30 and 23:30 here with
+// flags 0x11 and the date 2000-01-01 (0x000F7120 = 1012000).  Only 16 bytes are
+// decoded; a longer message is accepted, a shorter one is not.
+//-----------------------------------------------------------------------------
+bool parseCelestialSphere(const uint8_t* msg, size_t size, CelestialSphere& out) {
+    if (size < kCelestialSphereSize ||
+        msg[0] != static_cast<uint8_t>(MsgCelestialSphere)) {
+        return false;
+    }
+    out.hour         = msg[2];
+    out.minute       = msg[3];
+    out.flags        = msg[4];
+    out.date         = readU32LE(msg + 8);
+    out.starIntensity = readF32LE(msg + 12);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Atmosphere Control (32 bytes)
+//
+//   off  len  field
+//   0    1    message id      = 0x0A (10)
+//   1    1    message size    = 32
+//   2    1    atmosphere enable (bit 0; NOT honoured -- see cigi.h)
+//   3    1    humidity        (uint8, percent)
+//   4    4    air temperature (float LE, C)
+//   8    4    visibility      (float LE, m)
+//   12   4    horizontal wind (float LE, m/s)
+//   16   4    vertical wind   (float LE, m/s)
+//   20   4    wind direction  (float LE, degrees, from)
+//   24   4    barometric      (float LE, millibars)
+//   28   4    reserved        = 0
+//-----------------------------------------------------------------------------
+bool parseAtmosphere(const uint8_t* msg, size_t size, Atmosphere& out) {
+    if (size < kAtmosphereSize || msg[0] != static_cast<uint8_t>(MsgAtmosphere)) {
+        return false;
+    }
+    out.atmosEnable    = msg[2];
+    out.humidity       = msg[3];
+    out.airTempC       = readF32LE(msg + 4);
+    out.visibilityM    = readF32LE(msg + 8);
+    out.horizWindMps   = readF32LE(msg + 12);
+    out.vertWindMps    = readF32LE(msg + 16);
+    out.windDirDeg     = readF32LE(msg + 20);
+    out.baroPressureMb = readF32LE(msg + 24);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Weather Control (56 bytes)
+//
+//   off  len  field
+//   0    1    message id      = 0x0C (12)
+//   1    1    message size    = 56
+//   2    2    entity/region ID (uint16 LE)
+//   4    1    layer ID
+//   5    1    humidity        (uint8, percent)
+//   6    1    flags           (bit0 Weather En, bit1 Scud En, bit2 Random Winds
+//                              En, bit3 Random Lightning En, bits 4-7 cloud type)
+//   7    1    flags2          (bits 0-1 scope, bits 2-4 severity)
+//   8    4    air temperature (float LE, C)
+//   12   4    visibility      (float LE, m)
+//   16   4    scud frequency  (float LE)
+//   20   4    coverage        (float LE, 0..1)
+//   24   4    base elevation  (float LE, m)
+//   28   4    thickness       (float LE, m)
+//   32   4    transition      (float LE, m)
+//   36   4    horizontal wind (float LE, m/s)
+//   40   4    vertical wind   (float LE, m/s)
+//   44   4    wind direction  (float LE, degrees)
+//   48   4    barometric      (float LE, millibars)
+//   52   4    aerosol         (float LE)
+//-----------------------------------------------------------------------------
+bool parseWeatherControl(const uint8_t* msg, size_t size, WeatherControl& out) {
+    if (size < kWeatherControlSize ||
+        msg[0] != static_cast<uint8_t>(MsgWeatherControl)) {
+        return false;
+    }
+    out.entityOrRegionId = readU16LE(msg + 2);
+    out.layerId          = msg[4];
+    out.humidity         = msg[5];
+    out.flags            = msg[6];
+    out.flags2           = msg[7];
+    out.airTempC         = readF32LE(msg + 8);
+    out.visibilityM      = readF32LE(msg + 12);
+    out.scudFreq         = readF32LE(msg + 16);
+    out.coverage         = readF32LE(msg + 20);
+    out.baseElevM        = readF32LE(msg + 24);
+    out.thicknessM       = readF32LE(msg + 28);
+    out.transitionM      = readF32LE(msg + 32);
+    out.horizWindMps     = readF32LE(msg + 36);
+    out.vertWindMps      = readF32LE(msg + 40);
+    out.windDirDeg       = readF32LE(msg + 44);
+    out.baroPressureMb   = readF32LE(msg + 48);
+    out.aerosol          = readF32LE(msg + 52);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Component Control (32 bytes)
+//
+//   off  len  field
+//   0    1    message id      = 0x04 (4)
+//   1    1    message size    = 32
+//   2    2    component ID    (uint16 LE)
+//   4    2    instance ID     (uint16 LE; an Entity component names its entity)
+//   6    1    component class (0 entity, 9 global layered weather, ...)
+//   7    1    component state
+//   8    4    data 1          (float LE)
+//   12   4    data 2
+//   16   4    data 3
+//   20   4    data 4
+//   24   4    data 5
+//   28   4    data 6
+//
+// The six data words are the component class's business, not the protocol's, so
+// they are carried raw and interpreted where the class is known (cigi.h has the
+// cloud pattern the reference HOST sends in them).
+//-----------------------------------------------------------------------------
+bool parseComponentControl(const uint8_t* msg, size_t size, ComponentControl& out) {
+    if (size < kComponentControlSize ||
+        msg[0] != static_cast<uint8_t>(MsgComponentControl)) {
+        return false;
+    }
+    out.componentId    = readU16LE(msg + 2);
+    out.instanceId     = readU16LE(msg + 4);
+    out.componentClass = msg[6];
+    out.componentState = msg[7];
+    out.data1          = readF32LE(msg + 8);
+    out.data2          = readF32LE(msg + 12);
+    out.data3          = readF32LE(msg + 16);
+    out.data4          = readF32LE(msg + 20);
+    out.data5          = readF32LE(msg + 24);
+    out.data6          = readF32LE(msg + 28);
     return true;
 }
 

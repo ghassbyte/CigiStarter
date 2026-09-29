@@ -61,6 +61,7 @@
 //=============================================================================
 #include "cigi.h"
 #include "SofPacer.h"
+#include "Environment.h"
 #include "Gui.h"
 #include "Relay.h"
 #include "SimLink.h"
@@ -164,6 +165,10 @@ struct Stats {
     std::atomic<uint64_t> igControl{0};
     std::atomic<uint64_t> entityControl{0};
     std::atomic<uint64_t> viewControl{0};
+    std::atomic<uint64_t> celestialSphere{0};
+    std::atomic<uint64_t> atmosphere{0};
+    std::atomic<uint64_t> weatherControl{0};
+    std::atomic<uint64_t> cloudPatterns{0};
     std::atomic<uint64_t> hatHotReq{0};
     std::atomic<uint32_t> lastHostFrame{0};
     // Downstream datagrams that came from the HOST, i.e. answers to our SOFs.
@@ -255,6 +260,42 @@ static void noteHostPose(const cigi::EntityControl& e) {
     g_hostPose.latDeg    = e.latDeg;
     g_hostPose.lonDeg    = e.lonDeg;
     g_hostPose.altMeters = e.altMeters;
+}
+
+//-----------------------------------------------------------------------------
+// The HOST's world beyond the entities
+//-----------------------------------------------------------------------------
+// What the HOST has said about the clock, the air and the weather, accumulated
+// from the CIGI environment messages as they arrive (Environment.h owns the
+// folding and the resolution; this is only the place it is kept). Guarded
+// because the receive thread writes it and the window thread reads it for the
+// status line.
+static std::mutex               g_hostEnvMtx;
+static cigienv::HostEnvironment g_hostEnv;
+
+// The operator's overrides, set by the window's two combo boxes and read by the
+// receive thread when it resolves. `Host` (the zero value) is "follow the HOST",
+// so an untouched IG applies exactly what the HOST commanded.
+static std::atomic<int> g_timePreset{static_cast<int>(cigienv::TimePreset::Host)};
+static std::atomic<int> g_weatherPreset{static_cast<int>(cigienv::WeatherPreset::Host)};
+
+// Resolve the HOST's world with the operator's overrides on top and hand it to
+// the add-on (SimLink.h). Cheap to call as often as a message arrives: the
+// publisher drops it unless something actually changed, which is what keeps a
+// commanded 12:00 from re-pinning the sim's clock every frame. The operator's
+// combo boxes call this too, so a manual change takes effect without waiting for
+// another message.
+static void publishWorld() {
+    if (!g_simLinkEnabled.load()) return;
+
+    cigienv::HostEnvironment host;
+    {
+        std::lock_guard<std::mutex> lk(g_hostEnvMtx);
+        host = g_hostEnv;
+    }
+    const auto time    = static_cast<cigienv::TimePreset>(g_timePreset.load());
+    const auto weather = static_cast<cigienv::WeatherPreset>(g_weatherPreset.load());
+    simlink::publishEnvironment(cigienv::resolve(host, time, weather));
 }
 
 //-----------------------------------------------------------------------------
@@ -677,6 +718,7 @@ static gui::Status uiStatus() {
     s.flowControl       = g_flowControl.load();
     s.datagrams         = g_stats.datagrams.load();
     s.entityUpdates     = g_stats.entityControl.load();
+    s.cloudPatterns     = g_stats.cloudPatterns.load();
     s.sofFrames         = g_stats.sofFrames.load();
     s.targetFps         = g_targetFps.load();
     s.hostIgMode        = g_stats.hostIgMode.load();
@@ -743,6 +785,101 @@ static gui::Status uiStatus() {
     s.simLinkObjects = writer.objectsCreated;
     s.simLinkApplied = writer.applied;
     s.simLinkEye     = writer.viewCarried;
+
+    // The HOST's world beyond the entities: the clock and the weather, resolved
+    // with the operator's own choices, and what the add-on in the sim made of
+    // them.  The two preset indices are carried as well as the text, so the
+    // window's combo boxes can show the selection they represent; the text says
+    // what is actually being applied, which for "Host" is the HOST's own clock
+    // rather than a preset.
+    s.envCarried    = writer.envCarried;
+    s.envManualTime = writer.envManualTime;
+    s.envManualWeather = writer.envManualWeather;
+    s.envWeatherPattern = writer.envWeatherPattern;
+    s.envApplies    = writer.envApplies;
+    s.envLastError  = writer.envLastError;
+
+    const int timeSel    = g_timePreset.load();
+    const int weatherSel = g_weatherPreset.load();
+    s.envTimePreset    = timeSel;
+    s.envWeatherPreset = weatherSel;
+
+    if (timeSel == static_cast<int>(cigienv::TimePreset::Host)) {
+        std::lock_guard<std::mutex> lk(g_hostEnvMtx);
+        if (g_hostEnv.haveTime) {
+            char b[40];
+            std::snprintf(b, sizeof(b), "%02u:%02u (HOST)",
+                          g_hostEnv.hour, g_hostEnv.minute);
+            s.envTimeText = b;
+        } else {
+            s.envTimeText = "HOST (no clock yet)";
+        }
+    } else {
+        cigienv::TimeOfDay tod{};
+        char b[40];
+        if (cigienv::timePresetClock(
+                static_cast<cigienv::TimePreset>(timeSel), tod)) {
+            std::snprintf(b, sizeof(b), "%02d:%02d (manual)", tod.hour, tod.minute);
+        } else {
+            std::snprintf(b, sizeof(b), "(manual)");
+        }
+        s.envTimeText = b;
+    }
+    s.envWeatherText =
+        weatherSel == static_cast<int>(cigienv::WeatherPreset::Host)
+            ? "HOST"
+            : cigienv::weatherPresetName(
+                  static_cast<cigienv::WeatherPreset>(weatherSel));
+
+    // When the sky being applied is the HOST's *cloud pattern* -- a Component
+    // Control on the cloud entity, which is the only way the reference HOST ever
+    // describes one -- say which pattern, so a capture whose sky arrives that
+    // way does not look like a HOST that sent nothing.  The pattern's index and
+    // its "off" state are read out of the accumulated world, like the clock
+    // above, because they are the HOST's rather than the resolved row's.
+    if (weatherSel == static_cast<int>(cigienv::WeatherPreset::Host) &&
+        writer.envWeatherPattern) {
+        std::lock_guard<std::mutex> lk(g_hostEnvMtx);
+        char b[40];
+        if (g_hostEnv.patternIndex == 0) {
+            std::snprintf(b, sizeof(b), "HOST (cloud pattern off)");
+        } else {
+            std::snprintf(b, sizeof(b), "HOST cloud pattern %u",
+                          g_hostEnv.patternIndex);
+        }
+        s.envWeatherText = b;
+    }
+
+    // The sky the sim itself reports, from the add-on's read-back of its weather
+    // system (SimLinkIpc.h, kVersion 5).  A METAR that names a cloud is a
+    // request; this is the cloud that exists, and it is the one reading that can
+    // tell a pattern which reached the sim from one that only reached the
+    // region.
+    if (writer.envSimCloudLayers == 0) {
+        s.envSimSkyText = "no cloud";
+    } else {
+        char b[96];
+        std::snprintf(b, sizeof(b), "%u layer%s %s %.0f-%.0f m %s",
+                      writer.envSimCloudLayers,
+                      writer.envSimCloudLayers == 1 ? "" : "s",
+                      cigienv::p3dCloudTypeName(writer.envSimCloudType),
+                      writer.envSimCloudBaseM, writer.envSimCloudTopsM,
+                      cigienv::p3dCloudCoverName(writer.envSimCloudCover));
+        s.envSimSkyText = b;
+    }
+
+    // What the sim itself says the time of day is, from the add-on's read-back
+    // of IGlobalData::GetGeneralTimeOfDay() after the clock was applied.  It is
+    // the only evidence an outside observer has that a commanded 12:00 became
+    // *day* rather than merely being accepted.
+    switch (writer.envTimeOfDay) {
+    case 0:  s.envSimTimeText = "dawn";  break;
+    case 1:  s.envSimTimeText = "day";   break;
+    case 2:  s.envSimTimeText = "dusk";  break;
+    case 3:  s.envSimTimeText = "night"; break;
+    default: s.envSimTimeText = "not read back"; break;
+    }
+
     return s;
 }
 
@@ -776,6 +913,27 @@ static void uiSetFps(int fps) {
         return;
     }
     g_targetFps.store(fps);
+}
+
+// The operator's time-of-day and weather presets.  Both simply re-resolve the
+// HOST's world with the new choice on top and republish; the publisher's
+// on-change rule makes the apply land once, and switching back to "Host" just
+// resolves to the HOST's own values again -- which then differ from the preset,
+// so the change is applied and the clock/weather go back to being the HOST's.
+static void uiSetTimePreset(int preset) {
+    if (preset < 0 || preset >= static_cast<int>(cigienv::TimePreset::Count)) {
+        return;
+    }
+    g_timePreset.store(preset);
+    publishWorld();
+}
+
+static void uiSetWeatherPreset(int preset) {
+    if (preset < 0 || preset >= static_cast<int>(cigienv::WeatherPreset::Count)) {
+        return;
+    }
+    g_weatherPreset.store(preset);
+    publishWorld();
 }
 
 int main(int argc, char** argv) {
@@ -980,6 +1138,75 @@ int main(int argc, char** argv) {
                         if (g_simLinkEnabled.load() &&
                             cigi::parseViewControl(msg, msgSize, v)) {
                             simlink::publishView(v);
+                        }
+                        break;
+                    }
+                    case cigi::MsgCelestialSphere: {
+                        g_stats.celestialSphere.fetch_add(1);
+                        // The HOST's wall clock and date (id 9).  Folded into the
+                        // accumulated world and resolved/published with the rest;
+                        // the operator's own time-of-day preset, if any, is
+                        // applied on top in resolve().
+                        cigi::CelestialSphere cs;
+                        if (cigi::parseCelestialSphere(msg, msgSize, cs)) {
+                            {
+                                std::lock_guard<std::mutex> lk(g_hostEnvMtx);
+                                cigienv::applyCelestialSphere(g_hostEnv, cs);
+                            }
+                            publishWorld();
+                        }
+                        break;
+                    }
+                    case cigi::MsgAtmosphere: {
+                        g_stats.atmosphere.fetch_add(1);
+                        // The air the aircraft flies in (id 10): temperature,
+                        // visibility, wind, pressure, humidity.  The captures
+                        // carry it in their warm-up frames; publishWorld() drops
+                        // the repeats.
+                        cigi::Atmosphere a;
+                        if (cigi::parseAtmosphere(msg, msgSize, a)) {
+                            {
+                                std::lock_guard<std::mutex> lk(g_hostEnvMtx);
+                                cigienv::applyAtmosphere(g_hostEnv, a);
+                            }
+                            publishWorld();
+                        }
+                        break;
+                    }
+                    case cigi::MsgWeatherControl: {
+                        g_stats.weatherControl.fetch_add(1);
+                        // Cloud and precipitation (id 12), which no capture in
+                        // this deployment carries -- the reference HOST commanded
+                        // a whole environment with the warm-up Atmosphere Control
+                        // alone.  Built to the ICD and contract-tested; the
+                        // operator's weather presets are what this rig will
+                        // actually exercise.
+                        cigi::WeatherControl w;
+                        if (cigi::parseWeatherControl(msg, msgSize, w)) {
+                            {
+                                std::lock_guard<std::mutex> lk(g_hostEnvMtx);
+                                cigienv::applyWeather(g_hostEnv, w);
+                            }
+                            publishWorld();
+                        }
+                        break;
+                    }
+                    case cigi::MsgComponentControl: {
+                        // A component on an entity (id 4).  The only one the
+                        // reference HOST sends is the cloud pattern on the cloud
+                        // entity it creates -- component 0x1001, class Entity --
+                        // and it is that capture's *only* description of the
+                        // sky: the real HOST never sends a Weather Control
+                        // (Environment.h has the evidence and the mapping).
+                        cigi::ComponentControl cc;
+                        if (cigi::parseComponentControl(msg, msgSize, cc) &&
+                            cigienv::isCloudPattern(cc)) {
+                            g_stats.cloudPatterns.fetch_add(1);
+                            {
+                                std::lock_guard<std::mutex> lk(g_hostEnvMtx);
+                                cigienv::applyCloudPattern(g_hostEnv, cc);
+                            }
+                            publishWorld();
                         }
                         break;
                     }
@@ -1196,6 +1423,8 @@ int main(int argc, char** argv) {
     hooks.setRespondHatHot = uiSetRespondHatHot;
     hooks.setFlowControl   = uiSetFlowControl;
     hooks.setFps           = uiSetFps;
+    hooks.setTimePreset    = uiSetTimePreset;
+    hooks.setWeatherPreset = uiSetWeatherPreset;
     hooks.requestQuit      = uiRequestQuit;
 
     gui::Link link;

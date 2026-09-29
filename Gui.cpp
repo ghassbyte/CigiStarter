@@ -6,25 +6,28 @@
 //     +--------------------------------------------------------------------+
 //     |  HOST 192.168.70.2:8001   ->  SOF destination                       |
 //     |   ... live status block (read-only edit): the link, the stream, the |
-//     |       client.txt fan-out and the terrain sample ...                 |
+//     |       client.txt fan-out, the terrain sample and the world being     |
+//     |       applied (time of day, weather) ...                            |
 //     |                                                                     |
 //     |  [x] Answer HAT/HOT  SOF rate: [ 150 ] Hz [Apply]                  |
 //     |  [x] Pace SOF to HOST replies (flow control)                        |
+//     |  Time of day: [ Host        v ]  Weather: [ Host        v ]        |
 //     |                                                                     |
 //     |  [ START ]  [ STOP ]                                        [ EXIT ] |
 //     +--------------------------------------------------------------------+
 //
 //  The settings rows are live: the check boxes switch HAT/HOT answering (and
-//  with it the terrain probe) and the flow control, and the rate box retunes the
-//  SOF stream, all without stopping anything first. The rate box applies on
-//  Enter, on Apply, and when it loses focus, so a typed value can never be
-//  silently ignored.
+//  with it the terrain probe) and the flow control, the rate box retunes the
+//  SOF stream, and the two drop-downs pick the time of day and the weather, all
+//  without stopping anything first. The rate box applies on Enter, on Apply, and
+//  when it loses focus, so a typed value can never be silently ignored.
 //
 //  There is no X button: SC_CLOSE is deleted from the system menu at creation
 //  and WM_CLOSE is ignored, so DestroyWindow() is only ever reached from the
 //  EXIT handler.
 //=============================================================================
 #include "Gui.h"
+#include "Environment.h"    // the time-of-day/weather preset names for the combo boxes
 #include "TerrainProbe.h"   // terrain::probe::surface::kCategory*, for the readout
 
 #include <windows.h>
@@ -43,16 +46,21 @@ constexpr int kStatusW   = kClientW - 2 * kMargin;
 // Tall enough for the whole status block plus a couple of wrapped lines: the
 // relay line grows with the counters, the terrain block gains a "Probe" line
 // when the add-on is not answering, the SimLink line explains itself when the
-// entity writer is not answering, and a line that wraps (the terrain database
-// summary carries a folder path) must not push a reading out of sight.
-constexpr int kStatusH   = 372;
+// entity writer is not answering, the world and sky lines say what clock and
+// weather are being applied and what the sim made of them, and a line that wraps
+// (the terrain database summary carries a folder path) must not push a reading
+// out of sight.
+constexpr int kStatusH   = 418;
 constexpr int kSettingsY = kMargin + kStatusH + kMargin;
 constexpr int kRowH      = 24;
 // The flow-control check box gets a row of its own under the HAT/HOT row: there
 // is no width left beside it, and a squeezed label would be worse than a taller
 // window.
 constexpr int kFlagsY    = kSettingsY + kRowH;
-constexpr int kButtonY   = kFlagsY + kRowH + kMargin;
+// The time-of-day and weather combo boxes get a row below the check boxes: each
+// is a labelled drop-down, and neither fits beside the rate box above.
+constexpr int kEnvY      = kFlagsY + kRowH;
+constexpr int kButtonY   = kEnvY + kRowH + kMargin;
 constexpr int kButtonW   = 110;
 constexpr int kButtonH   = 32;
 constexpr int kClientH   = kButtonY + kButtonH + kMargin;
@@ -75,6 +83,10 @@ constexpr int kFpsApplyId  = 1006;
 constexpr int kFpsLabelId  = 1007;
 constexpr int kFpsUnitId   = 1008;
 constexpr int kFlowId      = 1009;
+constexpr int kTimeLabelId = 1010;
+constexpr int kTimeComboId = 1011;
+constexpr int kWeatherLabelId = 1012;
+constexpr int kWeatherComboId = 1013;
 
 // How often the status block is rewritten (ms).
 constexpr UINT_PTR kRefreshTimer = 1;
@@ -93,6 +105,8 @@ HWND  g_stop    = nullptr;
 HWND  g_respond = nullptr;
 HWND  g_flow    = nullptr;
 HWND  g_fpsEdit = nullptr;
+HWND  g_timeCombo    = nullptr;
+HWND  g_weatherCombo = nullptr;
 HFONT g_mono    = nullptr;
 
 // Rate sampling: the counters are cumulative, so the window keeps its own
@@ -204,6 +218,43 @@ void ApplyFps(bool quiet) {
 
     g_hooks->setFps(static_cast<int>(value));
     SetFpsText(g_hooks->status().targetFps);  // show what was actually adopted
+}
+
+// ---- Preset drop-downs ---------------------------------------------------
+// The two drop-downs carry the enum's own names, so the window and the code
+// that resolves the preset cannot disagree about what "Storm" means.  They are
+// populated once, at creation, and only their selection is ever moved.
+
+void PopulateTimeCombo(HWND combo) {
+    for (int i = 0; i < static_cast<int>(cigienv::TimePreset::Count); ++i) {
+        wchar_t w[64];
+        std::swprintf(w, ARRAYSIZE(w), L"%hs",
+                      cigienv::timePresetName(static_cast<cigienv::TimePreset>(i)));
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(w));
+    }
+}
+
+void PopulateWeatherCombo(HWND combo) {
+    for (int i = 0; i < static_cast<int>(cigienv::WeatherPreset::Count); ++i) {
+        wchar_t w[64];
+        std::swprintf(w, ARRAYSIZE(w), L"%hs",
+                      cigienv::weatherPresetName(
+                          static_cast<cigienv::WeatherPreset>(i)));
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(w));
+    }
+}
+
+// Show the live selection on a drop-down without fighting the operator: while
+// the list is open, or the control has the keyboard focus, the window leaves the
+// selection alone rather than resetting it out from under a click or a keypress.
+void SyncCombo(HWND combo, int index) {
+    if (!combo || index < 0) return;
+    if (GetFocus() == combo) return;
+    if (SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0) != 0) return;
+    const int cur = static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0));
+    if (cur != index) {
+        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
+    }
 }
 
 // Rebuild the status block from the caller's snapshot and sync the controls.
@@ -393,6 +444,55 @@ void Refresh() {
                       s.simLinkEye ? L", eye from the HOST" : L"");
     }
 
+    // The world beyond the entities, on the same channel: the clock and the
+    // weather that are being applied, and what the add-on in the sim made of
+    // them.  `simLinkNote` above already says when the world cannot be applied
+    // at all, so this line only reports what was published and what the sim's
+    // own time-of-day read-back says about the clock.
+    wchar_t world[256];
+    if (!s.envCarried) {
+        std::swprintf(world, ARRAYSIZE(world),
+                      L"  World     : nothing published yet");
+    } else {
+        const int used = std::swprintf(
+            world, ARRAYSIZE(world),
+            L"  World     : time %hs, weather %hs; sim says %hs, %u applied",
+            s.envTimeText.c_str(), s.envWeatherText.c_str(),
+            s.envSimTimeText.c_str(), s.envApplies);
+        // A clock or weather call the sim refused is otherwise invisible: the
+        // world would simply not move.  The last HRESULT is the same word the
+        // region carries for the test to read.
+        if (s.envLastError != 0 && used > 0 &&
+            static_cast<size_t>(used) < ARRAYSIZE(world)) {
+            std::swprintf(world + used, ARRAYSIZE(world) - used,
+                          L", last error 0x%08X",
+                          static_cast<unsigned>(s.envLastError));
+        }
+    }
+
+    // The sky, in two halves: what the IG is applying (the world line above) and
+    // what the sim says it ended up with.  The second half is the whole point of
+    // the line -- a METAR naming a cloud is a request, and a cloud pattern is a
+    // request phrased differently again -- so a cloud that only reached the
+    // shared region shows up here as "no cloud".  The pattern count says whether
+    // the HOST described its sky that way at all, which is otherwise invisible:
+    // a capture with cloud patterns and a capture with none both read "HOST".
+    wchar_t sky[256];
+    if (!s.envCarried) {
+        std::swprintf(sky, ARRAYSIZE(sky), L"  Sky       : nothing published yet");
+    } else {
+        const int used = std::swprintf(
+            sky, ARRAYSIZE(sky), L"  Sky       : sim says %hs",
+            s.envSimSkyText.empty() ? "nothing read back" : s.envSimSkyText.c_str());
+        if (used > 0 && static_cast<size_t>(used) < ARRAYSIZE(sky) &&
+            s.cloudPatterns > 0) {
+            std::swprintf(sky + used, ARRAYSIZE(sky) - used,
+                          L"; %llu cloud pattern%s from the HOST",
+                          static_cast<unsigned long long>(s.cloudPatterns),
+                          s.cloudPatterns == 1 ? L"" : L"s");
+        }
+    }
+
     // How the transmit loop is pacing, and -- when flow control is holding
     // frames back -- whether it is the HOST that is setting the pace. The SOF
     // line already shows the rate that was achieved, so a rate well under the
@@ -408,7 +508,7 @@ void Refresh() {
         std::swprintf(pacing, ARRAYSIZE(pacing), L"paced to the HOST");
     }
 
-    wchar_t text[3072];
+    wchar_t text[4096];
     std::swprintf(text, ARRAYSIZE(text),
         L"  HOST %hs:%u   ->  SOF destination\r\n"
         L"  IG   :%u   (this IG is %hs)\r\n"
@@ -420,6 +520,8 @@ void Refresh() {
         L"  IG mode   : %u (%s)  <- commanded by the HOST\r\n"
         L"  HOST frame: %u\r\n"
         L"\r\n"
+        L"%s\r\n"
+        L"%s\r\n"
         L"%s\r\n"
         L"%s\r\n"
         L"%s\r\n"
@@ -436,7 +538,7 @@ void Refresh() {
         static_cast<unsigned long long>(s.entityUpdates),
         static_cast<unsigned>(s.hostIgMode), IgModeName(s.hostIgMode),
         static_cast<unsigned>(s.lastHostFrame),
-        relay, relayNic, simlink, terrain);
+        relay, relayNic, simlink, world, sky, terrain);
 
     SetWindowTextW(g_status, text);
 
@@ -444,6 +546,12 @@ void Refresh() {
     // click START twice.
     EnableWindow(g_start, s.sending ? FALSE : TRUE);
     EnableWindow(g_stop,  s.sending ? TRUE : FALSE);
+
+    // And the preset drop-downs on the live selections.  This is what makes a
+    // command-line/default or a mid-run change on the other side show up here;
+    // the guard inside leaves the control alone while it is being used.
+    SyncCombo(g_timeCombo, s.envTimePreset);
+    SyncCombo(g_weatherCombo, s.envWeatherPreset);
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -505,17 +613,54 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                                  kMargin, kFlagsY, 320, kRowH,
                                  hwnd, ControlId(kFlowId), nullptr, nullptr);
 
+        // ---- Time of day / weather row -----------------------------------
+        // Two labelled drop-downs. Each lists "Host" first and then the presets,
+        // so the untouched state is "follow the HOST" and a manual choice is the
+        // deliberate act. The heights are the dropped-down extents, sized to
+        // show every entry without a scroll.
+        HWND timeLabel = CreateWindowExW(0, L"STATIC", L"Time of day:",
+                                         WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                                         kMargin, kEnvY + 3, 80, 18,
+                                         hwnd, ControlId(kTimeLabelId),
+                                         nullptr, nullptr);
+        g_timeCombo = CreateWindowExW(0, L"COMBOBOX", L"",
+                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                          CBS_DROPDOWNLIST | WS_VSCROLL,
+                                      kMargin + 84, kEnvY, 160, 140,
+                                      hwnd, ControlId(kTimeComboId),
+                                      nullptr, nullptr);
+        HWND weatherLabel = CreateWindowExW(0, L"STATIC", L"Weather:",
+                                            WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                                            kMargin + 84 + 160 + 20, kEnvY + 3,
+                                            58, 18,
+                                            hwnd, ControlId(kWeatherLabelId),
+                                            nullptr, nullptr);
+        g_weatherCombo = CreateWindowExW(0, L"COMBOBOX", L"",
+                                         WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+                                             CBS_DROPDOWNLIST | WS_VSCROLL,
+                                         kMargin + 84 + 160 + 20 + 58 + 4, kEnvY,
+                                         160, 140,
+                                         hwnd, ControlId(kWeatherComboId),
+                                         nullptr, nullptr);
+
         if (!g_status || !g_start || !g_stop || !exitBtn || !g_respond ||
-            !fpsLabel || !g_fpsEdit || !fpsUnit || !fpsApply || !g_flow) {
+            !fpsLabel || !g_fpsEdit || !fpsUnit || !fpsApply || !g_flow ||
+            !timeLabel || !g_timeCombo || !weatherLabel || !g_weatherCombo) {
             return -1;  // abort window creation
         }
 
         // Monospace for the status block, the standard dialog font elsewhere.
         SendMessageW(g_status, WM_SETFONT, reinterpret_cast<WPARAM>(g_mono), TRUE);
         for (HWND c : { g_start, g_stop, exitBtn, g_respond, g_flow, g_fpsEdit,
-                        fpsLabel, fpsUnit, fpsApply }) {
+                        fpsLabel, fpsUnit, fpsApply, timeLabel, g_timeCombo,
+                        weatherLabel, g_weatherCombo }) {
             SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
         }
+
+        // The drop-downs are populated once and only ever have their selection
+        // moved, so the list is stable while the operator scrolls it.
+        PopulateTimeCombo(g_timeCombo);
+        PopulateWeatherCombo(g_weatherCombo);
 
         // Seed the controls from the command line: they are the live state from
         // here on, so what the window shows is what the program is doing.
@@ -526,6 +671,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessageW(g_flow, BM_SETCHECK,
                          s.flowControl ? BST_CHECKED : BST_UNCHECKED, 0);
             SetFpsText(s.targetFps);
+            SendMessageW(g_timeCombo, CB_SETCURSEL,
+                         static_cast<WPARAM>(s.envTimePreset), 0);
+            SendMessageW(g_weatherCombo, CB_SETCURSEL,
+                         static_cast<WPARAM>(s.envWeatherPreset), 0);
         }
 
         // Take the Close item out of the system menu: that is what removes the
@@ -582,6 +731,26 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 Refresh();
             }
             return 0;
+        case kTimeComboId:
+            if (HIWORD(wp) == CBN_SELCHANGE) {
+                const int sel = static_cast<int>(
+                    SendMessageW(g_timeCombo, CB_GETCURSEL, 0, 0));
+                if (sel != CB_ERR && g_hooks && g_hooks->setTimePreset) {
+                    g_hooks->setTimePreset(sel);
+                }
+                Refresh();
+            }
+            return 0;
+        case kWeatherComboId:
+            if (HIWORD(wp) == CBN_SELCHANGE) {
+                const int sel = static_cast<int>(
+                    SendMessageW(g_weatherCombo, CB_GETCURSEL, 0, 0));
+                if (sel != CB_ERR && g_hooks && g_hooks->setWeatherPreset) {
+                    g_hooks->setWeatherPreset(sel);
+                }
+                Refresh();
+            }
+            return 0;
         case kFpsApplyId:
             if (HIWORD(wp) == BN_CLICKED) {
                 ApplyFps(false);
@@ -627,7 +796,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_mono = nullptr;
         }
         g_hwnd = g_status = g_start = g_stop = g_respond = g_flow =
-            g_fpsEdit = nullptr;
+            g_fpsEdit = g_timeCombo = g_weatherCombo = nullptr;
         PostQuitMessage(0);
         return 0;
 

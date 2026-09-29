@@ -12,7 +12,9 @@
 //    - whether HAT/HOT requests are answered (which starts/stops the terrain
 //      probe along with it),
 //    - whether the SOF stream is paced to the HOST's replies (flow control),
-//    - the SOF transmit rate, typed as a whole number of Hz.
+//    - the SOF transmit rate, typed as a whole number of Hz,
+//    - the time of day and the weather, each as "follow the HOST" or one of a
+//      few presets (clear/cloudy/rain/storm).
 //    The command-line options only seed these controls; whatever the window
 //    shows is what the program is doing.
 //
@@ -54,6 +56,7 @@ struct Status {
     bool     flowControl       = true;   // pacing SOF to the HOST's replies?
     uint64_t datagrams         = 0;      // downstream datagrams received
     uint64_t entityUpdates     = 0;      // Entity Control packets seen
+    uint64_t cloudPatterns     = 0;      // the HOST's cloud-pattern components seen
     uint32_t sofFrames         = 0;      // SOF frames transmitted
     int      targetFps         = 150;    // rate the transmit loop is pacing to
     uint8_t  hostIgMode        = 0;      // mode the HOST last commanded
@@ -127,6 +130,34 @@ struct Status {
     // this IG produced before the eye was carried at all.
     bool        simLinkEye     = false;
     std::string simLinkNote;
+
+    // The world beyond the entities, carried on the same channel: the clock and
+    // the weather, resolved with the operator's own choices, and what the add-on
+    // in the sim made of them.  `envTimePreset`/`envWeatherPreset` are the
+    // current selections (cigienv::TimePreset / WeatherPreset indices) that the
+    // combo boxes show; the text says what is actually applied, which for "Host"
+    // is the HOST's own clock rather than a preset.  `envSimTimeText` is the
+    // sim's own read-back of the time of day (dawn/day/dusk/night), the one
+    // piece of evidence that a commanded clock became a time of day.
+    int         envTimePreset    = 0;
+    int         envWeatherPreset = 0;
+    bool        envCarried       = false;
+    bool        envManualTime    = false;
+    bool        envManualWeather = false;
+    // True when the sky being applied is the HOST's own *cloud pattern* -- a
+    // CIGI Component Control on the cloud entity rather than a Weather Control
+    // (Environment.h).  The window says so, because otherwise a capture whose
+    // sky arrives that way looks like a HOST that sent nothing.
+    bool        envWeatherPattern = false;
+    std::string envTimeText;            // e.g. "12:00 (HOST)" / "06:15 (manual)"
+    std::string envWeatherText;         // "HOST" or a weather preset name
+    std::string envSimTimeText;         // dawn/day/dusk/night/not read back
+    // The sky the *sim* reports, from the add-on's read-back of its weather
+    // system: the cloud layer that exists rather than the one that was asked
+    // for.  Empty when there is nothing to say.
+    std::string envSimSkyText;          // e.g. "1 layer cumulus 900-1800 m BKN"
+    uint32_t    envApplies       = 0;   // environment generations the add-on applied
+    int32_t     envLastError     = 0;   // last HRESULT from a time/weather call
 };
 
 // Fixed deployment information, shown above the live status.
@@ -144,6 +175,8 @@ struct Hooks {
     void   (*setRespondHatHot)(bool);// HAT/HOT check box
     void   (*setFlowControl)(bool);  // flow-control check box
     void   (*setFps)(int);           // rate box, already range-checked
+    void   (*setTimePreset)(int);    // time-of-day combo, index into TimePreset
+    void   (*setWeatherPreset)(int); // weather combo, index into WeatherPreset
     void   (*requestQuit)();         // EXIT
 };
 
