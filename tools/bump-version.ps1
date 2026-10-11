@@ -105,6 +105,21 @@ function Finalize-Changelog {
                                    (New-Object System.Text.UTF8Encoding($false)))
 }
 
+# post-merge fires while git still considers the merge in progress: MERGE_HEAD
+# is present, and git then refuses a partial commit (a plain `git commit -m`
+# with no paths is fine, but `--only <paths>` is not) with
+#     fatal: cannot do a partial commit during a merge.
+# The merge is already committed by the time this hook runs, so clearing the
+# marker only tells git what is already true -- and without it the generated
+# documentation could never be committed from the hook, which is the whole
+# point of the "the tagged commit is never stale" rule.
+function Clear-MergeMarker {
+    $mergeHead = ((Invoke-Git @('rev-parse', '--git-path', 'MERGE_HEAD')) | Out-String).Trim()
+    if ($mergeHead -and (Test-Path -LiteralPath $mergeHead)) {
+        Remove-Item -LiteralPath $mergeHead -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Any failure is a no-op, never a broken merge: post-merge cannot change the
 # merge's outcome, but a wall of red text after a clean merge is alarming.
 try {
@@ -172,8 +187,20 @@ try {
 
     $changedDocs = @(Invoke-Git @('diff', '--name-only', '--', 'README.md', 'CHANGELOG.md'))
     if ($changedDocs.Count -gt 0) {
+        Clear-MergeMarker   # else git refuses the partial commit -- see above
         $commitArgs = @('commit', '--only') + $changedDocs + @('-m', "docs: record the current IG build $new")
         Invoke-Git $commitArgs | Out-Host
+
+        # Fail closed. A tag on a commit whose README still names the previous
+        # version is exactly the staleness this machinery exists to prevent, and
+        # pre-push cannot catch it (that guard reads the working tree, not the
+        # tagged commit). Better an untagged merge, with a way to finish it, than
+        # a published lie.
+        if (@(Invoke-Git @('diff', '--name-only', '--', 'README.md', 'CHANGELOG.md')).Count -gt 0) {
+            Write-Host "[tag] the generated docs could not be committed; $new NOT cut."
+            Write-Host "[tag] finish by hand, then re-run: powershell -File tools\bump-version.ps1 -Branch $Branch"
+            exit 0
+        }
     }
 
     # 2. Tag the (now up-to-date) commit, with a message listing what it covers.
