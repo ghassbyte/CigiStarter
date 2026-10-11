@@ -5,9 +5,14 @@ in**, because git only reads `.git/hooks` by default:
 
 ```
 git config core.hooksPath .githooks      # once per clone
+git config push.followTags true          # so a push carries the tag it covers
 ```
 
-Undo with `git config --unset core.hooksPath`.
+Undo with `git config --unset core.hooksPath` (and `--unset push.followTags`).
+
+Both are per-clone, local settings, and they pair up: the first makes the release
+hook fire, the second makes your ordinary `git push` publish the tag that hook
+cut. Neither is global, and neither is inherited by a fresh clone.
 
 ## `post-merge` — tag a proven build on `main`
 
@@ -30,7 +35,10 @@ $ git checkout main && git merge --ff-only feature/pdk-simlink
 ```
 
 It is a **local** hook and it **never pushes**: review the tag, then publish it.
-A bad tag is caught before it leaves the machine.
+A bad tag is caught before it leaves the machine. Either publish it as the
+message says — `git push origin main v1.1.0` — or set `push.followTags` above and
+let an ordinary `git push` carry it: a plain `git push` moves only the branch you
+name, so tags need `push.followTags`, an explicit `vX.Y.Z`, or `--follow-tags`.
 
 It deliberately does nothing when the merge is not new work landing on `main`:
 a non-`main` branch, a `git pull` (reflog `pull …`), a merge of a
