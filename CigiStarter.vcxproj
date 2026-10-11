@@ -111,23 +111,23 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp" />
-    <ClCompile Include="Gui.cpp" />
-    <ClCompile Include="cigi.cpp" />
-    <ClCompile Include="Relay.cpp" />
-    <ClCompile Include="TerrainDb.cpp" />
-    <ClCompile Include="TerrainProbe.cpp" />
-    <ClCompile Include="TerrainSource.cpp" />
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\Gui.cpp" />
+    <ClCompile Include="src\cigi.cpp" />
+    <ClCompile Include="src\Relay.cpp" />
+    <ClCompile Include="src\TerrainDb.cpp" />
+    <ClCompile Include="src\TerrainProbe.cpp" />
+    <ClCompile Include="src\TerrainSource.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="cigi.h" />
-    <ClInclude Include="Gui.h" />
-    <ClInclude Include="Relay.h" />
-    <ClInclude Include="SofPacer.h" />
-    <ClInclude Include="TerrainDb.h" />
-    <ClInclude Include="TerrainProbe.h" />
-    <ClInclude Include="TerrainProbeIpc.h" />
-    <ClInclude Include="TerrainSource.h" />
+    <ClInclude Include="src\cigi.h" />
+    <ClInclude Include="src\Gui.h" />
+    <ClInclude Include="src\Relay.h" />
+    <ClInclude Include="src\SofPacer.h" />
+    <ClInclude Include="src\TerrainDb.h" />
+    <ClInclude Include="src\TerrainProbe.h" />
+    <ClInclude Include="src\TerrainProbeIpc.h" />
+    <ClInclude Include="src\TerrainSource.h" />
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="app.manifest" />

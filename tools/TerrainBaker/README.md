@@ -122,7 +122,7 @@ Read **four** things:
 
 `sim` may carry a bracketed suffix naming the sim's own classification of what
 it answered with — `[hard]`, `[water]`, `[soft, platform]` (see `surface::*` in
-`../../TerrainProbeIpc.h`). **`platform` is the interesting one**: it means the
+`../../src/TerrainProbeIpc.h`). **`platform` is the interesting one**: it means the
 surface is an *object's* rather than terrain — a vessel's deck, a rig — where
 Prepar3D's collision will rest an aircraft while the terrain under it is still
 sea level. No suffix means the add-on that answered did not publish a

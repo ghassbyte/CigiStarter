@@ -57,7 +57,7 @@ txt(60, 86,
 cx, cy = panel(60, 150, 2200, 560, "1 - The link: HOST, IG, extra IG PCs")
 
 txt(cx, cy + 2,
-    "Deployment defaults: hardcoded in main.cpp\n"
+    "Deployment defaults: hardcoded in src\\main.cpp\n"
     "  HOST 192.168.70.2    IG 192.168.70.70\n"
     "  --host-ip / --host-port / --ig-ip / --ig-port\n"
     "  exist for a bench test only; the deployment\n"
@@ -295,7 +295,7 @@ txt(2360, 1505,
 # 6 - shared-memory contract
 # ==========================================================================
 
-cx, cy = panel(60, 1650, 1080, 800, "6 - Shared-memory contract (TerrainProbeIpc.h)")
+cx, cy = panel(60, 1650, 1080, 800, "6 - Shared-memory contract (src\\TerrainProbeIpc.h)")
 
 txt(cx, cy,
     "mapping  Local\\CigiStarter.TerrainProbe.v1   (session-local: both sides run in\n"
@@ -454,7 +454,7 @@ txt(cx, 2610,
     "comes on every other one), so how often the IG asks is how smoothly the\n"
     "aircraft moves.\n"
     "\n"
-    "FLOW CONTROL (default on, SofPacer.h): a SOF is held back while the previous\n"
+    "FLOW CONTROL (default on, src\\SofPacer.h): a SOF is held back while the previous\n"
     "one is still unanswered, so the stream fits whatever the HOST on site can\n"
     "absorb, whatever number is typed in the rate box. A held-back frame is\n"
     "dropped, never replayed, so no mode of operation can turn the stream into a\n"
@@ -518,8 +518,8 @@ txt(cx, cy,
     "  msbuild CigiStarter.sln /p:Configuration=Release /p:Platform=x64\n"
     "  -> x64\\Release\\CigiStarter.exe      (x64 only)\n"
     "  GUI subsystem (SubSystem=Windows + EntryPointSymbol=mainCRTStartup)\n"
-    "  with a plain int main(): no console, so --help and startup errors use\n"
-    "  a message box\n"
+    "  with a plain int main(): no console, so --help, --version and startup\n"
+    "  errors use a message box\n"
     "  static CRT (/MT): a fresh IG PC needs no Visual C++ redistributable\n"
     "  no /GL: FSUIPCuser64.lib is an LTCG library built with MSVC v140\n"
     "  (WholeProgramOptimization=false; expect a benign LNK4098)\n"
@@ -531,13 +531,13 @@ txt(cx, cy,
     size=12)
 
 txt(cx, 2790,
-    "FILES   main.cpp  SofPacer.h  Gui.h/.cpp  cigi.h/.cpp\n"
-    "        TerrainSource.h/.cpp   the FSUIPC poller thread\n"
-    "        TerrainDb.h/.cpp       the SRTM .hgt reader\n"
-    "        TerrainProbe.h/.cpp    this side of the shared-memory link\n"
-    "        TerrainProbeIpc.h      the pinned contract\n"
-    "        Relay.h/.cpp           client.txt, frames, Npcap, SendARP\n"
-    "        client.txt / terrain\\  optional inputs beside the exe\n"
+    "FILES   src\\main.cpp  src\\SofPacer.h  src\\Gui.h/.cpp  src\\cigi.h/.cpp\n"
+    "        src\\TerrainSource.h/.cpp   the FSUIPC poller thread\n"
+    "        src\\TerrainDb.h/.cpp       the SRTM .hgt reader\n"
+    "        src\\TerrainProbe.h/.cpp    this side of the shared-memory link\n"
+    "        src\\TerrainProbeIpc.h      the pinned contract\n"
+    "        src\\Relay.h/.cpp           client.txt, frames, Npcap, SendARP\n"
+    "        client.txt / terrain\\      optional inputs beside the exe\n"
     "BENCH   tools\\test-hathot-emulator.ps1 -Local [-Stop] -> PASS/FAIL\n"
     "        tools\\capture-hat-hot.ps1 [-Summary]\n"
     "        external\\HostEmulator_Win32_v3.3.3\\Hemu3.exe (Boeing TSS)\n"

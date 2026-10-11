@@ -2,7 +2,7 @@
 <!--
   Console harness for the CigiStarter half of the terrain-probe contract.
   It compiles TerrainProbe.cpp (the module under test) directly, so it needs no
-  Prepar3D at all - only the two headers at the repository root.
+  Prepar3D at all - only the two headers under src\.
 
     msbuild test\PdkTerrainProbeTest.vcxproj /p:Configuration=Release /p:Platform=x64
     test\x64\Release\PdkTerrainProbeTest.exe
@@ -42,7 +42,7 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <WarningLevel>Level3</WarningLevel>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\..\..\..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\..\..\..\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <!-- The test creates its own mapping. Give it a name of its own so that,
            run while a real add-on is loaded, CreateFileMapping cannot hand it
            the live region (whose header its initial memset would then wipe).
@@ -59,7 +59,7 @@
 
   <ItemGroup>
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="..\..\..\TerrainProbe.cpp" />
+    <ClCompile Include="..\..\..\src\TerrainProbe.cpp" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

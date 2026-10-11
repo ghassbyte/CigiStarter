@@ -18,42 +18,51 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.cpp">
+    <ClCompile Include="src\main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Gui.cpp">
+    <ClCompile Include="src\Gui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="cigi.cpp">
+    <ClCompile Include="src\cigi.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Relay.cpp">
+    <ClCompile Include="src\Relay.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="TerrainDb.cpp">
+    <ClCompile Include="src\TerrainDb.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="TerrainSource.cpp">
+    <ClCompile Include="src\TerrainProbe.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\TerrainSource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="cigi.h">
+    <ClInclude Include="src\cigi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Gui.h">
+    <ClInclude Include="src\Gui.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Relay.h">
+    <ClInclude Include="src\Relay.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="SofPacer.h">
+    <ClInclude Include="src\SofPacer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="TerrainDb.h">
+    <ClInclude Include="src\TerrainDb.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="TerrainSource.h">
+    <ClInclude Include="src\TerrainProbe.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\TerrainProbeIpc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="src\TerrainSource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

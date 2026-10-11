@@ -53,7 +53,7 @@
 #endif
 #include <windows.h>
 
-#include "../../TerrainProbeIpc.h"   // the shared-memory link to PdkTerrainProbe.dll
+#include "../../src/TerrainProbeIpc.h"   // the shared-memory link to PdkTerrainProbe.dll
 
 #include <algorithm>
 #include <chrono>

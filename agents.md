@@ -71,7 +71,7 @@ A drop-in replacement for the Master IG. It plays the IG side of the link:
 - **Wakes the HOST and answers it** — binds `0.0.0.0:8000` for the flight data,
   sends SOF to `192.168.70.2:8001` at a configurable rate, and rides its HAT/HOT
   responses along on the SOF stream. Those are the hardcoded defaults in
-  `main.cpp`; `--host-ip` / `--ig-ip` and the matching ports repoint the link for
+  `src\main.cpp`; `--host-ip` / `--ig-ip` and the matching ports repoint the link for
   a bench test, and the deployment passes none of them.
 - **Answers HAT/HOT** from the terrain the aircraft will actually fly onto —
   Prepar3D's own engine, through the `PdkTerrainProbe` add-on — falling back to

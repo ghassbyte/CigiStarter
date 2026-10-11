@@ -25,7 +25,7 @@ No scene needs pre-mapping; a newly added airport is answered live.
 ## How the two halves talk
 
 `PdkTerrainProbe.dll` runs **inside** Prepar3D. CigiStarter runs **outside** it.
-They share one block of memory, described in `../../TerrainProbeIpc.h`:
+They share one block of memory, described in `../../src/TerrainProbeIpc.h`:
 
 ```
    CigiStarter (IG)                    PdkTerrainProbe.dll (in Prepar3D)
@@ -289,7 +289,7 @@ Three places report it, and they all read the same layout:
   test when the tick has stopped, rather than blaming the add-on for not being
   loaded.
 
-`tools\TerrainBaker` reads the same layout through `../../TerrainProbeIpc.h`, so
+`tools\TerrainBaker` reads the same layout through `../../src/TerrainProbeIpc.h`, so
 the two never drift.
 
 ## Testing without Prepar3D

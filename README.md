@@ -101,7 +101,7 @@ needs nothing installed beyond Visual Studio / Build Tools.
 ## Usage
 
 The deployment's link addresses and ports are the defaults, hardcoded in
-`main.cpp`:
+`src\main.cpp`:
 
 | Role | Address          | Port |
 |------|------------------|------|
@@ -332,7 +332,7 @@ That is why:
   position comes on every other one), so how often the IG asks is how smoothly the
   aircraft moves, and
 - **flow control is on by default**: the transmit loop holds a SOF back while the
-  previous one is still unanswered (`SofPacer.h`), so the stream fits whatever the
+  previous one is still unanswered (`src\SofPacer.h`), so the stream fits whatever the
   HOST on site can absorb, whatever number is typed in the rate box.
 
 With flow control on the configured rate is an upper bound, not a promise: when
@@ -472,7 +472,7 @@ Prepar3D. The PDK exposes a free-standing surface query
 (`ISurfaceQueryManagerV400`) — not tied to any object, so no probe object has to
 be created or teleported around the world — and the add-on asks it for each
 point CigiStarter wants, then publishes the answers through a block of shared
-memory (`TerrainProbeIpc.h`, `TerrainProbe.h`). No FSUIPC, no per-scenery
+memory (`src\TerrainProbeIpc.h`, `src\TerrainProbe.h`). No FSUIPC, no per-scenery
 mapping, and a newly added airport is answered the moment the sim can see it.
 
 It answers HAT/HOT whenever it is loaded, because it is the surface Prepar3D
@@ -488,7 +488,7 @@ query** fixed. Over a moored vessel the full query returns the deck's height,
 where Prepar3D's elevation-only call had returned sea level at the same point —
 so the moored-vessel case needed nothing beyond the switch, and no table of
 platforms. The classification is published with every answer
-(`Result::materialCode` in `TerrainProbeIpc.h`); `TerrainBaker probe` prints it
+(`Result::materialCode` in `src\TerrainProbeIpc.h`); `TerrainBaker probe` prints it
 per point, and the operator window shows it on the `Terrain` line.
 
 The query is **layer-aware**: the sim answers the surface *at or below* the point
@@ -936,21 +936,21 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 
 | File               | Purpose                                        |
 |--------------------|------------------------------------------------|
-| `main.cpp`         | entry point, sockets, SOF + receive threads, window callbacks |
-| `SofPacer.h`       | flow-control rule: whether a due SOF may be sent |
-| `Gui.h`            | operator-window API: status snapshot + start/stop/HAT-HOT/flow-control/rate/quit hooks |
-| `Gui.cpp`          | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT + flow-control check boxes, SOF rate box) |
-| `cigi.h`           | CIGI 3.3 message IDs, sizes, pack/parse API    |
-| `cigi.cpp`         | explicit little-endian message packing         |
-| `TerrainSource.h`  | FSUIPC-backed aircraft/terrain snapshot API (aircraft position + fallback terrain) |
-| `TerrainSource.cpp`| the FSUIPC poller thread (owns all FSUIPC use) |
-| `TerrainDb.h`      | offline SRTM `.hgt` terrain database API — the HAT/HOT fallback when the sim's own probe cannot answer |
-| `TerrainDb.cpp`    | the `.hgt` reader: tile index, lazy load, bilinear lookup |
-| `TerrainProbe.h`   | API to the sim's own terrain, through the `PdkTerrainProbe` add-on — the preferred HAT/HOT source |
-| `TerrainProbe.cpp` | CigiStarter's half of the shared-memory link to `PdkTerrainProbe.dll` |
-| `TerrainProbeIpc.h`| the shared-memory contract between CigiStarter and the add-on |
-| `Relay.h`          | fan-out API: start/stop, per-datagram copy, status snapshot |
-| `Relay.cpp`        | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
+| `src\main.cpp`     | entry point, sockets, SOF + receive threads, window callbacks |
+| `src\SofPacer.h`   | flow-control rule: whether a due SOF may be sent |
+| `src\Gui.h`        | operator-window API: status snapshot + start/stop/HAT-HOT/flow-control/rate/quit hooks |
+| `src\Gui.cpp`      | the plain Win32 window (status block, START / STOP / EXIT, HAT/HOT + flow-control check boxes, SOF rate box) |
+| `src\cigi.h`       | CIGI 3.3 message IDs, sizes, pack/parse API    |
+| `src\cigi.cpp`     | explicit little-endian message packing         |
+| `src\TerrainSource.h`  | FSUIPC-backed aircraft/terrain snapshot API (aircraft position + fallback terrain) |
+| `src\TerrainSource.cpp`| the FSUIPC poller thread (owns all FSUIPC use) |
+| `src\TerrainDb.h`  | offline SRTM `.hgt` terrain database API — the HAT/HOT fallback when the sim's own probe cannot answer |
+| `src\TerrainDb.cpp`    | the `.hgt` reader: tile index, lazy load, bilinear lookup |
+| `src\TerrainProbe.h`   | API to the sim's own terrain, through the `PdkTerrainProbe` add-on — the preferred HAT/HOT source |
+| `src\TerrainProbe.cpp` | CigiStarter's half of the shared-memory link to `PdkTerrainProbe.dll` |
+| `src\TerrainProbeIpc.h`| the shared-memory contract between CigiStarter and the add-on |
+| `src\Relay.h`      | fan-out API: start/stop, per-datagram copy, status snapshot |
+| `src\Relay.cpp`    | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
 | `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles the HAT/HOT fallback is answered from |
 | `external\`        | vendored third-party code: the build-time SDKs (FSUIPC, Npcap, Prepar3D PDK headers) and the CIGI Host Emulator the bench tests drive |
