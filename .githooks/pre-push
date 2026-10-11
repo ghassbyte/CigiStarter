@@ -1,0 +1,32 @@
+#!/bin/sh
+# =====================================================================
+#  pre-push  --  refuse to publish a stale generated README region
+# ---------------------------------------------------------------------
+#  The README's current-build line is generated (tools/sync-docs.ps1),
+#  and tools/bump-version.ps1 refreshes it on every release, so it is
+#  correct in the normal flow. This is the backstop: if a tag is ever cut
+#  or changed by hand, or a region edited directly, the push stops here
+#  rather than publishing a line that contradicts the tags.
+#
+#  The fix is one command:
+#      powershell -File tools\sync-docs.ps1
+#
+#  Bypass with `git push --no-verify` when the mismatch is understood and
+#  intended.
+# =====================================================================
+
+root=$(cd "$(dirname "$0")/.." && pwd) || exit 0
+script="$root/tools/sync-docs.ps1"
+if [ ! -f "$script" ]; then exit 0; fi
+if command -v cygpath >/dev/null 2>&1; then
+    script=$(cygpath -w "$script")
+fi
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "$script" -Check
+status=$?
+
+if [ "$status" -ne 0 ]; then
+    echo "pre-push: generated docs are stale -- run: powershell -File tools\sync-docs.ps1" >&2
+fi
+
+exit "$status"

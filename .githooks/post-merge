@@ -1,0 +1,79 @@
+#!/bin/sh
+# =====================================================================
+#  post-merge  --  tag a proven build on main, automatically
+# ---------------------------------------------------------------------
+#  This project's workflow (agents.md -> Release workflow) is: branch
+#  from main, prove the work there, then merge it into main. Landing on
+#  main *is* the definition of proven, so that is the moment to cut the
+#  version tag -- and doing it in a hook means the number is never
+#  chosen by hand.
+#
+#  The bump comes from the branch name, which is the only statement of
+#  intent a hook can read: feature/* -> MINOR, fix/* -> PATCH,
+#  major/* or breaking/* -> MAJOR, anything else -> PATCH. The tag
+#  itself is created by tools/bump-version.ps1, the single place that
+#  rule lives, so this stays a dispatcher rather than a second copy.
+#  That script also refreshes the generated documentation (README's
+#  current-build line, CHANGELOG's [Unreleased]) before it tags, so the
+#  tagged commit is never stale -- see ## Release workflow in agents.md.
+#
+#  Silently does nothing when the merge is not new work landing on main:
+#    * not on main                     -> no tag
+#    * a squash merge                  -> no tag (nothing committed yet)
+#    * `git pull` (reflog "pull ...")  -> no tag
+#    * merging a remote-tracking ref   -> no tag
+#    * HEAD already carries a vX.Y.Z   -> no tag (idempotent, so a
+#      re-run or a second merge cannot double-tag)
+#
+#  It never pushes, so a bad tag is caught before it is published:
+#      git push origin main vX.Y.Z
+#
+#  Installing it is one line per clone -- git does not do it for you:
+#      git config core.hooksPath .githooks
+#  See .githooks/README.md.
+# =====================================================================
+
+# A squash merge commits nothing of its own yet; there is no merge commit to
+# stand on. (git passes "1" as the sole argument for --squash.)
+if [ "$1" = "1" ]; then
+    exit 0
+fi
+
+# Only ever act on main.
+if [ "$(git symbolic-ref --short -q HEAD 2>/dev/null)" != "main" ]; then
+    exit 0
+fi
+
+# What did git just merge? The reflog entry names it:
+#     merge feature/pdk-simlink: Fast-forward
+#     merge fix/reposition: Merge made by the 'ort' strategy.
+# A `git pull` writes "pull ...", which this deliberately does not match, so
+# fetching someone else's work never cuts a version.
+subject=$(git reflog -1 --format=%gs 2>/dev/null) || exit 0
+case "$subject" in
+    merge\ *) ;;
+    *) exit 0 ;;
+esac
+merged=${subject#merge }
+merged=${merged%%:*}
+
+# Only a local branch being folded in is new work worth tagging.
+if [ -z "$merged" ]; then exit 0; fi
+case "$merged" in
+    HEAD|origin/*) exit 0 ;;
+esac
+
+# Hand off to the version rule, in the repository root. The path is resolved
+# from this script's own location rather than the current directory, so the
+# hook works however git was launched.
+root=$(cd "$(dirname "$0")/.." && pwd) || exit 0
+script="$root/tools/bump-version.ps1"
+if [ ! -f "$script" ]; then exit 0; fi
+if command -v cygpath >/dev/null 2>&1; then
+    script=$(cygpath -w "$script")
+fi
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "$script" -Branch "$merged"
+
+# A hook must never change the outcome of the merge it follows.
+exit 0

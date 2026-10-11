@@ -20,6 +20,12 @@ Release/
 *.ipdb
 *.recipe
 
+# The build-identity header is generated into the intermediate directory by the
+# PreBuildEvent (tools\gen_buildinfo.ps1). That directory lives under x64\,
+# already ignored -- this rule is belt-and-braces so a stray copy anywhere (say,
+# the script run by hand into the source tree) stays out too.
+BuildInfo.h
+
 # The vendored Npcap SDK keeps its import libraries in a Lib\x64 folder; the
 # build-output rule above must not swallow it.
 !external/npcap-sdk-1.16/Lib/x64/

@@ -537,6 +537,7 @@ txt(cx, 2790,
     "        src\\TerrainProbe.h/.cpp    this side of the shared-memory link\n"
     "        src\\TerrainProbeIpc.h      the pinned contract\n"
     "        src\\Relay.h/.cpp           client.txt, frames, Npcap, SendARP\n"
+    "        src\\Version.h/.cpp         the build's own identity (git describe)\n"
     "        client.txt / terrain\\      optional inputs beside the exe\n"
     "BENCH   tools\\test-hathot-emulator.ps1 -Local [-Stop] -> PASS/FAIL\n"
     "        tools\\capture-hat-hot.ps1 [-Summary]\n"

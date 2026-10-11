@@ -26,6 +26,7 @@
 //=============================================================================
 #include "Gui.h"
 #include "TerrainProbe.h"   // terrain::probe::surface::kCategory*, for the readout
+#include "Version.h"        // the build's own identity, for the window title
 
 #include <windows.h>
 
@@ -672,8 +673,15 @@ int run(const Hooks& hooks, const Link& link) {
     RECT r{ 0, 0, kClientW, kClientH };
     AdjustWindowRectEx(&r, style, FALSE, exStyle);
 
-    HWND hwnd = CreateWindowExW(exStyle, kClassName,
-                                L"CigiStarter - CIGI 3.3 Image Generator",
+    // The title names the build (src\Version.h): the operator can read which
+    // commit is on this IG PC off the taskbar, and a screenshot of the window
+    // identifies the link that produced it.
+    wchar_t title[256];
+    std::swprintf(title, sizeof(title) / sizeof(title[0]),
+                  L"CigiStarter %hs - CIGI 3.3 Image Generator",
+                  cigi::version::line());
+
+    HWND hwnd = CreateWindowExW(exStyle, kClassName, title,
                                 style, CW_USEDEFAULT, CW_USEDEFAULT,
                                 r.right - r.left, r.bottom - r.top,
                                 nullptr, nullptr, wc.hInstance, nullptr);

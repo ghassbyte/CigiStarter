@@ -130,6 +130,113 @@ for each request's height before it replies; with `client.txt` populated, every
 downstream datagram also leaves the IG again — unaltered — towards each client,
 looking to them exactly like the HOST's own.
 
+## Versioning
+
+`main` carries annotated SemVer tags (`v1.0.0`, …), and a build discovers its
+own version from git at build time — there is no hand-maintained version
+constant to drift.
+
+* **Tag `main` only, never a feature branch, and do it from the merge** — the
+  committed `post-merge` hook cuts it for you (`## Release workflow` below). A
+  branch that is an experiment needs no tag; `git describe` still names it
+  against the nearest one.
+* **The string is derived, not typed.** The `PreBuildEvent` in
+  `CigiStarter.vcxproj` runs `tools\gen_buildinfo.ps1`, which turns
+  `git describe --tags --always --dirty` into `BuildInfo.h` in the (git-ignored)
+  intermediate directory — `v1.0.0` on the tag, `v1.0.0-3-g31d8f4b` three
+  commits later, a bare short hash with no tag anywhere, and a `-dirty` suffix
+  on an unclean tree. `src\Version.{h,cpp}` compile it in; that pair is the only
+  interface, and nothing else may include `BuildInfo.h`.
+* **Two readers**, because this program is windowed and has no console: the
+  `--version` message box (`src\main.cpp`) and the operator window's **title**
+  (`src\Gui.cpp`). There is no crash log here. Nothing on a hot path reads it.
+* **Do not add a version number to a file name.** It breaks includes, the
+  `.vcxproj` and `git log --follow`; the version belongs in metadata and in the
+  release artefact's name. `CHANGELOG.md` holds the prose history.
+
+## Release workflow
+
+Branch from `main`, prove the work on the branch, merge into `main` — and
+landing on `main` is the definition of proven, so the version tag is cut at
+that moment, automatically. There is no hand-chosen number and no separate
+release step.
+
+1. **Branch from `main`** — never from another feature branch, and never work on
+   `main` directly:
+
+   ```
+   git checkout main
+   git pull
+   git checkout -b feature/<name>
+   ```
+
+   `feature/` is the intent the bump later reads: a new message mapping, terrain
+   source or feature (MINOR). `fix/` is a fix that changes no mapping (PATCH);
+   `major/` or `breaking/` is a change to what the IG puts on the wire or
+   answers (MAJOR). A branch cut from `v1.0.0` and three commits in builds as
+   `v1.0.0-3-g<hash>` for free, so a bench build self-identifies without a tag.
+
+2. **Work, test, commit on the branch.** The offline contract harness is
+   `tools\PdkTerrainProbe\test\` (the terrain probe, built and run with no
+   Prepar3D); `tools\test-hathot-emulator.ps1` is the bench check for what only
+   a running sim can see (`README.md` → [Bench testing](README.md#bench-testing)).
+   Put the changelog entry in `[Unreleased]` here; the release renames it
+   (step 3).
+
+3. **Merge into `main`.** The committed `post-merge` hook then cuts the tag —
+   its message lists the commits it covers — after refreshing the generated
+   documentation (see *Generated documentation* below):
+
+   ```
+   git checkout main
+   git merge --ff-only feature/<name>   # or a plain merge if main has moved
+   #   [docs] README.md current-build -> v1.1.0
+   #   [tag] merged 'feature/<name>' -> v1.1.0
+   #   [tag] publish it with:  git push origin main v1.1.0
+   git push origin main v1.1.0          # the tag is local until you push it
+   ```
+
+   The hook is committed but **not active in a clone until you opt in**: hooks
+   live in `.git/hooks`, so `core.hooksPath` points at the tracked `.githooks/`:
+
+   ```
+   git config core.hooksPath .githooks    # once per clone
+   ```
+
+   It never pushes: the tag is yours to review and publish, and it does nothing
+   on a non-`main` branch, on a `git pull`, on a remote-tracking merge, or on a
+   `--squash` merge (which commits nothing to stand a tag on).
+
+4. **The rule is one function**, `tools\bump-version.ps1`, so the hook is only a
+   dispatcher and the mapping lives in one place.
+
+Do **not**: tag a feature branch, tag by hand on `main` (the hook owns that),
+choose the number by hand (name the branch instead), or move a tag that has
+already been pushed.
+
+### Generated documentation
+
+Release facts that git already knows are **generated, not typed**, so they
+cannot drift:
+
+* `tools\sync-docs.ps1` rewrites the README's current-build line, which lives
+  between `<!-- BEGIN GENERATED: current-build -->` and its `END` marker.
+  Everything outside the markers is untouched. It reports the newest tag name
+  alone — deliberately not the date or the commit count — so the release can run
+  it *before* the new tag exists and still produce what a later `-Check` expects.
+* The release step (`tools\bump-version.ps1`, run by `post-merge`) calls it, then
+  renames `CHANGELOG.md`'s `[Unreleased]` heading to `[X.Y.Z] - <date>` leaving a
+  fresh empty `[Unreleased]`, and commits **only those two paths**
+  (`git commit --only`), so unrelated work in the tree is never swept in. The tag
+  lands on that commit, so the tagged commit is never stale.
+* `.githooks/pre-push` runs `sync-docs.ps1 -Check` and refuses to publish a stale
+  region (bypass with `--no-verify`). It is the backstop for a tag made by hand.
+
+This covers only what is *derivable*. Prose — a feature's own README section,
+this file, and any `TODO.md` — cannot be generated and stays a human duty: when a
+feature lands, update its section (and that list, where one exists) in the same
+branch.
+
 ## Key facts
 
 | Property          | Value                        |
@@ -160,7 +267,9 @@ looking to them exactly like the HOST's own.
 | Operator UI       | plain Win32 window: START / STOP / EXIT, a HAT/HOT check box, a flow-control check box, a SOF rate box |
 | Start-up          | streams from launch, window minimised; `--no-auto-start` starts paused |
 | Exit path         | EXIT button only — the title-bar X / Alt+F4 are swallowed |
-| Process type      | GUI subsystem: no console; `--help` and startup errors use a message box |
+| Process type      | GUI subsystem: no console; `--help`, `--version` and startup errors use a message box |
+| Build identity    | `git describe` at build time (`tools\gen_buildinfo.ps1`), compiled in by `src\Version.{h,cpp}`; reported by `--version` and the window title |
+| Version tag       | annotated SemVer on `main` (`v1.0.0`, …), cut by `.githooks/post-merge` when a branch lands; `CHANGELOG.md` holds the history |
 
 `README.md`, [Protocol notes](README.md#protocol-notes), has the byte layout
 behind the ids and ports.

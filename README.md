@@ -11,6 +11,11 @@ runway's flattening and any added scenery are included without anything being
 pre-mapped, falling back to an offline **SRTM terrain database** and then to the
 sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
 
+<!-- BEGIN GENERATED: current-build -->
+**Current IG build: `v1.0.0`** — the newest tag on `main`. Every
+build names itself — see [Versioning](#versioning).
+<!-- END GENERATED: current-build -->
+
 ## What it does
 
 1. Binds a UDP socket on the downstream port (`8000`) where the HOST sends
@@ -44,7 +49,8 @@ sim over FSUIPC — see [HAT/HOT answering](#hathot-answering).
 
 - Windows 10/11, x64.
 - A **windowed** (GUI-subsystem) executable: there is no console window. A
-  startup error or `--help` is reported in a message box instead of on stdout.
+  startup error, `--help` or `--version` is reported in a message box instead of
+  on stdout.
   The project links with `SubSystem=Windows` plus `EntryPointSymbol=mainCRTStartup`,
   which produces a GUI binary while still allowing a plain `int main(argc, argv)`.
 - Windows system libraries only, plus the **FSUIPC SDK** while HAT/HOT answering
@@ -98,6 +104,47 @@ The output is `x64\Release\CigiStarter.exe`.
 The SDKs the solution links against are vendored in `external\`, so the build
 needs nothing installed beyond Visual Studio / Build Tools.
 
+## Versioning
+
+Every build names itself, so "which commit is on this IG PC?" has an answer
+without opening the repo. The version is **derived from git at build time**,
+never typed by hand:
+
+```
+CigiStarter.exe --version
+  CigiStarter v1.0.0-3-g31d8f4b (Release, built 2026-10-11 07:41)
+```
+
+* **Tags are the source of truth.** An annotated tag on `main` (e.g. `v1.0.0`)
+  marks a build fit to deploy. Feature branches are **never** tagged — they are
+  experiments — and they do not need to be, because the string comes from
+  `git describe`, which walks back to the nearest tag:
+
+  | Working tree | `--version` says |
+  | --- | --- |
+  | exactly on `v1.0.0` | `v1.0.0` |
+  | three commits past it | `v1.0.0-3-g31d8f4b` |
+  | no tag anywhere in its history | `31d8f4b` |
+  | uncommitted edits | `v1.0.0-dirty` |
+
+* **The same string appears in two places**, both fed from the one generated
+  header: `--version` (a message box, since this is a windowed program — see
+  [Requirements](#requirements)) and the operator window's **title**, so a
+  screenshot of the running IG names the build that produced it.
+* **Mechanism.** A pre-build step (`tools\gen_buildinfo.ps1`, wired into
+  `CigiStarter.vcxproj`) runs `git describe --tags --always --dirty` and writes
+  `BuildInfo.h` into the intermediate directory — git-ignored, an artefact,
+  never edited by hand. `src\Version.cpp` compiles it in, and `src\Version.h` is
+  the only interface. The script rewrites the file only when the string would
+  change, so an unchanged tree does not force a recompile.
+
+**Cutting a release** is then a merge: land the branch on `main` and the
+committed `post-merge` hook tags it for you (the bump follows the branch name),
+after refreshing this README's current-build line and the changelog. Publish the
+tag, then ship `x64\Release\CigiStarter.exe` beside `client.txt` and the
+`terrain\` tiles. `CHANGELOG.md` carries the prose; the hooks and their one-line
+opt-in are in [`.githooks/`](.githooks/README.md).
+
 ## Usage
 
 The deployment's link addresses and ports are the defaults, hardcoded in
@@ -149,6 +196,7 @@ CigiStarter.exe [options]
   --ig-ip <addr>      this IG's address, as the extra IG PCs see it
                                                         (default 192.168.70.70)
   --ig-port <port>    port the HOST streams flight data to      (default 8000)
+  --version           show the build's own version (git describe) and exit
   --help              show this help (in a message box)
 ```
 
@@ -951,6 +999,8 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `src\TerrainProbeIpc.h`| the shared-memory contract between CigiStarter and the add-on |
 | `src\Relay.h`      | fan-out API: start/stop, per-datagram copy, status snapshot |
 | `src\Relay.cpp`    | the fan-out itself: `client.txt`, frame building, Npcap injection, client MAC lookup |
+| `src\Version.h`    | the build's own identity API (`--version`, the window title) |
+| `src\Version.cpp`  | the compiled-in, git-derived `BuildInfo.h` reader |
 | `client.txt`       | optional, next to the executable: the extra IG PCs to copy the stream to |
 | `terrain\`         | optional, next to the executable: the SRTM `.hgt` tiles the HAT/HOT fallback is answered from |
 | `external\`        | vendored third-party code: the build-time SDKs (FSUIPC, Npcap, Prepar3D PDK headers) and the CIGI Host Emulator the bench tests drive |
@@ -960,11 +1010,17 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `tools\capture-hat-hot.ps1` | bench aid: captures the CIGI link and prints every HAT/HOT request and answer |
 | `tools\test-hathot-emulator.ps1` | bench aid: drives the Host Emulator through the HAT/HOT checks and prints a PASS/FAIL verdict; `-Local` is the whole bench on one PC |
 | `tools\TerrainBaker\` | option 2: bakes Prepar3D's own ground heights over an SRTM base |
+| `tools\gen_buildinfo.ps1` | pre-build step: writes the git-derived `BuildInfo.h` |
+| `tools\sync-docs.ps1` | rewrites this README's generated current-build line |
+| `tools\bump-version.ps1` | the release rule: cuts the next SemVer tag and finalizes the changelog |
+| `.githooks\`       | committed git hooks: auto-tag on merge, and the generated-docs guard |
 | `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |
 | `agents.md`        | description of the HOST / IG / CigiStarter agents |
+| `CHANGELOG.md`     | the release history, one section per tag       |
 | `CigiStarter.sln`  | Visual Studio solution (x64 only)              |
 | `CigiStarter.vcxproj` | VS project (x64 only, static CRT, ws2_32, FSUIPC) |
 | `CigiStarter.vcxproj.filters` | project file organization            |
+| `.gitattributes`   | line-ending policy (the git hooks stay LF)     |
 | `.gitignore`       | ignores build output and VS artifacts          |
 
 See `agents.md` for a description of each agent and the message flow.

@@ -39,6 +39,9 @@
     <ClCompile Include="src\TerrainSource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\Version.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\cigi.h">
@@ -65,6 +68,9 @@
     <ClInclude Include="src\TerrainSource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\Version.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="app.manifest">
@@ -73,6 +79,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md">
+      <Filter>Documentation</Filter>
+    </None>
+    <None Include="CHANGELOG.md">
       <Filter>Documentation</Filter>
     </None>
     <None Include="agents.md">

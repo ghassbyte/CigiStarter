@@ -58,9 +58,10 @@
 //    CigiStarter.exe [--fps 150] [--ig-mode 0] [--no-respond-hathot]
 //                    [--no-flow-control] [--no-relay-spoof]
 //                    [--terrain-dir <dir>]
-//                    [--terrain-offset <m>] [--help]
-//    Being a windowed program there is no console, so --help and any startup
-//    error are reported in a message box.
+//                    [--terrain-offset <m>] [--version] [--help]
+//    Being a windowed program there is no console, so --help, --version and any
+//    startup error are reported in a message box. --version reports the build's
+//    own git-derived identity (src\Version.h).
 //=============================================================================
 #include "cigi.h"
 #include "SofPacer.h"
@@ -69,6 +70,7 @@
 #include "TerrainDb.h"
 #include "TerrainProbe.h"
 #include "TerrainSource.h"
+#include "Version.h"
 
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -271,7 +273,7 @@ static int fail(const char* fmt, ...) {
 static void buildUsage(char* buf, size_t n, const char* argv0) {
     std::snprintf(
         buf, n,
-        "CigiStarter - minimal CIGI 3.3 Image Generator\n\n"
+        "CigiStarter %s - minimal CIGI 3.3 Image Generator\n\n"
         "Link (defaults): HOST %s:%u  <->  IG %s:%u\n\n"
         "Usage: %s [options]\n\n"
         "Options (these only set the starting state -- the SOF rate, HAT/HOT\n"
@@ -320,17 +322,27 @@ static void buildUsage(char* buf, size_t n, const char* argv0) {
         "                                             (default 192.168.70.70)\n"
         "  --ig-port <port>    port the HOST streams flight data to\n"
         "                                                  (default 8000)\n"
+        "  --version           show the build's own version (git describe) and exit\n"
         "  --help              show this help\n"
         "\n"
         "Extra (passive) IG PCs to copy the HOST's stream to are listed in\n"
         "client.txt next to this program -- see README.md.\n",
-        kHostIp, kHostPort, kIgIp, kIgPort, argv0);
+        cigi::version::line(), kHostIp, kHostPort, kIgIp, kIgPort, argv0);
 }
 
 static void showUsage(const char* argv0) {
     char msg[2048];
     buildUsage(msg, sizeof(msg), argv0);
     MessageBoxA(nullptr, msg, "CigiStarter", MB_OK);
+}
+
+// The build's own identity, from git at build time (src\Version.h). Windowed
+// program, so this is a message box rather than a line on stdout; it is the
+// answer to "which commit is on this IG PC?" without opening the repo.
+static void showVersion() {
+    char msg[512];
+    std::snprintf(msg, sizeof(msg), "CigiStarter %s", cigi::version::line());
+    MessageBoxA(nullptr, msg, "CigiStarter - version", MB_OK);
 }
 
 //-----------------------------------------------------------------------------
@@ -359,6 +371,9 @@ static bool parseArgs(int argc, char** argv, Config& cfg) {
         };
         if (a == "--help" || a == "-h") {
             showUsage(argv[0]);
+            return false;
+        } else if (a == "--version" || a == "-v") {
+            showVersion();
             return false;
         } else if (a == "--fps") {
             const char* v = next("--fps"); if (!v) return false;

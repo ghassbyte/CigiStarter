@@ -1,0 +1,32 @@
+# =====================================================================
+#  .gitattributes
+# ---------------------------------------------------------------------
+#  Line-ending policy. core.autocrlf=true does most of this on a default
+#  Windows install, but a clone made elsewhere should behave the same, so
+#  it is written down here.
+#
+#  Text is normalised to LF in the repository and checked out in the
+#  platform's native style.
+# =====================================================================
+
+* text=auto
+
+# cmd.exe is unreliable with LF-only batch files, so these stay CRLF on
+# every platform, not just Windows.
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+
+# Git hooks are run by git's bundled sh, which will not find its interpreter
+# if the shebang line ends in CR. These must stay LF on every platform.
+.githooks/* text eol=lf
+
+# Visual Studio writes and expects these with CRLF.
+*.sln      text eol=crlf
+*.vcxproj  text eol=crlf
+*.filters  text eol=crlf
+*.props    text eol=crlf
+
+# Nothing to gain from normalising prebuilt binaries.
+*.dll      binary
+*.lib      binary

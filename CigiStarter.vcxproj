@@ -66,7 +66,9 @@
       <ConformanceMode>true</ConformanceMode>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(FsuipcSdkDir);$(NpcapSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- $(IntDir) carries the generated BuildInfo.h on the include path so
+           src\Version.cpp can #include it (see the PreBuildEvent below). -->
+      <AdditionalIncludeDirectories>$(IntDir);$(FsuipcSdkDir);$(NpcapSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <!-- Windowed program: the operator window is the only interface. The
@@ -84,6 +86,18 @@
       <UACExecutionLevel>AsInvoker</UACExecutionLevel>
       <UACUIAccess>false</UACUIAccess>
     </Link>
+    <!-- Build identity: derive the version string from git and compile it in,
+         so the exe can name its own build (its version message box and the
+         operator window's title). The generated header lands in the
+         intermediate directory (git-ignored, an artefact, never edited by hand)
+         and is on the include path via the ClCompile AdditionalIncludeDirectories
+         above. See src\Version.h and tools\gen_buildinfo.ps1. The script leaves
+         the file untouched when the string would not change, so an unchanged
+         tree does not force a recompile. -->
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildThisFileDirectory)tools\gen_buildinfo.ps1" -OutFile "$(IntDir)BuildInfo.h" -RepoDir "$(MSBuildThisFileDirectory)." -Configuration "$(Configuration)"</Command>
+      <Message>Generating BuildInfo.h from git describe</Message>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -95,7 +109,9 @@
       <ConformanceMode>true</ConformanceMode>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(FsuipcSdkDir);$(NpcapSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- $(IntDir) carries the generated BuildInfo.h on the include path so
+           src\Version.cpp can #include it (see the PreBuildEvent below). -->
+      <AdditionalIncludeDirectories>$(IntDir);$(FsuipcSdkDir);$(NpcapSdkDir)\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <!-- See the Debug configuration: windowed subsystem, main() entry. -->
@@ -109,6 +125,12 @@
       <UACExecutionLevel>AsInvoker</UACExecutionLevel>
       <UACUIAccess>false</UACUIAccess>
     </Link>
+    <!-- See the Debug|x64 note above: this derives the build identity from git
+         into the git-ignored intermediate directory before the compiler runs. -->
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildThisFileDirectory)tools\gen_buildinfo.ps1" -OutFile "$(IntDir)BuildInfo.h" -RepoDir "$(MSBuildThisFileDirectory)." -Configuration "$(Configuration)"</Command>
+      <Message>Generating BuildInfo.h from git describe</Message>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
@@ -118,6 +140,7 @@
     <ClCompile Include="src\TerrainDb.cpp" />
     <ClCompile Include="src\TerrainProbe.cpp" />
     <ClCompile Include="src\TerrainSource.cpp" />
+    <ClCompile Include="src\Version.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\cigi.h" />
@@ -128,6 +151,7 @@
     <ClInclude Include="src\TerrainProbe.h" />
     <ClInclude Include="src\TerrainProbeIpc.h" />
     <ClInclude Include="src\TerrainSource.h" />
+    <ClInclude Include="src\Version.h" />
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="app.manifest" />

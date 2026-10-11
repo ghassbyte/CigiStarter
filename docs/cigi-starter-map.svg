@@ -463,6 +463,7 @@
 <tspan x="2360.00" dy="15.00">        src\TerrainProbe.h/.cpp    this side of the shared-memory link</tspan>
 <tspan x="2360.00" dy="15.00">        src\TerrainProbeIpc.h      the pinned contract</tspan>
 <tspan x="2360.00" dy="15.00">        src\Relay.h/.cpp           client.txt, frames, Npcap, SendARP</tspan>
+<tspan x="2360.00" dy="15.00">        src\Version.h/.cpp         the build's own identity (git describe)</tspan>
 <tspan x="2360.00" dy="15.00">        client.txt / terrain\      optional inputs beside the exe</tspan>
 <tspan x="2360.00" dy="15.00">BENCH   tools\test-hathot-emulator.ps1 -Local [-Stop] -&gt; PASS/FAIL</tspan>
 <tspan x="2360.00" dy="15.00">        tools\capture-hat-hot.ps1 [-Summary]</tspan>
