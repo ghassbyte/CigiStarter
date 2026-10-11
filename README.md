@@ -926,7 +926,7 @@ client was reachable). Clients that have not answered yet are neither.
 
 ## Network layout
 
-The nodes and the full diagram are in `agents.md`; this is the traffic
+The nodes and the full diagram are in `AGENTS.md`; this is the traffic
 CigiStarter puts on the link:
 
 | Direction   | From                  | To                    | Port | Payload                         |
@@ -1015,7 +1015,7 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `tools\bump-version.ps1` | the release rule: cuts the next SemVer tag and finalizes the changelog |
 | `.githooks\`       | committed git hooks: auto-tag on merge, and the generated-docs guard |
 | `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |
-| `agents.md`        | description of the HOST / IG / CigiStarter agents |
+| `AGENTS.md`        | description of the HOST / IG / CigiStarter agents |
 | `CHANGELOG.md`     | the release history, one section per tag       |
 | `CigiStarter.sln`  | Visual Studio solution (x64 only)              |
 | `CigiStarter.vcxproj` | VS project (x64 only, static CRT, ws2_32, FSUIPC) |
@@ -1023,4 +1023,4 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `.gitattributes`   | line-ending policy (the git hooks stay LF)     |
 | `.gitignore`       | ignores build output and VS artifacts          |
 
-See `agents.md` for a description of each agent and the message flow.
+See `AGENTS.md` for a description of each agent and the message flow.

@@ -2,7 +2,7 @@
 # =====================================================================
 #  post-merge  --  tag a proven build on main, automatically
 # ---------------------------------------------------------------------
-#  This project's workflow (agents.md -> Release workflow) is: branch
+#  This project's workflow (AGENTS.md -> Release workflow) is: branch
 #  from main, prove the work there, then merge it into main. Landing on
 #  main *is* the definition of proven, so that is the moment to cut the
 #  version tag -- and doing it in a hook means the number is never
@@ -15,7 +15,7 @@
 #  rule lives, so this stays a dispatcher rather than a second copy.
 #  That script also refreshes the generated documentation (README's
 #  current-build line, CHANGELOG's [Unreleased]) before it tags, so the
-#  tagged commit is never stale -- see ## Release workflow in agents.md.
+#  tagged commit is never stale -- see ## Release workflow in AGENTS.md.
 #
 #  Silently does nothing when the merge is not new work landing on main:
 #    * not on main                     -> no tag

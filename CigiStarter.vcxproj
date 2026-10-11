@@ -158,7 +158,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" />
-    <None Include="agents.md" />
+    <None Include="AGENTS.md" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

@@ -17,7 +17,7 @@
     it with -Check so a stale region cannot be published.
 
     It reports only what git already knows, and decides nothing. Prose -- a
-    feature's own section, agents.md, TODO.md -- cannot be generated and stays a
+    feature's own section, AGENTS.md, TODO.md -- cannot be generated and stays a
     human duty; this only keeps the *derivable* facts honest.
 
 .PARAMETER Version

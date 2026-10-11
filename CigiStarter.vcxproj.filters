@@ -84,7 +84,7 @@
     <None Include="CHANGELOG.md">
       <Filter>Documentation</Filter>
     </None>
-    <None Include="agents.md">
+    <None Include="AGENTS.md">
       <Filter>Documentation</Filter>
     </None>
   </ItemGroup>

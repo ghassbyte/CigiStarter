@@ -11,7 +11,7 @@ Undo with `git config --unset core.hooksPath`.
 
 ## `post-merge` — tag a proven build on `main`
 
-The project's workflow (see `agents.md` → *Release workflow*) is: branch from
+The project's workflow (see `AGENTS.md` → *Release workflow*) is: branch from
 `main`, prove the work there, merge it into `main`. Landing on `main` *is* the
 definition of proven, so the hook cuts the version tag at that moment. The bump
 is read from the branch name, so the number is never chosen by hand:
@@ -42,7 +42,7 @@ The version rule itself lives in `tools/bump-version.ps1`; the hook is only a
 dispatcher. The same script also refreshes the *generated* documentation before
 it tags — the README's current-build line (`tools/sync-docs.ps1`) and the
 changelog's `[Unreleased]` heading — and commits just those two files, so the
-tagged commit is never stale. See `agents.md` → *Release workflow*.
+tagged commit is never stale. See `AGENTS.md` → *Release workflow*.
 
 To see what a merge *would* cut, without creating anything:
 
