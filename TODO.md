@@ -4,9 +4,11 @@ What is still open, in the order it should be picked up. `README.md` is the
 manual, `agents.md` is the network view, and `tools\*\README.md` is the detail on
 each tool — this file is only the work that is not finished.
 
-Last updated 2026-09-29, branch `feature/pdk-simlink`. Items 1 (the read-back)
-and 2 (the physics-free object) are done and measured; item 1's terrain figures
-were re-measured on 2026-09-29 and corrected (see 1). The camera is done too
+Last updated 2026-09-30, branch `feature/pdk-simlink`. Items 1 (the read-back)
+and 2 (the physics-free object) are done and measured; item 4 (the rotor) is
+answered from `rotor.bin` (see 4), which also shows the HOST's rotor command is
+one CigiStarter does not carry yet; item 1's terrain figures were re-measured on
+2026-09-29 and corrected (see 1). The camera is done too
 (item 7): the sim's view is flown from the HOST's own eyepoint, so it is a
 cockpit view rather than a view from the airframe's reference point — 2.8 m
 forward, 0.5 m up, 5 cm right and a degree left of entity 0, one definition in
@@ -40,11 +42,12 @@ afterwards.
   command puts it, and the sim is never paused or in slew (item 2, see 2 below).
 
 What is **not** done: nothing has been on the rig; the objects ship with no model,
-so nothing is drawn yet (see 2); and the aircraft's own rotor and lights are still
-unsolved (see 3 and 4). The HOST's world beyond the aircraft (item 5) is written
-and proved on the bench — its clock, its air and, from the `cloud pat*.bin`
-captures, its cloud pattern, each confirmed in the sim's own weather system —
-while effects (lights, smoke, damage) are still to come.
+so nothing is drawn yet (see 2); and the aircraft's own lights are still unsolved
+(see 3). The rotor is answered — item 4 — and it turns out to be the IG that does
+not carry it, not the model that steps it. The HOST's world beyond the aircraft
+(item 5) is written and proved on the bench — its clock, its air and, from the
+`cloud pat*.bin` captures, its cloud pattern, each confirmed in the sim's own
+weather system — while effects (lights, smoke, damage) are still to come.
 
 ---
 
@@ -157,18 +160,50 @@ else** — the standard light variables and bare K-events included. SimConnect
 HOST link that actually contains a light command** — every capture we have shows
 the HOST never sends one.
 
-## 4. Rotor: find out who steps the RPM
+## 4. Rotor: find out who steps the RPM — **answered, 2026-09-30**
 
 `ROTOR RPM PCT:1` is the only *writable* rotor variable (`ROTOR ROTATION ANGLE:1`,
 `DISK PITCH/BANK PCT:1` are read-only), and the model has exactly three rotor
 looks: `rotor_still` under 40, `rotor_slow` 40–45, `rotor_blurred` above 45.
 
-* Run `tools\rotor-probe.ps1 watch 40` **on the rig** during an IOS engine start.
-* A staircase trace means something is writing discrete steps; a smooth S-curve
-  means the stepping is the stock three-stage crossfade and is inherent to the
-  model.
+**The HOST steps it, and it does not step it in steps.** `rotor.bin` — a capture
+of an engine start from idle — carries the rotor as two ordinary CIGI messages
+that CigiStarter defines and decodes *neither* of:
 
-**Done when:** we know whether the stepped rotor is ours to fix.
+* **Rate Control (id 8)**, entity 0, articulated part 15, flags `0x01`
+  (apply-to-artpart), in its `YawRate` slot: the rotor's speed. Flat at
+  **0.6749** for the first ~34 s (an idle the model's own three looks call
+  `still`), then a smooth **S-curve** over ~34 → ~94 s up to a plateau of
+  **~4.27**, held with ±0.005 of dither to the end of the capture. Every frame is
+  a fresh float (~`6.6e-5` apart; raw `1.775007 → 1.7772305 → 1.7794522`): no
+  staircase, no rungs, no 1 %/5 % jumps.
+* **Articulated Part Control (id 6)**, entity 0, part 1, flags `0x31`
+  (ArtPart|Roll|Pitch): the rotor disk — roll `0.6066 → −0.7167`, pitch
+  `−18.4579 → −10.2661`, a fast transient at ~36–38 s as it comes up and a small
+  second step at ~85–87 s. The disk tilts with the spool.
+
+The reading is revolutions per second: 0.675 ≈ 40 rpm (≈15 %) and 4.27–4.59 ≈
+256–275 rpm, the AS332's nominal main-rotor speed. The same slot is all-zero in
+`tod_day.bin`, ramps `0 → 0.673` in `reposition_hlm.bin`, and sits at 4.3–4.6 in
+the flying captures.
+
+**So the stepped rotor is not ours to fix.** The stepping is the model's own
+three-stage crossfade over one continuous percentage, and the wire changes that
+percentage smoothly — it crosses the 40/45 band in a ~2 s window of the spool.
+
+**What *is* ours: the link does not exist yet.** `cigi.h` and `main.cpp`'s
+message switch cover ids 1, 2, 4, 9, 10, 12, 16 and 24 and drop **6 and 8** into
+`default:`, so nothing in CigiStarter writes `ROTOR RPM PCT:1` from the HOST; on
+this IG the rotor is the sim's own aircraft, not the HOST's. Carrying it is a
+pair of decoders and a `ROTOR RPM PCT:1` write, the same shape as the world
+(item 5).
+
+**Still owed the rig:** `tools\rotor-probe.ps1 watch 40` during an IOS engine
+start, which is what shows what the sim's own rotor does with the commanded
+percentage — the capture proves only the command.
+
+**Done when:** we know whether the stepped rotor is ours to fix. It is not; the
+missing command is.
 
 ## 5. Time of day, weather, visibility, effects — **the world is done, effects are left (2026-09-29)**
 
@@ -407,6 +442,7 @@ Read these before changing anything near them.
 | **A container's `CategoryId` must match the DLL's GUID** | `CigiEntity.h` registers one GUID and `SimObjects\CigiEntity\sim.cfg` names it as `[General] CategoryId`. Ship the two out of step and every `CreateObject()` fails: the object is never ours, and the e2e test shows it as create failures rather than as a wrong pose |
 | **SimConnect cannot write `L:` vars** | The AS332's lights live in `L:switch ...` and the panel's own servo reverts everything else |
 | **Only `ROTOR RPM PCT:1` is writable** | The other rotor variables are read-only |
+| **The HOST's rotor arrives as ids 6 and 8** | Rate Control (id 8, entity 0, artpart 15, `0x01`, `YawRate` slot) is the rotor speed in rev/s and Articulated Part Control (id 6, entity 0, part 1, `0x31`) is the disk tilt — ordinary per-frame traffic that looks like everything else, except `cigi.h` defines neither id, so both land in `main.cpp`'s `default:` and are dropped without a counter or a word in the log. `rotor.bin` is the capture that shows them. Item 4 |
 | **The add-on owns the shared region** | CigiStarter only opens it, and its counters persist across IG runs — compare **deltas**, never absolutes |
 | **Bench ports are 8010/8011** | Prepar3D holds 8000 for its own CIGI |
 | **The view is a camera, not an object** | Moving an entity object does not move the picture: the sim's view belongs to a window's **active camera**, and the objects this writer creates are non-user objects. The eye has to be moved with `SetLLA`/`SetPBH` on a Fixed-origin definition, per window, and the entity the eye is inside must not be drawn or the picture is the inside of its hull |
