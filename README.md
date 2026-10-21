@@ -143,7 +143,8 @@ committed `post-merge` hook tags it for you (the bump follows the branch name),
 after refreshing this README's current-build line and the changelog. Publish the
 tag, then ship `x64\Release\CigiStarter.exe` beside `client.txt` and the
 `terrain\` tiles. `CHANGELOG.md` carries the prose; the hooks and their one-line
-opt-in are in [`.githooks/`](.githooks/README.md).
+opt-in are in [`.githooks/`](.githooks/), and the release logic they call is the
+shared tooling in [`tools/release/`](tools/release/README.md).
 
 ## Usage
 
@@ -1011,8 +1012,8 @@ defaults; see [Usage](#usage) for the bench-test overrides.
 | `tools\test-hathot-emulator.ps1` | bench aid: drives the Host Emulator through the HAT/HOT checks and prints a PASS/FAIL verdict; `-Local` is the whole bench on one PC |
 | `tools\TerrainBaker\` | option 2: bakes Prepar3D's own ground heights over an SRTM base |
 | `tools\gen_buildinfo.ps1` | pre-build step: writes the git-derived `BuildInfo.h` |
-| `tools\sync-docs.ps1` | rewrites this README's generated current-build line |
-| `tools\bump-version.ps1` | the release rule: cuts the next SemVer tag and finalizes the changelog |
+| `tools\release\`  | the shared release tooling, as a git submodule: cuts the next SemVer tag, finalizes the changelog, rewrites this README's current-build line |
+| `tools\release.config.psd1` | this project's only file in that arrangement — the words the tool needs |
 | `.githooks\`       | committed git hooks: auto-tag on merge, and the generated-docs guard |
 | `app.manifest`     | UAC `asInvoker` manifest (runs unelevated)   |
 | `AGENTS.md`        | description of the HOST / IG / CigiStarter agents |

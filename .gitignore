@@ -40,6 +40,13 @@ BuildInfo.h
 tools/PdkTerrainProbe/bin/
 tools/PdkTerrainProbe/obj/
 
+# The shared release tooling is a git submodule mounted at tools/release. NTFS is
+# case-insensitive, so the "Release/" rule above matches that directory too and
+# silently swallows the mount point -- git then has no submodule to record, and a
+# fresh clone gets an empty tools/release. This rule must come after it (the last
+# matching pattern wins).
+!tools/release/
+
 # Editor / OS
 *.swp
 Thumbs.db

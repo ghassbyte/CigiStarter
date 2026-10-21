@@ -2,20 +2,22 @@
 # =====================================================================
 #  post-merge  --  tag a proven build on main, automatically
 # ---------------------------------------------------------------------
-#  This project's workflow (AGENTS.md -> Release workflow) is: branch
-#  from main, prove the work there, then merge it into main. Landing on
-#  main *is* the definition of proven, so that is the moment to cut the
-#  version tag -- and doing it in a hook means the number is never
-#  chosen by hand.
+#  The workflow this implements (see the tooling's README, "How a
+#  release happens"): branch from main, prove the work there, then
+#  merge it into main. Landing on main *is* the definition of proven,
+#  so that is the moment to cut the version tag -- and doing it in a
+#  hook means the number is never chosen by hand.
+#
+#  This file is the *consumer side*: a thin dispatcher committed in each
+#  project, so a project can be adopted without copying any logic. The
+#  rule itself lives once, in tools/release (the shared tooling):
+#
+#      tools/release/release.ps1    the bump rule, the changelog, the tag
+#      tools/release/sync-docs.ps1  the README's current-build line
 #
 #  The bump comes from the branch name, which is the only statement of
 #  intent a hook can read: feature/* -> MINOR, fix/* -> PATCH,
-#  major/* or breaking/* -> MAJOR, anything else -> PATCH. The tag
-#  itself is created by tools/bump-version.ps1, the single place that
-#  rule lives, so this stays a dispatcher rather than a second copy.
-#  That script also refreshes the generated documentation (README's
-#  current-build line, CHANGELOG's [Unreleased]) before it tags, so the
-#  tagged commit is never stale -- see ## Release workflow in AGENTS.md.
+#  major/* or breaking/* -> MAJOR, anything else -> PATCH.
 #
 #  Silently does nothing when the merge is not new work landing on main:
 #    * not on main                     -> no tag
@@ -30,7 +32,10 @@
 #
 #  Installing it is one line per clone -- git does not do it for you:
 #      git config core.hooksPath .githooks
-#  See .githooks/README.md.
+#
+#  Refreshing the tooling itself is one line per project, then a commit
+#  of the moved pointer:
+#      git update-tooling
 # =====================================================================
 
 # A squash merge commits nothing of its own yet; there is no merge commit to
@@ -45,7 +50,7 @@ if [ "$(git symbolic-ref --short -q HEAD 2>/dev/null)" != "main" ]; then
 fi
 
 # What did git just merge? The reflog entry names it:
-#     merge feature/pdk-simlink: Fast-forward
+#     merge feature/roll-sign: Fast-forward
 #     merge fix/reposition: Merge made by the 'ort' strategy.
 # A `git pull` writes "pull ...", which this deliberately does not match, so
 # fetching someone else's work never cuts a version.
@@ -63,17 +68,26 @@ case "$merged" in
     HEAD|origin/*) exit 0 ;;
 esac
 
-# Hand off to the version rule, in the repository root. The path is resolved
-# from this script's own location rather than the current directory, so the
-# hook works however git was launched.
+# Resolve the repository root from this script's own location, so the hook works
+# however git was launched.
 root=$(cd "$(dirname "$0")/.." && pwd) || exit 0
-script="$root/tools/bump-version.ps1"
-if [ ! -f "$script" ]; then exit 0; fi
-if command -v cygpath >/dev/null 2>&1; then
-    script=$(cygpath -w "$script")
+script="$root/tools/release/release.ps1"
+
+# The tooling is a submodule: a fresh clone that has not run
+# `git submodule update --init` has an empty tools/release. Say so rather than
+# failing silently -- the commonest reason a tag does not appear is exactly this.
+if [ ! -f "$script" ]; then
+    echo "[tag] release tooling is not checked out (tools/release is empty)."
+    echo "[tag] run: git submodule update --init"
+    exit 0
 fi
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "$script" -Branch "$merged"
+if command -v cygpath >/dev/null 2>&1; then
+    script=$(cygpath -w "$script")
+    root=$(cygpath -w "$root")
+fi
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "$script" -Branch "$merged" -RepoRoot "$root"
 
 # A hook must never change the outcome of the merge it follows.
 exit 0

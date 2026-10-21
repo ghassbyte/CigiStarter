@@ -1,0 +1,3 @@
+[submodule "tools/release"]
+	url = https://github.com/ghassbyte/release-tooling.git
+	path = tools/release

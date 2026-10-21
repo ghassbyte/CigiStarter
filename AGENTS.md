@@ -207,8 +207,20 @@ release step.
    on a non-`main` branch, on a `git pull`, on a remote-tracking merge, or on a
    `--squash` merge (which commits nothing to stand a tag on).
 
-4. **The rule is one function**, `tools\bump-version.ps1`, so the hook is only a
-   dispatcher and the mapping lives in one place.
+4. **The rule is one function**, `tools\release\release.ps1`, so the hook is only
+   a dispatcher and the mapping lives in one place.
+
+   That file is **not in this repository**: it is the shared release tooling,
+   mounted here as the git submodule `tools/release` and configured by
+   `tools\release.config.psd1` (the only per-project file, and it holds nothing
+   but words). Fix the tool once there and every project picks it up:
+
+   ```
+   git update-tooling
+   git add tools/release && git commit -m "chore: update release tooling"
+   ```
+
+   The tooling's own README is `tools/release/README.md`.
 
 Do **not**: tag a feature branch, tag by hand on `main` (the hook owns that),
 choose the number by hand (name the branch instead), or move a tag that has
@@ -219,14 +231,14 @@ already been pushed.
 Release facts that git already knows are **generated, not typed**, so they
 cannot drift:
 
-* `tools\sync-docs.ps1` rewrites the README's current-build line, which lives
-  between `<!-- BEGIN GENERATED: current-build -->` and its `END` marker.
+* `tools\release\sync-docs.ps1` rewrites the README's current-build line, which
+  lives between `<!-- BEGIN GENERATED: current-build -->` and its `END` marker.
   Everything outside the markers is untouched. It reports the newest tag name
   alone — deliberately not the date or the commit count — so the release can run
   it *before* the new tag exists and still produce what a later `-Check` expects.
-* The release step (`tools\bump-version.ps1`, run by `post-merge`) calls it, then
-  renames `CHANGELOG.md`'s `[Unreleased]` heading to `[X.Y.Z] - <date>` leaving a
-  fresh empty `[Unreleased]`, and commits **only those two paths**
+* The release step (`tools\release\release.ps1`, run by `post-merge`) calls it,
+  then renames `CHANGELOG.md`'s `[Unreleased]` heading to `[X.Y.Z] - <date>`
+  leaving a fresh empty `[Unreleased]`, and commits **only those two paths**
   (`git commit --only`), so unrelated work in the tree is never swept in. The tag
   lands on that commit, so the tagged commit is never stale.
 * `.githooks/pre-push` runs `sync-docs.ps1 -Check` and refuses to publish a stale
