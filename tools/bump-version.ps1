@@ -43,7 +43,7 @@
     Tag without touching README.md or CHANGELOG.md.
 
 .EXAMPLE
-    powershell -NoProfile -ExecutionPolicy Bypass -File tools\bump-version.ps1 -Branch feature/searchlight -DryRun
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools\bump-version.ps1 -Branch feature/terrain-tile -DryRun
 #>
 [CmdletBinding()]
 param(
@@ -67,10 +67,56 @@ function Invoke-Git {
     try { & git -C $root @Argv } finally { $ErrorActionPreference = $eap }
 }
 
+# 0-based indices, in the working-tree file, of the lines git sees as added
+# there against $Against. `-U0` keeps the hunks tight, and counting the
+# new-side line numbers gives the positions directly.
+#
+# Running git inside the process is what makes the caller's state irrelevant: a
+# stash, an earlier partial commit or a half-finished edit elsewhere cannot hide
+# the lines in question, because the comparison is against a committed ref and
+# not against whatever the caller happens to have staged.
+function Get-AddedLineIndices {
+    param([string]$Path, [string]$Against = 'HEAD')
+
+    $added = @()
+    $raw = $null
+    try { $raw = (Invoke-Git @('diff', '-U0', '--no-color', '--no-ext-diff', $Against, '--', $Path)) } catch { return $added }
+    if ($null -eq $raw) { return $added }
+
+    $nl = 0            # new-side line number the hunk header refers to
+    foreach ($line in @($raw)) {
+        if ($line -match '^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@') { $nl = [int]$Matches[1] - 1; continue }
+        if ($line -like '+++*' -or $line -like '---*' -or $line -match '^diff --git' -or
+            $line -match '^index '   -or $line -match '^@@') { continue }
+        if ($line.StartsWith('+')) { $added += $nl; $nl++ ; continue }
+        if ($line.StartsWith(' ')) { $nl++ }
+        # '-' lines are old-side only: they do not advance the new-side count.
+    }
+    return $added
+}
+
 # Rename CHANGELOG's [Unreleased] heading to [X.Y.Z] - date and leave a fresh
-# empty [Unreleased] above it. A no-op when there is no section or it is empty.
+# empty [Unreleased] above it, moving the section's entries with it.
+#
+# -MoveStrays: also move entry lines this merge added *outside* [Unreleased] --
+# underneath the previous release's heading -- into the new section, keeping
+# whatever subsection they sit under. That is not cosmetic. When two branches
+# are in flight both add their entry under [Unreleased], and only the first to
+# merge gets its heading moved; git resolves the second without a conflict but
+# drops its entry under the release cut in between, leaving [Unreleased] empty.
+# The hook then tags a commit whose changelog does not name its own release,
+# which is the staleness this machinery exists to prevent. Hit for real on
+# 2026-10-21: v1.1.0 and v1.2.0 landed off two branches and the second release's
+# entry ended up under [1.1.0]. See ## Release workflow in AGENTS.md.
+#
+# "Added by this release" is read from `git diff -U0 <previous tag> --
+# CHANGELOG.md`: only lines that appeared since the last release are eligible,
+# so an entry that has always been in the previous release cannot be dragged
+# forward. Diffing against the tag rather than HEAD is deliberate -- right
+# after a merge the worktree equals HEAD, so a HEAD diff would be empty, and
+# the tag is also the honest question ("what is new since the last release?").
 function Finalize-Changelog {
-    param([string]$Version, [string]$Date)
+    param([string]$Version, [string]$Date, [switch]$MoveStrays, [string]$Against)
 
     $chlog = Join-Path $root 'CHANGELOG.md'
     if (-not (Test-Path -LiteralPath $chlog)) { return }
@@ -78,6 +124,10 @@ function Finalize-Changelog {
     $raw = [System.IO.File]::ReadAllText($chlog)
     $nl  = if ($raw -match "`r`n") { "`r`n" } else { "`n" }
     $lines = $raw -split "\r?\n"
+
+    # 0-based indices of the lines that appeared since the previous release.
+    $added = @()
+    if ($MoveStrays -and $Against) { $added = @(Get-AddedLineIndices -Path 'CHANGELOG.md' -Against $Against) }
 
     $i = -1
     for ($k = 0; $k -lt $lines.Count; $k++) {
@@ -90,29 +140,100 @@ function Finalize-Changelog {
         if ($lines[$k] -match '^##\s+\[') { $j = $k; break }
     }
 
+    # The previous release's section, straight after [Unreleased].
+    $sectStart = -1
+    $sectEnd   = $lines.Count
+    if ($MoveStrays -and $j -lt $lines.Count -and $lines[$j] -match '^##\s+\[') {
+        $sectStart = $j
+        for ($k = $sectStart + 1; $k -lt $lines.Count; $k++) {
+            if ($lines[$k] -match '^##\s+\[') { $sectEnd = $k; break }
+        }
+    }
+
     $body = if ($j -gt $i + 1) { @($lines[($i + 1)..($j - 1)]) } else { @() }
-    if (($body -join '').Trim().Length -eq 0) { return }   # nothing to release
+    $bodyIsEmpty = (($body -join '').Trim().Length -eq 0)
+
+    # Entry lines this merge added inside the previous release, with the
+    # subsection they sit under.
+    $strays = @()
+    $curSub = $null
+    if ($sectStart -ge 0) {
+        for ($k = $sectStart; $k -lt $sectEnd; $k++) {
+            if ($lines[$k] -match '^#{3,3}\s') { $curSub = $lines[$k] }
+            elseif ($added -contains $k) {
+                $strays += [pscustomobject]@{ Subheading = $curSub; Text = $lines[$k] }
+            }
+        }
+    }
+
+    # Nothing under [Unreleased] and nothing stray: the ordinary no-op.
+    if ($bodyIsEmpty -and $strays.Count -eq 0) { return }
 
     $newLines = @()
     if ($i -gt 0)              { $newLines += $lines[0..($i - 1)] }
     $newLines += '## [Unreleased]'
     $newLines += ''
     $newLines += "## [$Version] - $Date"
-    $newLines += $body
-    if ($j -lt $lines.Count)   { $newLines += $lines[$j..($lines.Count - 1)] }
+
+    if (-not $bodyIsEmpty) {
+        $newLines += $body
+    } else {
+        # Move the strays up, in their own order and under their own headings.
+        foreach ($stray in $strays) {
+            $sub = $stray.Subheading
+            if (-not $sub) { continue }
+            $at = -1
+            for ($k = 0; $k -lt $newLines.Count; $k++) { if ($newLines[$k] -eq $sub) { $at = $k; break } }
+            if ($at -lt 0) {
+                # A subsection this release did not have yet: open it, then add
+                # the entry below it.
+                $newLines += ''
+                $newLines += $sub
+                $newLines += $stray.Text
+                continue
+            }
+            # Already open: add below its last entry, which is the line before
+            # the blank that separates it from anything after.
+            $ins = $at + 1
+            while ($ins -lt $newLines.Count -and $newLines[$ins].Trim().Length -gt 0) { $ins++ }
+            $before = @($newLines[0..($ins - 1)])
+            $after  = if ($ins -lt $newLines.Count) { @($newLines[$ins..($newLines.Count - 1)]) } else { @() }
+            $newLines = $before + @($stray.Text) + $after
+        }
+        if ($strays.Count -gt 0) { $newLines += '' }
+    }
+
+    # Everything from the previous release's heading on, with the strays taken
+    # out -- this is a move, not a copy, so the lines cannot stay where they
+    # were or the release notes would claim the entry twice.
+    $tailEnd = if ($sectStart -ge 0) { $sectEnd } else { $lines.Count }
+    $tail = @()
+    for ($k = $j; $k -lt $tailEnd; $k++) {
+        if ($strays.Count -gt 0 -and $added -contains $k) { continue }
+        $tail += $lines[$k]
+    }
+    # Taking an entry out can leave two blank lines where one entry sat.
+    $collapsed = @()
+    foreach ($line in $tail) {
+        if ($line.Trim().Length -eq 0 -and $collapsed.Count -gt 0 -and
+            $collapsed[-1].Trim().Length -eq 0) { continue }
+        $collapsed += $line
+    }
+    $newLines += $collapsed
+    if ($tailEnd -lt $lines.Count) { $newLines += $lines[$tailEnd..($lines.Count - 1)] }
 
     [System.IO.File]::WriteAllText($chlog, ($newLines -join $nl),
                                    (New-Object System.Text.UTF8Encoding($false)))
 }
 
-# post-merge fires while git still considers the merge in progress: MERGE_HEAD
-# is present, and git then refuses a partial commit (a plain `git commit -m`
-# with no paths is fine, but `--only <paths>` is not) with
+# post-merge fires while git still considers the merge in progress: MERGE_HEAD is
+# present, and git then refuses a partial commit (a plain `git commit -m` with no
+# paths is fine, but `--only <paths>` is not) with
 #     fatal: cannot do a partial commit during a merge.
 # The merge is already committed by the time this hook runs, so clearing the
 # marker only tells git what is already true -- and without it the generated
-# documentation could never be committed from the hook, which is the whole
-# point of the "the tagged commit is never stale" rule.
+# documentation could never be committed from the hook, which is the whole point
+# of the "the tagged commit is never stale" rule.
 function Clear-MergeMarker {
     $mergeHead = ((Invoke-Git @('rev-parse', '--git-path', 'MERGE_HEAD')) | Out-String).Trim()
     if ($mergeHead -and (Test-Path -LiteralPath $mergeHead)) {
@@ -174,7 +295,8 @@ try {
     }
 
     if ($DryRun) {
-        Write-Host "[tag] would cut $new  ($kind bump on '$Branch'; based on $base)"
+        $basedOn = if ($base) { "based on $base" } else { 'the first release; no earlier tag' }
+        Write-Host "[tag] would cut $new  ($kind bump on '$Branch'; $basedOn)"
         exit 0
     }
 
@@ -182,7 +304,7 @@ try {
     if (-not $NoDocs) {
         $sync = Join-Path $PSScriptRoot 'sync-docs.ps1'
         if (Test-Path -LiteralPath $sync) { & $sync -Version $new | Out-Host }
-        Finalize-Changelog -Version ($new -replace '^v', '') -Date (Get-Date).ToString('yyyy-MM-dd')
+        Finalize-Changelog -Version ($new -replace '^v', '') -Date (Get-Date).ToString('yyyy-MM-dd') -MoveStrays -Against $base
     }
 
     $changedDocs = @(Invoke-Git @('diff', '--name-only', '--', 'README.md', 'CHANGELOG.md'))
